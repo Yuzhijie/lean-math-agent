@@ -1,6 +1,6 @@
-import type { MethodOption, ProofStep, Session } from "../types";
+import type { BuildStatus, MethodOption, ProofStep, Session } from "../types";
 import { proveStepResponseSchema } from "../schemas";
-import { assembleLeanSource } from "../lean/assemble";
+import { assembleLeanSource, stepCodesUpTo } from "../lean/assemble";
 import { verifyLeanSource } from "../lean/sandbox";
 import { chatJson } from "./client";
 import { PROVE_STEP_SYSTEM } from "./prompts";
@@ -34,14 +34,22 @@ export async function proveOneStep(args: {
   });
 }
 
+export type ProveStepRepairResult = {
+  step: ProofStep;
+  /** Only `/api/verify` may set session `ok`; repair leaves idle or signals unavailable. */
+  buildStatus: Extract<BuildStatus, "idle" | "unavailable">;
+};
+
 export async function proveStepWithRepair(args: {
   session: Session;
   method: MethodOption;
   stepIndex: number;
   theoremType: string;
-}): Promise<ProofStep> {
+}): Promise<ProveStepRepairResult> {
   const steps = [...args.session.steps];
   let buildLog: string | undefined;
+  const hasLaterSteps = steps.some((s) => s.index > args.stepIndex);
+
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     const gen = await proveOneStep({
       problemText: args.session.problem_text,
@@ -60,19 +68,27 @@ export async function proveStepWithRepair(args: {
     const source = assembleLeanSource({
       theoremName: args.session.theorem_name ?? "problem",
       theoremType: args.theoremType,
-      stepCodes: steps
-        .filter((s) => s.index <= args.stepIndex)
-        .sort((a, b) => a.index - b.index)
-        .map((s) => s.lean_code)
-        .filter(Boolean),
+      stepCodes: stepCodesUpTo(steps, args.stepIndex),
+      appendSorry: hasLaterSteps,
     });
     const result = await verifyLeanSource(args.session.id, source);
+    if (result.status === "unavailable") {
+      steps[idx] = {
+        ...steps[idx],
+        status: "pending",
+        build_log: result.log,
+      };
+      return { step: steps[idx], buildStatus: "unavailable" };
+    }
     if (result.ok) {
       steps[idx] = { ...steps[idx], status: "ok", build_log: result.log };
-      return steps[idx];
+      return { step: steps[idx], buildStatus: "idle" };
     }
     buildLog = result.log;
     steps[idx] = { ...steps[idx], status: "fail", build_log: result.log };
   }
-  return steps.find((s) => s.index === args.stepIndex)!;
+  return {
+    step: steps.find((s) => s.index === args.stepIndex)!,
+    buildStatus: "idle",
+  };
 }

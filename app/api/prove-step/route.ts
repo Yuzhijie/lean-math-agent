@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { assembleLeanSource } from "@/lib/lean/assemble";
+import { assembleLeanSource, stepCodesUpTo } from "@/lib/lean/assemble";
 import { proveStepWithRepair } from "@/lib/llm/prove-step";
 import { LlmError } from "@/lib/llm/client";
 import { getSession, updateSession } from "@/lib/session-store";
@@ -41,7 +41,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const proved = await proveStepWithRepair({
+    const { step: proved, buildStatus } = await proveStepWithRepair({
       session,
       method,
       stepIndex: body.step_index,
@@ -50,19 +50,17 @@ export async function POST(req: Request) {
     const steps = session.steps.map((s) =>
       s.index === proved.index ? proved : s,
     );
+    // Same prefix filter as repair verifies (no sorry — only real step codes).
     const assembled_lean = assembleLeanSource({
       theoremName: session.theorem_name ?? "problem",
       theoremType,
-      stepCodes: steps
-        .slice()
-        .sort((a, b) => a.index - b.index)
-        .map((s) => s.lean_code)
-        .filter(Boolean),
+      stepCodes: stepCodesUpTo(steps, body.step_index),
     });
     const updated = updateSession(session.id, {
       steps,
       assembled_lean,
-      build_status: proved.status === "ok" ? "ok" : "fail",
+      // Never set "ok" here — only /api/verify may. Prefer idle; signal unavailable.
+      build_status: buildStatus === "unavailable" ? "unavailable" : "idle",
     });
     return NextResponse.json({
       session_id: updated.id,
