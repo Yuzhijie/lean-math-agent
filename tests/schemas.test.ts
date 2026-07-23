@@ -1,23 +1,45 @@
 import { describe, it, expect } from "vitest";
-import { enumerateResponseSchema } from "@/lib/schemas";
+import {
+  enumerateResponseSchema,
+  planResponseSchema,
+} from "@/lib/schemas";
+
+const method = (id: string) => ({
+  id,
+  category: "induction" as const,
+  title: "t",
+  inspiration: "i",
+  pros: "p",
+  cons: "c",
+  lean_sketch: "s",
+  confidence: 1,
+});
 
 describe("enumerateResponseSchema", () => {
-  it("accepts a valid enumerate payload with ≥1 method", () => {
+  it("accepts in-domain payload with ≥3 methods", () => {
     const parsed = enumerateResponseSchema.parse({
-      comparison_summary: "归纳最稳；rewrite 最短。",
+      comparison_summary: "归纳最稳；rewrite 最短；simp 最快。",
       out_of_domain_warning: null,
-      methods: [
-        {
-          id: "m1",
-          category: "induction",
-          title: "对 n 归纳",
-          inspiration: "目标对全体自然数成立，结构上适合归纳。",
-          pros: "覆盖所有 n，证明完整。",
-          cons: "比 simp 啰嗦。",
-          lean_sketch: "induction n <;> simp",
-          confidence: 0.9,
-        },
-      ],
+      methods: [method("m1"), method("m2"), method("m3")],
+    });
+    expect(parsed.methods).toHaveLength(3);
+  });
+
+  it("rejects in-domain payload with fewer than 3 methods", () => {
+    expect(() =>
+      enumerateResponseSchema.parse({
+        comparison_summary: "x",
+        out_of_domain_warning: null,
+        methods: [method("m1")],
+      }),
+    ).toThrow(/at least 3 methods/);
+  });
+
+  it("allows fewer than 3 methods when out_of_domain_warning is set", () => {
+    const parsed = enumerateResponseSchema.parse({
+      comparison_summary: "域外",
+      out_of_domain_warning: "非 Nat/Int 等式",
+      methods: [method("m1")],
     });
     expect(parsed.methods).toHaveLength(1);
   });
@@ -38,6 +60,34 @@ describe("enumerateResponseSchema", () => {
             confidence: 1,
           },
         ],
+      }),
+    ).toThrow();
+  });
+});
+
+describe("planResponseSchema theorem_name", () => {
+  it("accepts Lean identifiers", () => {
+    const parsed = planResponseSchema.parse({
+      theorem_name: "nat_add_zero'",
+      theorem_type: "(n : Nat) : n + 0 = n",
+      steps: [{ index: 0, plain_goal: "g", lean_goal: "⊢ True" }],
+    });
+    expect(parsed.theorem_name).toBe("nat_add_zero'");
+  });
+
+  it("rejects whitespace / newlines in theorem_name", () => {
+    expect(() =>
+      planResponseSchema.parse({
+        theorem_name: "bad name",
+        theorem_type: "(n : Nat) : n + 0 = n",
+        steps: [{ index: 0, plain_goal: "g", lean_goal: "⊢ True" }],
+      }),
+    ).toThrow();
+    expect(() =>
+      planResponseSchema.parse({
+        theorem_name: "bad\nname",
+        theorem_type: "(n : Nat) : n + 0 = n",
+        steps: [{ index: 0, plain_goal: "g", lean_goal: "⊢ True" }],
       }),
     ).toThrow();
   });

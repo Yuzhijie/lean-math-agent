@@ -87,6 +87,8 @@ Run manually with `npm run dev`, a valid `LLM_API_KEY`, and `lake build` succeed
 
 Automated tests cover schemas, log parsing, assembly, session store, and (when Lean is installed) sandbox verification. They do **not** replace the manual checklist above (LLM responses are non-deterministic).
 
+> **Note:** The §4 checklist requires a real `LLM_API_KEY` and a working local Lean/lake install. Automated CI does not claim that manual LLM E2E acceptance has passed.
+
 ## Scripts
 
 | Command | Description |

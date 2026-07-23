@@ -69,6 +69,11 @@ export default function Home() {
 
   const planned = phase === "planned" || phase === "proving" || phase === "verified";
   const canProve = planned && !!sessionId && steps.length > 0 && !busy;
+  const canVerify =
+    !!sessionId &&
+    !busy &&
+    steps.length > 0 &&
+    steps.every((s) => s.status === "ok" && s.lean_code.trim().length > 0);
 
   async function enumerate() {
     setError(null);
@@ -370,7 +375,7 @@ export default function Home() {
               <button
                 type="button"
                 className="btn btn-secondary"
-                disabled={!sessionId || !!busy || steps.length === 0}
+                disabled={!canVerify}
                 onClick={() => void verify()}
               >
                 {busy === "verify" ? "验证中…" : "验证"}

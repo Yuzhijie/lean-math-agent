@@ -159,6 +159,8 @@ describe("proveStepWithRepair", () => {
     });
 
     const source = vi.mocked(verifyLeanSource).mock.calls[0][1];
+    const opts = vi.mocked(verifyLeanSource).mock.calls[0][2];
     expect(source).toMatch(/intro n\s*\n\s*sorry/);
+    expect(opts).toEqual({ allowSorry: true });
   });
 });

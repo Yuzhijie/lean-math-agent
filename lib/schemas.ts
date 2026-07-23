@@ -14,11 +14,31 @@ export const methodOptionSchema = z.object({
   confidence: z.number().min(0).max(1),
 });
 
-export const enumerateResponseSchema = z.object({
-  comparison_summary: z.string().min(1),
-  out_of_domain_warning: z.string().nullable().optional(),
-  methods: z.array(methodOptionSchema).min(1),
-});
+const leanIdent = z
+  .string()
+  .regex(
+    /^[A-Za-z_][A-Za-z0-9_']*$/,
+    "theorem_name must be a Lean identifier (letters, digits, _, ')",
+  );
+
+export const enumerateResponseSchema = z
+  .object({
+    comparison_summary: z.string().min(1),
+    out_of_domain_warning: z.string().nullable().optional(),
+    methods: z.array(methodOptionSchema).min(1),
+  })
+  .superRefine((data, ctx) => {
+    const ood = data.out_of_domain_warning;
+    const inDomain = ood == null || (typeof ood === "string" && !ood.trim());
+    if (inDomain && data.methods.length < 3) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["methods"],
+        message:
+          "in-domain enumerate responses must include at least 3 methods",
+      });
+    }
+  });
 
 export const planStepSkeletonSchema = z.object({
   index: z.number().int().nonnegative(),
@@ -27,7 +47,7 @@ export const planStepSkeletonSchema = z.object({
 });
 
 export const planResponseSchema = z.object({
-  theorem_name: z.string().min(1).default("problem"),
+  theorem_name: leanIdent.default("problem"),
   theorem_type: z.string().min(1),
   steps: z.array(planStepSkeletonSchema).min(1),
 });

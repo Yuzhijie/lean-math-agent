@@ -71,7 +71,10 @@ export async function proveStepWithRepair(args: {
       stepCodes: stepCodesUpTo(steps, args.stepIndex),
       appendSorry: hasLaterSteps,
     });
-    const result = await verifyLeanSource(args.session.id, source);
+    const result = await verifyLeanSource(args.session.id, source, {
+      allowSorry: true,
+    });
+
     if (result.status === "unavailable") {
       steps[idx] = {
         ...steps[idx],

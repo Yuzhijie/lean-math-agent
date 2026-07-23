@@ -33,4 +33,14 @@ describe("assembleLeanSource", () => {
     expect(src).toContain("rfl");
     expect(src.trimEnd().endsWith("sorry")).toBe(false);
   });
+
+  it("uses fail (not sorry) when final verify body is empty", () => {
+    const src = assembleLeanSource({
+      theoremName: "problem",
+      theoremType: "(n : Nat) : n + 0 = n",
+      stepCodes: [],
+    });
+    expect(src).toMatch(/:=\s*by\s*\n\s*fail/);
+    expect(src).not.toMatch(/\bsorry\b/);
+  });
 });

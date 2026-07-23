@@ -23,8 +23,11 @@ export function assembleLeanSource(opts: {
     parts.push("sorry");
   }
   const body = parts.join("\n\n");
+  // Final verify must never silently succeed via empty/`sorry` body.
+  // Use `fail` so lake rejects empty assemblies; repair path uses appendSorry.
+  const tacticBody = body || (opts.appendSorry ? "sorry" : "fail");
   return `${LEAN_HEADER}theorem ${opts.theoremName} ${opts.theoremType} := by
-${indent(body || "sorry")}
+${indent(tacticBody)}
 `;
 }
 

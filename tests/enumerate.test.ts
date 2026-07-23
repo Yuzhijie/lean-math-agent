@@ -2,30 +2,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { enumerateMethods } from "@/lib/llm/enumerate";
 import { LlmError } from "@/lib/llm/client";
 
-const validPayload = {
-  comparison_summary: "归纳最稳；rewrite 最短。",
+const method = (id: string, category: string) => ({
+  id,
+  category,
+  title: `title ${id}`,
+  inspiration: "inspiration text",
+  pros: "pros text",
+  cons: "cons text",
+  lean_sketch: "rfl",
+  confidence: 0.8,
+});
+
+const validInDomainPayload = {
+  comparison_summary: "归纳最稳；rewrite 最短；calc 清晰。",
   out_of_domain_warning: null,
   methods: [
-    {
-      id: "m1",
-      category: "induction",
-      title: "对 n 归纳",
-      inspiration: "目标对全体自然数成立，结构上适合归纳。",
-      pros: "覆盖所有 n，证明完整。",
-      cons: "比 simp 啰嗦。",
-      lean_sketch: "induction n <;> simp",
-      confidence: 0.9,
-    },
-    {
-      id: "m2",
-      category: "rewrite",
-      title: "改写等式",
-      inspiration: "两边可直接改写到同一形式。",
-      pros: "简短。",
-      cons: "依赖合适引理。",
-      lean_sketch: "rw [Nat.add_comm]",
-      confidence: 0.7,
-    },
+    method("m1", "induction"),
+    method("m2", "rewrite"),
+    method("m3", "calc"),
   ],
 };
 
@@ -54,26 +48,50 @@ describe("enumerateMethods", () => {
     delete process.env.LLM_MODEL;
   });
 
-  it("returns 1+ methods for valid JSON", async () => {
+  it("returns ≥3 methods for valid in-domain JSON", async () => {
     const fetchMock = vi.mocked(fetch);
-    fetchMock.mockResolvedValueOnce(chatResponse(JSON.stringify(validPayload)));
+    fetchMock.mockResolvedValueOnce(
+      chatResponse(JSON.stringify(validInDomainPayload)),
+    );
 
     const result = await enumerateMethods("prove n + 0 = n");
 
-    expect(result.methods.length).toBeGreaterThanOrEqual(1);
-    expect(result.comparison_summary).toBe(validPayload.comparison_summary);
+    expect(result.methods.length).toBeGreaterThanOrEqual(3);
+    expect(result.comparison_summary).toBe(
+      validInDomainPayload.comparison_summary,
+    );
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries once when in-domain response has fewer than 3 methods", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const tooFew = {
+      ...validInDomainPayload,
+      methods: validInDomainPayload.methods.slice(0, 2),
+    };
+    fetchMock
+      .mockResolvedValueOnce(chatResponse(JSON.stringify(tooFew)))
+      .mockResolvedValueOnce(
+        chatResponse(JSON.stringify(validInDomainPayload)),
+      );
+
+    const result = await enumerateMethods("prove n + 0 = n");
+
+    expect(result.methods).toHaveLength(3);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("retries once on invalid JSON then succeeds", async () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock
       .mockResolvedValueOnce(chatResponse("{not-json"))
-      .mockResolvedValueOnce(chatResponse(JSON.stringify(validPayload)));
+      .mockResolvedValueOnce(
+        chatResponse(JSON.stringify(validInDomainPayload)),
+      );
 
     const result = await enumerateMethods("prove n + 0 = n");
 
-    expect(result.methods.length).toBeGreaterThanOrEqual(1);
+    expect(result.methods.length).toBeGreaterThanOrEqual(3);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const secondBody = JSON.parse(
       (fetchMock.mock.calls[1]![1] as RequestInit).body as string,

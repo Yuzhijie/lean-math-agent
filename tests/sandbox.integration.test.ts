@@ -7,6 +7,36 @@ import { assembleLeanSource } from "@/lib/lean/assemble";
 const lean = await checkLeanAvailable();
 const describeLean = lean.ok ? describe : describe.skip;
 
+describe("verifyLeanSource sorry gate", () => {
+  it("fails before lake when source contains sorry (final verify)", async () => {
+    const src = assembleLeanSource({
+      theoremName: "problem",
+      theoremType: "(n : Nat) : n + 0 = n",
+      stepCodes: ["intro n"],
+      appendSorry: true,
+    });
+    const res = await verifyLeanSource("sorry-gate", src);
+    expect(res.ok).toBe(false);
+    expect(res.status).toBe("fail");
+    expect(res.log).toMatch(/sorry/i);
+  });
+
+  it("allows sorry when allowSorry is set (repair path)", async () => {
+    if (!lean.ok) return;
+    const src = assembleLeanSource({
+      theoremName: "problem",
+      theoremType: "(n : Nat) : n + 0 = n",
+      stepCodes: [],
+      appendSorry: true,
+    });
+    const res = await verifyLeanSource("sorry-allowed", src, {
+      allowSorry: true,
+    });
+    expect(res.status).not.toBe("unavailable");
+    expect(res.ok).toBe(true);
+  });
+});
+
 describeLean("LeanSandbox integration", () => {
   it("accepts gold nat_add_zero proof", async () => {
     const gold = await fs.readFile(
@@ -25,6 +55,18 @@ describeLean("LeanSandbox integration", () => {
       stepCodes: ["exact absurd"],
     });
     const res = await verifyLeanSource("bad", src);
+    expect(res.ok).toBe(false);
+    expect(res.status).toBe("fail");
+  });
+
+  it("rejects empty-step final assembly (fail tactic)", async () => {
+    const src = assembleLeanSource({
+      theoremName: "empty",
+      theoremType: "(n : Nat) : n + 0 = n",
+      stepCodes: [],
+    });
+    expect(src).toMatch(/\bfail\b/);
+    const res = await verifyLeanSource("empty", src);
     expect(res.ok).toBe(false);
     expect(res.status).toBe("fail");
   });
