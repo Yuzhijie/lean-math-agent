@@ -2,21 +2,99 @@
 
 Interactive Lean 4 math problem solver (MVP). Domain: Nat/Int equalities.
 
+## Prerequisites
+
+- Node.js 18+
+- [elan](https://github.com/leanprover/elan) (Lean 4 toolchain manager)
+
 ## Setup
 
 ```bash
-cp .env.example .env.local
-# fill in LLM_API_KEY and other values
 npm install
+```
+
+Install Lean via elan if needed, then build the sandbox:
+
+```bash
+cd lean-sandbox && lake build && cd ..
+```
+
+Copy env template and set your LLM credentials:
+
+```bash
+cp .env.example .env.local
+```
+
+Required in `.env.local`:
+
+| Variable | Purpose |
+|----------|---------|
+| `LLM_API_KEY` | API key for the LLM provider |
+| `LLM_BASE_URL` | OpenAI-compatible base URL (default `https://api.openai.com/v1`) |
+| `LLM_MODEL` | Model name (default `gpt-4.1`) |
+
+Optional: `LEAN_SANDBOX_PATH`, `LEAN_BUILD_TIMEOUT_MS` (see `.env.example`).
+
+## Run
+
+```bash
 npm run dev
 ```
 
+Open [http://localhost:3000](http://localhost:3000).
+
+## Tests
+
+```bash
+npx vitest run
+```
+
+Integration tests that call `lake`/`lean` are skipped automatically when the toolchain is not on `PATH`.
+
+Quick smoke script (tests only):
+
+```bash
+bash scripts/acceptance-smoke.sh
+```
+
+## Gold problems
+
+Manual acceptance uses the problems in [`gold/problems.json`](gold/problems.json):
+
+| ID | Problem | In domain |
+|----|---------|-----------|
+| `nat_add_zero` | 证明对任意自然数 n，n + 0 = n | yes |
+| `zero_add_nat` | 证明对任意自然数 n，0 + n = n | yes |
+| `add_comm` | 证明对任意自然数 n m，n + m = m + n | yes |
+| `int_neg_add` | 证明对任意整数 a，a + (-a) = 0 | yes |
+| `geometry_ood` | 证明三角形内角和为 180 度 | no (expect out-of-domain warning) |
+
+Hand-written Lean reference for sandbox integration: [`gold/nat_add_zero.lean`](gold/nat_add_zero.lean).
+
+## Acceptance checklist (spec §4)
+
+Run manually with `npm run dev`, a valid `LLM_API_KEY`, and `lake build` succeeding in `lean-sandbox`.
+
+1. **Enumerate methods** — For an in-domain problem (e.g. `证明对任意自然数 n，n + 0 = n`), click **枚举解法**. Expect **≥3** taxonomy-tagged methods, each with inspiration and pros/cons.
+2. **Plan steps** — Select a method. Expect stepwise plain-language explanations, each with a Lean fragment.
+3. **Verify** — Complete steps and click **验证**. On the happy path, verification succeeds (`build_status` ok). On failure, the build log is shown and **重试本步** is available.
+4. **Lean missing** — Without elan/Lean on `PATH`, the UI shows an unavailable banner with install guidance (no silent failure).
+5. **Switch method** — Click **换解法**, pick another method. Steps clear and replan runs without carrying over the previous method's steps.
+
+**Out-of-domain:** Use `geometry_ood` from `gold/problems.json`. Expect an out-of-domain warning at enumerate time; the app may still allow an attempt without guaranteeing success.
+
+**Success definition:** In-domain, a user can see multiple methods → pick one → follow plain steps → see Lean on the right that actually compiles.
+
+Automated tests cover schemas, log parsing, assembly, session store, and (when Lean is installed) sandbox verification. They do **not** replace the manual checklist above (LLM responses are non-deterministic).
+
 ## Scripts
 
-- `npm run dev` — Next.js dev server (Turbopack)
-- `npm run build` / `npm start` — production
-- `npm test` — Vitest
-- `npm run lint` — ESLint
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Next.js dev server (Turbopack) |
+| `npm run build` / `npm start` | Production build / server |
+| `npm test` | Same as `npx vitest run` |
+| `npm run lint` | ESLint |
 
 ## Docs
 

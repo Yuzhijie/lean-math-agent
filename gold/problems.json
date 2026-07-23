@@ -1,0 +1,7 @@
+[
+  { "id": "nat_add_zero", "text": "证明对任意自然数 n，n + 0 = n", "in_domain": true },
+  { "id": "zero_add_nat", "text": "证明对任意自然数 n，0 + n = n", "in_domain": true },
+  { "id": "add_comm", "text": "证明对任意自然数 n m，n + m = m + n", "in_domain": true },
+  { "id": "int_neg_add", "text": "证明对任意整数 a，a + (-a) = 0", "in_domain": true },
+  { "id": "geometry_ood", "text": "证明三角形内角和为 180 度", "in_domain": false }
+]
