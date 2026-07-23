@@ -1,0 +1,6 @@
+name = "lean_sandbox"
+version = "0.1.0"
+defaultTargets = ["LeanSandbox"]
+
+[[lean_lib]]
+name = "LeanSandbox"
