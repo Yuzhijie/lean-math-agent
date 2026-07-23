@@ -37,5 +37,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# lean sandbox session scratch
+# lean sandbox
+lean-sandbox/.lake/
 lean-sandbox/Scratch/Session_*.lean
