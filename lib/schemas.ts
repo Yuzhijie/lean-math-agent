@@ -27,6 +27,8 @@ export const planStepSkeletonSchema = z.object({
 });
 
 export const planResponseSchema = z.object({
+  theorem_name: z.string().min(1).default("problem"),
+  theorem_type: z.string().min(1),
   steps: z.array(planStepSkeletonSchema).min(1),
 });
 

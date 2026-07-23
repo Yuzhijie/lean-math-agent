@@ -41,6 +41,8 @@ export interface Session {
   problem_text: string;
   methods: MethodOption[];
   selected_method_id?: string;
+  theorem_name?: string;
+  theorem_type?: string;
   steps: ProofStep[];
   assembled_lean: string;
   build_status: BuildStatus;

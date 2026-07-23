@@ -8,7 +8,8 @@ Aim for at least 3 methods when the problem is in-domain.
 Write Chinese for title/inspiration/pros/cons/comparison_summary.`;
 
 export const PLAN_SYSTEM = `You break a chosen proof method into ordered steps for Lean 4.
-Return JSON: { "steps": [{ "index", "plain_goal", "lean_goal" }, ...] }.
+Return JSON: { "theorem_name", "theorem_type", "steps": [{ "index", "plain_goal", "lean_goal" }, ...] }.
+theorem_name is a Lean identifier (default "problem"); theorem_type is the theorem signature after the name (e.g. "(n : Nat) : n + 0 = n").
 plain_goal in Chinese; lean_goal is a short Lean goal description.
 No full proof code yet.`;
 

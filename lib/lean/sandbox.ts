@@ -36,7 +36,8 @@ export async function verifyLeanSource(
   const root = sandboxRoot();
   const scratchDir = path.join(root, "Scratch");
   await fs.mkdir(scratchDir, { recursive: true });
-  const filePath = path.join(scratchDir, `Session_${sessionId}.lean`);
+  const safeId = path.basename(sessionId.replace(/\\/g, "/"));
+  const filePath = path.join(scratchDir, `Session_${safeId}.lean`);
   await fs.writeFile(filePath, source, "utf8");
   try {
     const log = await runCmd(
