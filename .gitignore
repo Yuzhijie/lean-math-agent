@@ -40,3 +40,20 @@ next-env.d.ts
 # lean sandbox
 lean-sandbox/.lake/
 lean-sandbox/Scratch/Session_*.lean
+
+# runtime data (sessions, caches, local SQLite DBs) — never commit
+/.data/
+/prisma/.data/
+*.db
+*.db-journal
+
+# stray build output inside the Lean project
+lean-sandbox/.next/
+
+# local agent/tool settings
+.claude/settings.local.json
+.superpowers/
+
+# python bytecode
+__pycache__/
+*.pyc

@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   createSession,
   updateSession,
@@ -10,48 +13,56 @@ import {
   searchSessions,
 } from "@/lib/session-store";
 
-beforeEach(() => _resetStoreForTests());
+beforeEach(() => {
+  _resetStoreForTests();
+  // Fresh on-disk store per test so listing/search totals are exact.
+  process.env.SESSION_STORE_PATH = mkdtempSync(path.join(tmpdir(), "lma-sessions-"));
+});
+
+/** Create a session and persist it (listing reads from disk). */
+async function createPersisted(problemText: string) {
+  const s = createSession(problemText);
+  await saveSessionToDisk(s.id);
+  return s;
+}
 
 describe("session store — pagination", () => {
   it("listSessionsPaginated returns correct page", async () => {
-    // Create 5 sessions
     for (let i = 0; i < 5; i++) {
-      createSession(`problem ${i}`);
+      await createPersisted(`problem ${i}`);
     }
 
     const result = await listSessionsPaginated(1, 3);
-    expect(result.sessions.length).toBeLessThanOrEqual(3);
+    expect(result.sessions.length).toBe(3);
     expect(result.page).toBe(1);
     expect(result.perPage).toBe(3);
-    // Total may include disk sessions, so just check it's >= 5
-    expect(result.total).toBeGreaterThanOrEqual(5);
+    // The store path is a fresh temp dir (tests/setup-env.ts), so the
+    // total is exactly what this test created.
+    expect(result.total).toBe(5);
   });
 
   it("listSessionsPaginated page 2 returns remaining", async () => {
     for (let i = 0; i < 5; i++) {
-      createSession(`problem ${i}`);
+      await createPersisted(`problem ${i}`);
     }
 
     const result = await listSessionsPaginated(2, 3);
     expect(result.page).toBe(2);
-    // Should have 2 remaining sessions
-    expect(result.sessions.length).toBeGreaterThanOrEqual(0);
+    expect(result.sessions.length).toBe(2);
+    expect(result.total).toBe(5);
   });
 });
 
 describe("session store — search", () => {
-  it("searchSessions returns paginated result structure", async () => {
-    createSession("证明勾股定理");
-    createSession("求解二次方程");
+  it("searchSessions finds persisted sessions by problem text", async () => {
+    await createPersisted("证明勾股定理");
+    await createPersisted("求解二次方程");
 
     const result = await searchSessions("证明");
-    // searchSessions may read from disk (JSON backend) or memory (SQLite)
-    // Just verify the structure is correct
-    expect(result).toHaveProperty("sessions");
-    expect(result).toHaveProperty("total");
-    expect(result).toHaveProperty("page");
-    expect(result).toHaveProperty("perPage");
-    expect(Array.isArray(result.sessions)).toBe(true);
+    expect(result.total).toBe(1);
+    expect(result.sessions.map((s) => s.problem_text)).toEqual(["证明勾股定理"]);
+    expect(result.page).toBe(1);
+    expect(result.perPage).toBe(20);
   });
 
   it("searchSessions returns empty for no match", async () => {

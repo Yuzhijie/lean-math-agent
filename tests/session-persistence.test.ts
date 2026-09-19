@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { promises as fs } from "node:fs";
+import { promises as fs, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   createSession,
@@ -10,7 +11,8 @@ import {
   _resetStoreForTests,
 } from "@/lib/session-store";
 
-const TEST_DIR = ".data/test-sessions";
+// A temp directory outside the repository (never write into `.data/`).
+const TEST_DIR = path.join(mkdtempSync(path.join(tmpdir(), "lma-persist-")), "sessions");
 
 beforeEach(() => {
   _resetStoreForTests();
