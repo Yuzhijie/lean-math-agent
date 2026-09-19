@@ -85,7 +85,7 @@ describe("derivePhase", () => {
   it("returns enumerated when methods exist", () => {
     const state: ProofSessionState = {
       ...INITIAL_STATE,
-      methods: [{ id: "m1", category: "algebra", title: "t", inspiration: "", pros: "", cons: "", lean_sketch: "", confidence: 0.8 }],
+      methods: [{ id: "m1", category: "other", title: "t", inspiration: "", pros: "", cons: "", lean_sketch: "", confidence: 0.8 }],
     };
     expect(derivePhase(state)).toBe("enumerated");
   });
@@ -122,7 +122,7 @@ describe("state transitions", () => {
     const state: ProofSessionState = {
       ...INITIAL_STATE,
       problemText: "original",
-      methods: [{ id: "m1", category: "algebra", title: "t", inspiration: "", pros: "", cons: "", lean_sketch: "", confidence: 0.8 }],
+      methods: [{ id: "m1", category: "other", title: "t", inspiration: "", pros: "", cons: "", lean_sketch: "", confidence: 0.8 }],
       busy: "something",
     };
     const next = applyAction(state, { type: "RESET_ALL", problemText: "new" });
@@ -140,7 +140,7 @@ describe("state transitions", () => {
 
   it("ENUMERATE_OK stores methods and session id", () => {
     const methods: MethodOption[] = [
-      { id: "m1", category: "algebra", title: "t", inspiration: "i", pros: "p", cons: "c", lean_sketch: "s", confidence: 0.9 },
+      { id: "m1", category: "other", title: "t", inspiration: "i", pros: "p", cons: "c", lean_sketch: "s", confidence: 0.9 },
     ];
     const next = applyAction(INITIAL_STATE, {
       type: "ENUMERATE_OK",

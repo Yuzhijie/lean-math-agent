@@ -27,6 +27,7 @@ import type {
   LeanProofAttempt,
   MathDomain,
   NaturalLanguageSolution,
+  Session,
 } from "@/lib/types";
 
 interface SolveRequest {
@@ -138,7 +139,7 @@ export async function POST(req: Request) {
 // ── Computational Handler ───────────────────────────────────────────────
 
 async function handleComputational(
-  session: NonNullable<ReturnType<typeof getSession>>,
+  session: Session,
   opts: NonNullable<SolveRequest["options"]>,
   emit: (data: Record<string, unknown>) => void,
 ): Promise<Record<string, unknown>> {
@@ -245,7 +246,7 @@ async function handleComputational(
 // ── Optimization Handler ────────────────────────────────────────────────
 
 async function handleOptimization(
-  session: NonNullable<ReturnType<typeof getSession>>,
+  session: Session,
   opts: NonNullable<SolveRequest["options"]>,
   emit: (data: Record<string, unknown>) => void,
 ): Promise<Record<string, unknown>> {
@@ -335,7 +336,7 @@ async function handleOptimization(
 // ── Find-All Handler ────────────────────────────────────────────────────
 
 async function handleFindAll(
-  session: NonNullable<ReturnType<typeof getSession>>,
+  session: Session,
   opts: NonNullable<SolveRequest["options"]>,
   emit: (data: Record<string, unknown>) => void,
   findHints?: { parameter: string; parameter_domain?: "integer" | "positive_integer" | "real"; condition_description: string; search_range_hint?: string },
@@ -418,7 +419,7 @@ async function handleFindAll(
 // ── Theorem Handler ─────────────────────────────────────────────────────
 
 async function handleTheorem(
-  session: NonNullable<ReturnType<typeof getSession>>,
+  session: Session,
   opts: NonNullable<SolveRequest["options"]>,
   emit: (data: Record<string, unknown>) => void,
   useMathlib: boolean,

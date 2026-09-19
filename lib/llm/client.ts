@@ -16,7 +16,7 @@ export interface ChatMessage {
 export async function chatJson<T>(args: {
   system: string;
   user: string;
-  schema: z.ZodType<T>;
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>;
   schemaName: string;
   temperature?: number;
   /** Per-call timeout override (ms). Falls back to config LLM_TIMEOUT_MS. */
@@ -40,7 +40,7 @@ export async function chatJson<T>(args: {
 // ── Multi-turn with Zod validation + retry ────────────────────────────
 export async function chatJsonMultiTurn<T>(args: {
   messages: ChatMessage[];
-  schema: z.ZodType<T>;
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>;
   schemaName: string;
   temperature?: number;
   maxRetries?: number;
@@ -97,7 +97,7 @@ export async function chatText(args: {
 
 // ── Parsing helpers ───────────────────────────────────────────────────
 function tryParse<T>(
-  schema: z.ZodType<T>,
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
   text: string,
 ): { ok: true; value: T } | { ok: false; error: string } {
   try {

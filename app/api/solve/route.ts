@@ -27,6 +27,7 @@ import type {
   LeanProofAttempt,
   MathDomain,
   NaturalLanguageSolution,
+  Session,
 } from "@/lib/types";
 
 interface SolveRequest {
@@ -130,7 +131,7 @@ export async function POST(req: Request) {
 // ── Computational Problem Handler ─────────────────────────────────────
 
 async function handleComputationalProblem(
-  session: ReturnType<typeof getSession> & {},
+  session: Session,
   opts: NonNullable<SolveRequest["options"]>,
   events: Array<{ stage: string; detail: string }>,
 ) {
@@ -256,7 +257,7 @@ async function handleComputationalProblem(
 // ── Optimization Problem Handler ──────────────────────────────────────
 
 async function handleOptimizationProblem(
-  session: ReturnType<typeof getSession> & {},
+  session: Session,
   opts: NonNullable<SolveRequest["options"]>,
   events: Array<{ stage: string; detail: string }>,
 ) {
@@ -371,7 +372,7 @@ async function handleOptimizationProblem(
 // ── Find-All-Values Problem Handler ────────────────────────────────────
 
 async function handleFindAllProblem(
-  session: ReturnType<typeof getSession> & {},
+  session: Session,
   opts: NonNullable<SolveRequest["options"]>,
   events: Array<{ stage: string; detail: string }>,
   findHints?: {
@@ -482,7 +483,7 @@ async function handleFindAllProblem(
 // ── Theorem Problem Handler ───────────────────────────────────────────
 
 async function handleTheoremProblem(
-  session: ReturnType<typeof getSession> & {},
+  session: Session,
   opts: NonNullable<SolveRequest["options"]>,
   events: Array<{ stage: string; detail: string }>,
   useMathlib: boolean,

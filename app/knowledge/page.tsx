@@ -2,8 +2,8 @@
 
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
-import { KnowledgeGraph } from '@/components/KnowledgeGraph';
-import { Header } from '@/components/Header';
+import { KnowledgeGraph } from '@/app/components/KnowledgeGraph';
+import { Header } from '@/app/components/Header';
 
 export default function KnowledgePage() {
   const { data: session, status } = useSession();

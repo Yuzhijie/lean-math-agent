@@ -2,8 +2,8 @@
 
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
-import { PricingCards } from '@/components/PricingCards';
-import { AuthButton } from '@/components/AuthButton';
+import { PricingCards } from '@/app/components/PricingCards';
+import { AuthButton } from '@/app/components/AuthButton';
 import { Button } from '@/components/ui/button';
 import { ArrowLeft, Crown } from 'lucide-react';
 

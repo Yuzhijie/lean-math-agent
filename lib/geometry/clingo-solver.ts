@@ -2,10 +2,49 @@
  * Geometry solver using Clingo ASP (Answer Set Programming)
  * Handles geometric construction and proof via constraint solving
  */
-import { execFile } from 'child_process';
-import { promisify } from 'util';
+import { spawn } from 'child_process';
 
-const execFileAsync = promisify(execFile);
+/** Path to the clingo binary (documented in .env.example as CLINGO_PATH). */
+function clingoBinary(): string {
+  return process.env.CLINGO_PATH || 'clingo';
+}
+
+/**
+ * Run clingo with the program on stdin and collect stdout/stderr.
+ *
+ * clingo signals the solve result through its exit code rather than 0:
+ * 10 = SATISFIABLE, 20 = UNSATISFIABLE, 30 = SAT + interrupted (e.g. time
+ * limit), 0 = no solving performed. Anything else is a genuine failure.
+ */
+function runClingo(
+  args: string[],
+  stdin: string,
+  timeoutMs: number,
+): Promise<{ stdout: string; stderr: string; code: number | null }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(clingoBinary(), args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(new Error(`clingo timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    child.stdout.on('data', (d: Buffer) => (stdout += d.toString()));
+    child.stderr.on('data', (d: Buffer) => (stderr += d.toString()));
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ stdout, stderr, code });
+    });
+    child.stdin.on('error', () => {
+      /* clingo exited before reading all of stdin — reported via exit code */
+    });
+    child.stdin.end(stdin);
+  });
+}
 
 export interface Point {
   name: string;
@@ -137,30 +176,45 @@ export async function solveWithClingo(
   models: number = 1,
   timeout: number = 30000
 ): Promise<{ answerSets: string[][]; satisfiable: boolean }> {
+  let run: Awaited<ReturnType<typeof runClingo>>;
   try {
-    const { stdout, stderr } = await execFileAsync('clingo', [
-      '-',
-      `--models=${models}`,
-      '--outf=1',  // JSON output
-      `--time-limit=${Math.floor(timeout / 1000)}`,
-    ], {
-      input: program,
-      timeout,
-    });
-
-    const result = JSON.parse(stdout);
-    const answerSets = result.Call?.[0]?.Witnesses?.map((w: any) => w.Value) || [];
-
-    return {
-      answerSets,
-      satisfiable: result.Call?.[0]?.Result === 'SATISFIABLE',
-    };
+    run = await runClingo(
+      [
+        '-',
+        `--models=${models}`,
+        '--outf=2', // JSON output (outf=1 is the competition text format)
+        `--time-limit=${Math.max(1, Math.floor(timeout / 1000))}`,
+      ],
+      program,
+      timeout + 1000,
+    );
   } catch (error: any) {
-    if (error.stderr?.includes('UNSATISFIABLE')) {
-      return { answerSets: [], satisfiable: false };
-    }
     throw new Error(`Clingo execution failed: ${error.message}`);
   }
+
+  // Exit codes 10/20/30 are solve outcomes, not errors (see runClingo).
+  const okCodes = new Set([0, 10, 20, 30]);
+  if (run.code === null || !okCodes.has(run.code)) {
+    throw new Error(
+      `Clingo execution failed (exit ${run.code}): ${run.stderr.trim() || run.stdout.slice(0, 500)}`,
+    );
+  }
+
+  let result: any;
+  try {
+    result = JSON.parse(run.stdout);
+  } catch {
+    throw new Error(`Clingo returned non-JSON output: ${run.stdout.slice(0, 500)}`);
+  }
+
+  const call = result.Call?.[0];
+  const answerSets: string[][] = call?.Witnesses?.map((w: any) => w.Value) ?? [];
+  const topResult: string = result.Result ?? '';
+
+  return {
+    answerSets,
+    satisfiable: topResult.startsWith('SATISFIABLE') || (run.code === 30 && answerSets.length > 0),
+  };
 }
 
 // ─── Solution Parsing ──────────────────────────────────────────

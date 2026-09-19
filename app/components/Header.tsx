@@ -1,7 +1,7 @@
 'use client';
 
-import { AuthButton } from '@/components/AuthButton';
-import { LocaleSwitcher } from '@/components/LocaleSwitcher';
+import { AuthButton } from '@/app/components/AuthButton';
+import { LocaleSwitcher } from '@/app/components/LocaleSwitcher';
 import { Button } from '@/components/ui/button';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
