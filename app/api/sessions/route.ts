@@ -1,11 +1,15 @@
 import { NextResponse } from "next/server";
 import {
   listSessionsFromDisk,
-  deleteSessionFromDisk,
   listSessionsPaginated,
   searchSessions,
-  clearAllSessions,
 } from "@/lib/session-store";
+
+// NOTE: the unauthenticated `DELETE /api/sessions` handler (clear ALL
+// sessions) was removed. Sessions are not scoped to a user yet, so it let
+// anyone wipe every user's history. Individual deletion remains available
+// at `DELETE /api/session/[id]`; a bulk clear should come back only behind
+// authentication and scoped to the caller's own sessions.
 import type { Session } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -60,9 +64,4 @@ export async function GET(req: Request) {
   const sessions = await listSessionsFromDisk();
   const summaries = sessions.map(toSummary);
   return NextResponse.json(summaries);
-}
-
-export async function DELETE() {
-  await clearAllSessions();
-  return NextResponse.json({ ok: true });
 }

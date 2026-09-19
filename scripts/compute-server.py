@@ -17,6 +17,7 @@ Endpoints:
 """
 
 import json
+import os
 import sys
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -26,20 +27,46 @@ try:
         sympify, simplify, symbols, N, solve, Eq, Poly, Rational,
         sqrt, oo, zoo, S,
     )
-    from sympy.parsing.sympy_parser import (
-        parse_expr, standard_transformations, implicit_multiplication,
-    )
 except ImportError:
     print("ERROR: sympy is required. Install with: pip install sympy")
     sys.exit(1)
 
-TRANSFORMATIONS = standard_transformations + (implicit_multiplication,)
+# All expression strings reach this server from LLM output (ultimately from
+# user-supplied problem text). `parse_expr`/`sympify` are eval-based, so the
+# hardened wrappers in safe_parse.py are used everywhere instead.
+from safe_parse import (  # noqa: E402
+    DEFAULT_TRANSFORMATIONS,
+    ComputationTimeout,
+    UnsafeExpressionError,
+    safe_parse_expr,
+    time_limit,
+)
+
+TRANSFORMATIONS = DEFAULT_TRANSFORMATIONS
+
+# Limits per request: body size and wall-clock time for the SymPy work.
+MAX_BODY_BYTES = 256 * 1024
+COMPUTE_TIMEOUT_SECONDS = float(os.environ.get("COMPUTE_TIMEOUT_SECONDS", "15"))
 
 
 class ComputeHandler(BaseHTTPRequestHandler):
     def do_POST(self):
-        content_length = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(content_length))
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            self._respond(400, {"error": "invalid Content-Length"})
+            return
+        if content_length < 0 or content_length > MAX_BODY_BYTES:
+            self._respond(413, {"error": f"request body larger than {MAX_BODY_BYTES} bytes"})
+            return
+        try:
+            body = json.loads(self.rfile.read(content_length) or b"{}")
+        except (ValueError, UnicodeDecodeError):
+            self._respond(400, {"error": "request body is not valid JSON"})
+            return
+        if not isinstance(body, dict):
+            self._respond(400, {"error": "request body must be a JSON object"})
+            return
 
         routes = {
             "/evaluate": lambda: self._evaluate(body.get("expression", "")),
@@ -58,13 +85,26 @@ class ComputeHandler(BaseHTTPRequestHandler):
             self._respond(404, {"error": "not found"})
             return
 
-        self._respond(200, handler())
+        try:
+            with time_limit(COMPUTE_TIMEOUT_SECONDS):
+                result = handler()
+        except UnsafeExpressionError as e:
+            self._respond(400, {"error": f"rejected expression: {e}"})
+            return
+        except ComputationTimeout:
+            self._respond(408, {"error": f"computation exceeded {COMPUTE_TIMEOUT_SECONDS}s"})
+            return
+        except Exception as e:  # never leak a traceback / kill the connection
+            self._respond(500, {"error": f"{type(e).__name__}: {e}"})
+            return
+
+        self._respond(200, result)
 
     # ── Existing endpoints ────────────────────────────────────────────
 
     def _evaluate(self, expression: str) -> dict:
         try:
-            expr = parse_expr(expression, transformations=TRANSFORMATIONS)
+            expr = safe_parse_expr(expression, transformations=TRANSFORMATIONS)
             result = str(expr)
             return {"result": result}
         except Exception as e:
@@ -72,7 +112,7 @@ class ComputeHandler(BaseHTTPRequestHandler):
 
     def _simplify(self, expression: str) -> dict:
         try:
-            expr = parse_expr(expression, transformations=TRANSFORMATIONS)
+            expr = safe_parse_expr(expression, transformations=TRANSFORMATIONS)
             simplified = simplify(expr)
             return {"result": str(simplified)}
         except Exception as e:
@@ -82,12 +122,12 @@ class ComputeHandler(BaseHTTPRequestHandler):
         try:
             parts = claim.split("=")
             if len(parts) == 2:
-                lhs = parse_expr(parts[0].strip(), transformations=TRANSFORMATIONS)
-                rhs = parse_expr(parts[1].strip(), transformations=TRANSFORMATIONS)
+                lhs = safe_parse_expr(parts[0].strip(), transformations=TRANSFORMATIONS)
+                rhs = safe_parse_expr(parts[1].strip(), transformations=TRANSFORMATIONS)
                 diff = simplify(lhs - rhs)
                 result = diff == 0
             else:
-                expr = parse_expr(claim, transformations=TRANSFORMATIONS)
+                expr = safe_parse_expr(claim, transformations=TRANSFORMATIONS)
                 result = bool(expr)
             return {"result": result}
         except Exception:
@@ -122,14 +162,14 @@ class ComputeHandler(BaseHTTPRequestHandler):
             for eq_str in eq_strings:
                 if "=" in eq_str:
                     parts = eq_str.split("=", 1)
-                    lhs = parse_expr(parts[0].strip(), transformations=TRANSFORMATIONS,
+                    lhs = safe_parse_expr(parts[0].strip(), transformations=TRANSFORMATIONS,
                                      local_dict=sym_map)
-                    rhs = parse_expr(parts[1].strip(), transformations=TRANSFORMATIONS,
+                    rhs = safe_parse_expr(parts[1].strip(), transformations=TRANSFORMATIONS,
                                      local_dict=sym_map)
                     parsed_eqs.append(Eq(lhs, rhs))
                 else:
                     parsed_eqs.append(
-                        parse_expr(eq_str.strip(), transformations=TRANSFORMATIONS,
+                        safe_parse_expr(eq_str.strip(), transformations=TRANSFORMATIONS,
                                    local_dict=sym_map)
                     )
 
@@ -168,13 +208,13 @@ class ComputeHandler(BaseHTTPRequestHandler):
             values = body.get("values", {})
 
             # Parse expression
-            expr = parse_expr(expr_str, transformations=TRANSFORMATIONS)
+            expr = safe_parse_expr(expr_str, transformations=TRANSFORMATIONS)
 
             # Build substitution map
             subs = {}
             for k, v in values.items():
                 sym = symbols(k)
-                val = parse_expr(str(v), transformations=TRANSFORMATIONS)
+                val = safe_parse_expr(str(v), transformations=TRANSFORMATIONS)
                 subs[sym] = val
 
             result = expr.subs(subs)
@@ -209,7 +249,7 @@ class ComputeHandler(BaseHTTPRequestHandler):
             subs = {}
             for k, v in root.items():
                 sym = symbols(k)
-                val = parse_expr(str(v), transformations=TRANSFORMATIONS)
+                val = safe_parse_expr(str(v), transformations=TRANSFORMATIONS)
                 subs[sym] = val
 
             # Check each equation
@@ -219,11 +259,11 @@ class ComputeHandler(BaseHTTPRequestHandler):
                 try:
                     if "=" in eq_str:
                         parts = eq_str.split("=", 1)
-                        lhs = parse_expr(parts[0].strip(), transformations=TRANSFORMATIONS)
-                        rhs = parse_expr(parts[1].strip(), transformations=TRANSFORMATIONS)
+                        lhs = safe_parse_expr(parts[0].strip(), transformations=TRANSFORMATIONS)
+                        rhs = safe_parse_expr(parts[1].strip(), transformations=TRANSFORMATIONS)
                         residual = simplify(lhs.subs(subs) - rhs.subs(subs))
                     else:
-                        expr = parse_expr(eq_str.strip(), transformations=TRANSFORMATIONS)
+                        expr = safe_parse_expr(eq_str.strip(), transformations=TRANSFORMATIONS)
                         residual = simplify(expr.subs(subs))
 
                     is_zero = residual == 0
@@ -239,7 +279,7 @@ class ComputeHandler(BaseHTTPRequestHandler):
             all_constraints_ok = True
             for c_str in constraints:
                 try:
-                    c_expr = parse_expr(c_str.strip(), transformations=TRANSFORMATIONS)
+                    c_expr = safe_parse_expr(c_str.strip(), transformations=TRANSFORMATIONS)
                     c_val = c_expr.subs(subs)
                     satisfied = bool(c_val)
                     constraint_checks.append({
@@ -284,7 +324,7 @@ class ComputeHandler(BaseHTTPRequestHandler):
             var_name = body.get("variable", "x")
 
             sym = symbols(var_name)
-            expr = parse_expr(poly_str, transformations=TRANSFORMATIONS,
+            expr = safe_parse_expr(poly_str, transformations=TRANSFORMATIONS,
                               local_dict={var_name: sym})
             poly = Poly(expr, sym)
 
@@ -344,14 +384,14 @@ class ComputeHandler(BaseHTTPRequestHandler):
             # Create symbols for parameters and the index
             param_symbols = {}
             for k, v in parameters.items():
-                param_symbols[k] = parse_expr(str(v), transformations=TRANSFORMATIONS)
+                param_symbols[k] = safe_parse_expr(str(v), transformations=TRANSFORMATIONS)
 
             # Build the sequence by iterating
             # We interpret recurrence as an expression in terms of a[n-1], a[n-2], etc.
             # Use a list to store computed terms
             terms = []
             for v in initial_values:
-                terms.append(parse_expr(str(v), transformations=TRANSFORMATIONS))
+                terms.append(safe_parse_expr(str(v), transformations=TRANSFORMATIONS))
 
             order = len(initial_values)
 
@@ -368,7 +408,7 @@ class ComputeHandler(BaseHTTPRequestHandler):
                     subs[symbols(f"a_{j+1}")] = terms[i - order + j]
 
                 try:
-                    expr = parse_expr(recurrence_str, transformations=TRANSFORMATIONS,
+                    expr = safe_parse_expr(recurrence_str, transformations=TRANSFORMATIONS,
                                       local_dict=subs)
                     result = simplify(expr)
                     terms.append(result)
@@ -421,7 +461,7 @@ class ComputeHandler(BaseHTTPRequestHandler):
 
             for i, v in enumerate(values):
                 try:
-                    val = parse_expr(str(v), transformations=TRANSFORMATIONS)
+                    val = safe_parse_expr(str(v), transformations=TRANSFORMATIONS)
                     val_float = float(N(val))
 
                     if val_float < 0 or abs(val_float - round(val_float)) > 1e-10:
@@ -481,7 +521,6 @@ class ComputeHandler(BaseHTTPRequestHandler):
     def _respond(self, status: int, data: dict):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(json.dumps(data).encode())
 
@@ -492,8 +531,11 @@ class ComputeHandler(BaseHTTPRequestHandler):
 
 def main():
     port = int(sys.argv[sys.argv.index("--port") + 1]) if "--port" in sys.argv else 5001
-    server = HTTPServer(("127.0.0.1", port), ComputeHandler)
-    print(f"SymPy compute server listening on http://127.0.0.1:{port}")
+    # Bind to loopback by default; pass --host 0.0.0.0 (or COMPUTE_HOST) inside
+    # Docker so the web container can reach it.
+    host = sys.argv[sys.argv.index("--host") + 1] if "--host" in sys.argv else os.environ.get("COMPUTE_HOST", "127.0.0.1")
+    server = HTTPServer((host, port), ComputeHandler)
+    print(f"SymPy compute server listening on http://{host}:{port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -3,10 +3,14 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Mock stripe
+// Mock stripe. The module is used as a constructor (`new Stripe(key)`), and
+// since Vitest 4 a mock implemented by an arrow function is not constructible,
+// so use a regular function expression.
 vi.mock('stripe', () => {
   return {
-    default: vi.fn(() => mockStripe),
+    default: vi.fn(function MockStripeCtor() {
+      return mockStripe;
+    }),
   };
 });
 

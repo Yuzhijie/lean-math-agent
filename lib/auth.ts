@@ -1,9 +1,14 @@
 /**
  * NextAuth configuration for user authentication
- * Supports: GitHub, Google, Credentials (email/password)
+ * Supports: GitHub, Google (OAuth)
+ *
+ * The former email/password Credentials provider was removed: it looked the
+ * user up by email and returned them WITHOUT checking any password (the User
+ * model has no password column), so anyone who knew an email address could
+ * sign in as that account. Re-add it only together with a password hash
+ * column (bcrypt/argon2), a proper verify step, and rate limiting.
  */
 import { NextAuthOptions } from 'next-auth';
-import CredentialsProvider from 'next-auth/providers/credentials';
 import GithubProvider from 'next-auth/providers/github';
 import GoogleProvider from 'next-auth/providers/google';
 import { PrismaAdapter } from '@next-auth/prisma-adapter';
@@ -19,31 +24,6 @@ export const authOptions: NextAuthOptions = {
     GoogleProvider({
       clientId: process.env.GOOGLE_ID ?? '',
       clientSecret: process.env.GOOGLE_SECRET ?? '',
-    }),
-    CredentialsProvider({
-      name: 'credentials',
-      credentials: {
-        email: { label: 'Email', type: 'email' },
-        password: { label: 'Password', type: 'password' },
-      },
-      async authorize(credentials) {
-        if (!credentials?.email || !credentials?.password) {
-          throw new Error('Missing credentials');
-        }
-
-        // TODO: Implement password verification against database
-        // For now, return mock user
-        const user = await prisma.user.findUnique({
-          where: { email: credentials.email },
-        });
-
-        if (!user) {
-          throw new Error('User not found');
-        }
-
-        // TODO: Verify password hash with bcrypt
-        return user;
-      },
     }),
   ],
   session: {

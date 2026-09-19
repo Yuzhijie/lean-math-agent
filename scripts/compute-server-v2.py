@@ -15,6 +15,10 @@ from flask_cors import CORS
 # Import algebra endpoints
 from solve.endpoints import algebra_bp
 
+# `sympify` is eval-based; every expression string here is untrusted LLM /
+# user input, so parse through the hardened wrapper instead.
+from safe_parse import safe_sympify
+
 app = Flask(__name__)
 CORS(app)
 
@@ -56,7 +60,7 @@ if HAS_SYMPY:
         data = request.get_json()
         expr = data.get('expression', '')
         try:
-            result = solve(sympify(expr))
+            result = solve(safe_sympify(expr))
             return jsonify({
                 'solutions': [str(s) for s in result],
                 'latex': [latex(s) for s in result],
@@ -69,7 +73,7 @@ if HAS_SYMPY:
         data = request.get_json()
         expr = data.get('expression', '')
         try:
-            result = simplify(sympify(expr))
+            result = simplify(safe_sympify(expr))
             return jsonify({'result': str(result), 'latex': latex(result)})
         except Exception as e:
             return jsonify({'error': str(e)}), 400
@@ -79,7 +83,7 @@ if HAS_SYMPY:
         data = request.get_json()
         expr = data.get('expression', '')
         try:
-            result = expand(sympify(expr))
+            result = expand(safe_sympify(expr))
             return jsonify({'result': str(result), 'latex': latex(result)})
         except Exception as e:
             return jsonify({'error': str(e)}), 400
@@ -89,7 +93,7 @@ if HAS_SYMPY:
         data = request.get_json()
         expr = data.get('expression', '')
         try:
-            result = factor(sympify(expr))
+            result = factor(safe_sympify(expr))
             return jsonify({'result': str(result), 'latex': latex(result)})
         except Exception as e:
             return jsonify({'error': str(e)}), 400
@@ -100,7 +104,7 @@ if HAS_SYMPY:
         expr = data.get('expression', '')
         var = data.get('variable', 'x')
         try:
-            result = diff(sympify(expr), symbols(var))
+            result = diff(safe_sympify(expr), symbols(var))
             return jsonify({'result': str(result), 'latex': latex(result)})
         except Exception as e:
             return jsonify({'error': str(e)}), 400
@@ -111,7 +115,7 @@ if HAS_SYMPY:
         expr = data.get('expression', '')
         var = data.get('variable', 'x')
         try:
-            result = integrate(sympify(expr), symbols(var))
+            result = integrate(safe_sympify(expr), symbols(var))
             return jsonify({'result': str(result), 'latex': latex(result)})
         except Exception as e:
             return jsonify({'error': str(e)}), 400
@@ -136,7 +140,11 @@ if HAS_SYMPY:
         expr = data.get('expression', '')
         subs = data.get('substitutions', {})
         try:
-            result = sympify(expr).subs(subs)
+            if not isinstance(subs, dict):
+                raise ValueError('substitutions must be an object')
+            safe_subs = {safe_sympify(str(k)): safe_sympify(v if isinstance(v, str) else str(v))
+                         for k, v in subs.items()}
+            result = safe_sympify(expr).subs(safe_subs)
             return jsonify({'result': str(result), 'latex': latex(result)})
         except Exception as e:
             return jsonify({'error': str(e)}), 400
@@ -146,7 +154,7 @@ if HAS_SYMPY:
         data = request.get_json()
         expr = data.get('expression', '')
         try:
-            parsed = sympify(expr)
+            parsed = safe_sympify(expr)
             return jsonify({
                 'parsed': str(parsed),
                 'latex': latex(parsed),

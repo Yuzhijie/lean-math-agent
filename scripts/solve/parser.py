@@ -3,13 +3,22 @@ Expression and equation parser with NL support.
 Handles Chinese and English math notation.
 """
 
+import os
 import re
+import sys
 from typing import Optional, Tuple
 from sympy import (
-    Symbol, sympify, Eq, Add, Mul, Pow, Rational,
+    Symbol, Eq, Add, Mul, Pow, Rational,
     sqrt, sin, cos, tan, log, exp, Abs, pi, E, oo
 )
 from sympy.core.expr import Expr
+
+# `sympify` is eval-based and the strings parsed here come from LLM / user
+# input, so use the hardened wrapper from scripts/safe_parse.py instead.
+_SCRIPTS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+from safe_parse import safe_sympify  # noqa: E402
 
 
 # Variable mapping (Chinese/English)
@@ -28,7 +37,7 @@ def parse_expression(expr_str: str) -> Expr:
     """Parse a mathematical expression string into SymPy expression."""
     cleaned = _preprocess(expr_str)
     try:
-        return sympify(cleaned, locals=VAR_MAP)
+        return safe_sympify(cleaned, locals=VAR_MAP)
     except Exception as e:
         raise ValueError(f"Cannot parse expression: {expr_str} ({e})")
 
@@ -45,8 +54,8 @@ def parse_equation(eq_str: str) -> Tuple[Expr, Expr]:
     for sep in ['==', '=', '等于']:
         if sep in cleaned:
             parts = cleaned.split(sep, 1)
-            lhs = sympify(parts[0].strip(), locals=VAR_MAP)
-            rhs = sympify(parts[1].strip(), locals=VAR_MAP)
+            lhs = safe_sympify(parts[0].strip(), locals=VAR_MAP)
+            rhs = safe_sympify(parts[1].strip(), locals=VAR_MAP)
             return (lhs, rhs)
 
     raise ValueError(f"No equation separator found in: {eq_str}")

@@ -5,6 +5,7 @@ import {
   type ValidateRootResponse,
   type VietaResponse,
 } from "./sympy-bridge";
+import { compileArith, type ArithEvaluator } from "./safe-arith";
 
 export interface ComputeResult {
   expression: string;
@@ -261,25 +262,28 @@ export class ComputeEngine {
     const paramName = args.parameterName ?? "m";
     const order = args.initialValues.length;
     const terms: bigint[] = args.initialValues.map((v) => BigInt(v));
-    const bigIntExpr = convertToBigIntExpr(args.recurrence);
 
-    // Build a JS function: (m, a1, a2, ..., a_order) => <formula with BigInt literals>
+    // The recurrence is LLM output derived from user text: compile it with
+    // the restricted arithmetic parser (integers, `m`, `a1..aN`, + - * /)
+    // instead of `new Function`, which allowed arbitrary code execution.
     const paramNames = [paramName, ...Array.from({ length: order }, (_, i) => `a${i + 1}`)];
-    let evalFn: (...args: bigint[]) => bigint;
+    let evalFn: ArithEvaluator;
     try {
-      evalFn = new Function(...paramNames, `return (${bigIntExpr});`) as (...args: bigint[]) => bigint;
+      evalFn = compileArith(args.recurrence, paramNames);
     } catch (e) {
       return { terms: [], allIntegers: false, error: `Invalid recurrence formula: ${e instanceof Error ? e.message : String(e)}` };
     }
 
+    let allIntegers = true;
     for (let i = order; i < args.numTerms; i++) {
       try {
-        const recentValues: bigint[] = [];
+        const vars: Record<string, bigint> = { [paramName]: BigInt(args.parameterValue) };
         for (let j = 1; j <= order; j++) {
-          recentValues.push(terms[i - j]!);
+          vars[`a${j}`] = terms[i - j]!;
         }
-        const result = evalFn(BigInt(args.parameterValue), ...recentValues);
-        terms.push(result);
+        const { value, exact } = evalFn(vars);
+        if (!exact) allIntegers = false;
+        terms.push(value);
       } catch (e) {
         return {
           terms: terms.map(String),
@@ -289,7 +293,7 @@ export class ComputeEngine {
       }
     }
 
-    return { terms: terms.map(String), allIntegers: true };
+    return { terms: terms.map(String), allIntegers };
   }
 
   /**
@@ -364,11 +368,14 @@ export function isPerfectSquareBigInt(n: bigint): { isSquare: boolean; sqrt: str
 }
 
 /**
- * Convert a math expression string to use BigInt literals so that
- * `new Function(...)` evaluates with exact integer arithmetic.
+ * Convert a math expression string to use BigInt literals.
  *
  * Replaces standalone integer tokens (e.g. `2`, `10`) with `BigInt("2")`,
  * `BigInt("10")`, etc.  Variable names and operators are left untouched.
+ *
+ * @deprecated No longer used by the engine (formulas are evaluated by the
+ * restricted parser in `safe-arith.ts`, never by `new Function`). Kept only
+ * for backward compatibility of the exported API.
  */
 export function convertToBigIntExpr(formula: string): string {
   return formula.replace(/\b(\d+)\b/g, (_match, num: string) => `BigInt("${num}")`);

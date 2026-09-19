@@ -107,7 +107,7 @@ export function SessionHistory({ open, onOpenChange, onLoadSession, refreshKey }
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const searchTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // Debounce search input (300ms)
   useEffect(() => {
@@ -190,19 +190,6 @@ export function SessionHistory({ open, onOpenChange, onLoadSession, refreshKey }
     }
   };
 
-  const handleClearAll = async () => {
-    if (!window.confirm("确定要清空所有历史记录吗？此操作不可撤销。")) return;
-    try {
-      const res = await fetch("/api/sessions", { method: "DELETE" });
-      if (res.ok) {
-        setSessions([]);
-        setTotal(0);
-      }
-    } catch {
-      // ignore
-    }
-  };
-
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="left" className="p-0 w-[340px] sm:max-w-[340px]">
@@ -212,17 +199,10 @@ export function SessionHistory({ open, onOpenChange, onLoadSession, refreshKey }
               <Clock className="h-4 w-4 text-primary" />
               历史记录
             </SheetTitle>
-            {total > 0 && !loading && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleClearAll}
-                className="text-xs text-muted-foreground hover:text-destructive gap-1 h-7"
-              >
-                <Trash2 className="h-3 w-3" />
-                清空
-              </Button>
-            )}
+            {/* The "clear all" button was removed together with the
+                unauthenticated DELETE /api/sessions endpoint: sessions are
+                not yet scoped to a user, so it wiped every user's history.
+                Individual sessions can still be deleted from the list. */}
           </div>
           <SheetDescription>
             浏览并恢复之前的求解会话{total > 0 && ` (${total} 条)`}

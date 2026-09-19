@@ -4,9 +4,26 @@
  */
 import Stripe from 'stripe';
 
-export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2024-06-20',
-});
+let _stripe: Stripe | null = null;
+
+/**
+ * Lazily construct the Stripe client.
+ *
+ * Constructing it at module load time meant that any route importing this
+ * module (checkout, webhook) crashed at import when STRIPE_SECRET_KEY was
+ * unset — even in deployments that never use payments. The SDK's pinned
+ * API version is used; do not hard-code `apiVersion` here, it drifts from
+ * the installed SDK's type on every upgrade.
+ */
+export function getStripe(): Stripe {
+  if (_stripe) return _stripe;
+  const key = process.env.STRIPE_SECRET_KEY;
+  if (!key) {
+    throw new Error('STRIPE_SECRET_KEY is not set; payments are disabled');
+  }
+  _stripe = new Stripe(key);
+  return _stripe;
+}
 
 export interface SubscriptionPlan {
   id: string;
@@ -97,7 +114,7 @@ export async function createCheckoutSession(
     throw new Error('Invalid plan');
   }
 
-  const session = await stripe.checkout.sessions.create({
+  const session = await getStripe().checkout.sessions.create({
     mode: 'subscription',
     payment_method_types: ['card', 'alipay'],
     customer_email: email,
@@ -121,7 +138,7 @@ export async function createCheckoutSession(
 export async function createBillingPortalSession(
   customerId: string
 ): Promise<string> {
-  const session = await stripe.billingPortal.sessions.create({
+  const session = await getStripe().billingPortal.sessions.create({
     customer: customerId,
     return_url: `${process.env.NEXTAUTH_URL}/subscription`,
   });
@@ -130,18 +147,18 @@ export async function createBillingPortalSession(
 }
 
 export async function getSubscription(subscriptionId: string) {
-  return stripe.subscriptions.retrieve(subscriptionId);
+  return getStripe().subscriptions.retrieve(subscriptionId);
 }
 
 export async function cancelSubscription(subscriptionId: string) {
-  return stripe.subscriptions.cancel(subscriptionId);
+  return getStripe().subscriptions.cancel(subscriptionId);
 }
 
 export async function handleWebhook(
   payload: string | Buffer,
   signature: string
 ): Promise<{ type: string; data: any }> {
-  const event = stripe.webhooks.constructEvent(
+  const event = getStripe().webhooks.constructEvent(
     payload,
     signature,
     process.env.STRIPE_WEBHOOK_SECRET!
