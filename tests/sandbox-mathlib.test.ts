@@ -1,11 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { checkLeanAvailable, verifyLeanSource } from "@/lib/lean/sandbox";
+import { verifyLeanSource } from "@/lib/lean/sandbox";
 import { assembleLeanSource } from "@/lib/lean/assemble";
+import { leanStatus } from "./helpers/lean-env";
 
-const lean = await checkLeanAvailable();
-const describeMathlib = lean.ok ? describe : describe.skip;
-/** Mathlib builds can exceed Vitest's default 5s; align with sandbox timeout. */
-const LEAN_TEST_TIMEOUT = Number(process.env.LEAN_BUILD_TIMEOUT_MS ?? 120_000);
+// Needs a built Mathlib in the sandbox (skipped elsewhere, e.g. CI).
+const lean = await leanStatus();
+const describeMathlib = lean.canVerify && lean.mathlib ? describe : describe.skip;
+/** The first `import Mathlib` in a REPL worker can take a minute or more. */
+const LEAN_TEST_TIMEOUT =
+  Number(process.env.LEAN_SERVER_STARTUP_MS ?? 180_000) +
+  Number(process.env.LEAN_BUILD_TIMEOUT_MS ?? 120_000);
 
 describeMathlib("Mathlib integration", { timeout: LEAN_TEST_TIMEOUT }, () => {
   it("compiles a simple proof with Mathlib import", async () => {

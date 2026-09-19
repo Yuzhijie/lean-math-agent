@@ -1,49 +1,137 @@
+/**
+ * Lean verification entry point.
+ *
+ *   verifyLeanSource(sessionId, source, opts) → LeanVerifyResult
+ *
+ * Pipeline:
+ *   1. sanitize   — reject sources with code-executing / kernel-bypassing
+ *                   commands (`#eval`, `elab`, `unsafe`, `axiom`, …)
+ *   2. sorry gate — when a complete proof is required, reject `sorry` /
+ *                   `admit` textually (comments and strings ignored)
+ *   3. cache      — LRU on (source, options)
+ *   4. REPL       — header env reuse, structured messages + sorry goals,
+ *                   `#print axioms` and `#check` appended for the target
+ *                   declaration; falls back to `lake env lean <file>`
+ *   5. verdict    — ok ⇔ no errors ∧ (allowSorry ∨ (no sorries ∧ only the
+ *                   standard axioms)) ∧ (no expectedSignature ∨ match)
+ *
+ * The `log` string keeps the old `<file>:<line>:<col>: <severity>: <msg>`
+ * format consumed by `parse-log.ts`; everything else is structured.
+ */
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { BuildStatus } from "../types";
 import { parseLeanLog } from "./parse-log";
-import { getLeanServer } from "./server";
+import { getReplPool, ReplError, replLauncherFromEnv, type ReplCommandResponse } from "./repl";
+import { sanitizeLeanSource, splitHeader, stripCommentsAndStrings } from "./sanitize";
+import {
+  classifyAxioms,
+  normalizeSignature,
+  parseAxiomsMessage,
+  parseCheckMessage,
+  type AxiomReport,
+} from "./axioms";
 
-const DEFAULT_TIMEOUT = Number(process.env.LEAN_BUILD_TIMEOUT_MS ?? 120_000);
-/** Max concurrent `lake` / lean processes (in-process queue). */
+/** Max concurrent `lake env lean` processes in spawn mode. */
 const LAKE_CONCURRENCY = Math.max(
   1,
-  Math.min(2, Number(process.env.LEAN_LAKE_CONCURRENCY ?? 1)),
+  Math.min(4, Number(process.env.LEAN_LAKE_CONCURRENCY ?? 1)),
 );
+const VERIFY_LOG_FILE = "Verify.lean";
 
-// ── Verification Result Cache ──────────────────────────────────────────
-//
-// LRU cache for Lean verification results keyed by SHA-256(source + allowSorry).
-// Avoids redundant `lake env lean` / server calls during repair loops.
+// Read per call so tests (and a running server whose .env changed) see the
+// current values.
+const spawnTimeoutMs = () => Number(process.env.LEAN_BUILD_TIMEOUT_MS ?? 120_000);
+const serverMode = () => process.env.LEAN_SERVER_MODE ?? "server";
+const allowNativeDecide = () => process.env.LEAN_ALLOW_NATIVE_DECIDE === "true";
 
-const VERIFY_CACHE_MAX = 256;
+// ── Public types ──────────────────────────────────────────────────────
 
-interface VerifyResult {
-  ok: boolean;
-  log: string;
-  status: BuildStatus;
+export interface LeanDiagnostic {
+  severity: "error" | "warning" | "info";
+  /** 1-based line in the full source file (imports included). */
+  line: number;
+  column: number;
+  endLine?: number;
+  endColumn?: number;
+  message: string;
 }
 
-const verificationCache = new Map<string, VerifyResult>();
+export interface LeanSorryInfo {
+  line: number;
+  column: number;
+  /** Pretty-printed goal at the sorry (empty in spawn mode). */
+  goal: string;
+}
 
-function buildVerifyCacheKey(source: string, allowSorry: boolean): string {
+export interface LeanVerifyResult {
+  ok: boolean;
+  /** Text log in `Verify.lean:L:C: severity: message` form (or "ok"). */
+  log: string;
+  status: BuildStatus;
+  backend: "repl" | "spawn" | "none";
+  messages: LeanDiagnostic[];
+  sorries: LeanSorryInfo[];
+  /** Goals at each sorry, in source order (empty strings in spawn mode). */
+  goals: string[];
+  /** Axiom report for `theoremName`, when it was checked. */
+  axioms?: AxiomReport;
+  /** Pretty-printed type of `theoremName` (`#check @name`), when requested. */
+  signature?: string;
+  /** Whether `signature` equals `expectedSignature`, when both are known. */
+  signatureMatch?: boolean;
+  /** Set when the source was rejected before Lean ran. */
+  rejected?: string;
+  durationMs: number;
+}
+
+export type VerifyLeanOpts = {
+  /**
+   * When true, allow `sorry` in source (prove-step repair prefixes).
+   * Final `/api/verify` must leave this false/undefined.
+   */
+  allowSorry?: boolean;
+  /** Target declaration; enables the axiom check and `#check` signature. */
+  theoremName?: string;
+  /** Check axioms of `theoremName` (default: when theoremName is given). */
+  checkAxioms?: boolean;
+  /** Return the `#check @theoremName` signature (default: when theoremName is given). */
+  wantSignature?: boolean;
+  /** Fail unless the signature equals this (normalised) string. */
+  expectedSignature?: string;
+};
+
+// ── Verification result cache ─────────────────────────────────────────
+
+const VERIFY_CACHE_MAX = 256;
+const verificationCache = new Map<string, LeanVerifyResult>();
+
+function buildVerifyCacheKey(source: string, opts: VerifyLeanOpts): string {
   return createHash("sha256")
-    .update(JSON.stringify({ source, allowSorry }))
+    .update(
+      JSON.stringify({
+        source,
+        allowSorry: !!opts.allowSorry,
+        theoremName: opts.theoremName ?? null,
+        checkAxioms: opts.checkAxioms ?? null,
+        wantSignature: opts.wantSignature ?? null,
+        expectedSignature: opts.expectedSignature ?? null,
+      }),
+    )
     .digest("hex");
 }
 
-function cacheGet(key: string): VerifyResult | undefined {
+function cacheGet(key: string): LeanVerifyResult | undefined {
   const v = verificationCache.get(key);
   if (v === undefined) return undefined;
-  // LRU: move to most-recent position
   verificationCache.delete(key);
   verificationCache.set(key, v);
   return v;
 }
 
-function cacheSet(key: string, value: VerifyResult): void {
+function cacheSet(key: string, value: LeanVerifyResult): void {
   if (verificationCache.has(key)) {
     verificationCache.delete(key);
   } else if (verificationCache.size >= VERIFY_CACHE_MAX) {
@@ -63,7 +151,7 @@ export function verificationCacheSize(): number {
   return verificationCache.size;
 }
 
-const SORRY_RE = /\bsorry\b/;
+// ── Availability (cached) ─────────────────────────────────────────────
 
 let lakeActive = 0;
 const lakeWaiters: Array<() => void> = [];
@@ -86,120 +174,298 @@ export function sandboxRoot(): string {
   return path.resolve(process.env.LEAN_SANDBOX_PATH ?? "lean-sandbox");
 }
 
+const AVAILABILITY_TTL_MS = 60_000;
+let availability: { at: number; result: { ok: true } | { ok: false; message: string } } | null = null;
+
 export async function checkLeanAvailable(): Promise<
   { ok: true } | { ok: false; message: string }
 > {
+  if (availability && Date.now() - availability.at < AVAILABILITY_TTL_MS) {
+    return availability.result;
+  }
+  let result: { ok: true } | { ok: false; message: string };
+  if (replLauncherFromEnv()) {
+    // A custom REPL launcher was configured: Lean lives wherever that
+    // command points, so `lake` need not be on PATH.
+    result = { ok: true };
+    availability = { at: Date.now(), result };
+    return result;
+  }
   try {
-    await withLakeSlot(() =>
-      runCmd("lake", ["--version"], sandboxRoot(), 10_000),
-    );
-    return { ok: true };
-  } catch (e) {
-    return {
+    await withLakeSlot(() => runCmd("lake", ["--version"], sandboxRoot(), 10_000));
+    result = { ok: true };
+  } catch {
+    result = {
       ok: false,
       message:
         "未检测到可用的 lake/Lean。请安装 elan（https://lean-lang.org/install/），确保 `lake --version` 可用，并检查 LEAN_SANDBOX_PATH。",
     };
   }
+  availability = { at: Date.now(), result };
+  return result;
 }
 
-export type VerifyLeanOpts = {
-  /**
-   * When true, allow `sorry` in source (prove-step repair prefixes).
-   * Final `/api/verify` must leave this false/undefined.
-   */
-  allowSorry?: boolean;
-};
+/** Forget the cached availability result (for testing). */
+export function resetLeanAvailability(): void {
+  availability = null;
+}
+
+// ── Main entry point ──────────────────────────────────────────────────
+
+const SORRY_TOKEN_RE = /\b(sorry|admit|sorryAx)\b/;
 
 export async function verifyLeanSource(
   sessionId: string,
   source: string,
-  opts?: VerifyLeanOpts,
-): Promise<{ ok: boolean; log: string; status: BuildStatus }> {
-  if (!opts?.allowSorry && SORRY_RE.test(source)) {
-    return {
-      ok: false,
-      log: "source contains `sorry`; final verify requires a complete proof",
-      status: "fail",
-    };
+  opts: VerifyLeanOpts = {},
+): Promise<LeanVerifyResult> {
+  const started = Date.now();
+  const base = (partial: Partial<LeanVerifyResult>): LeanVerifyResult => ({
+    ok: false,
+    log: "",
+    status: "fail",
+    backend: "none",
+    messages: [],
+    sorries: [],
+    goals: [],
+    durationMs: Date.now() - started,
+    ...partial,
+  });
+
+  // 1. Sanitize — never let code-executing commands reach Lean.
+  const san = sanitizeLeanSource(source);
+  if (!san.ok) {
+    return base({ log: san.reason, rejected: san.reason });
   }
 
-  // ── Check verification cache ──────────────────────────────────
-  const cacheKey = buildVerifyCacheKey(source, !!opts?.allowSorry);
-  const cached = cacheGet(cacheKey);
-  if (cached) return { ...cached };
-
-  const avail = await checkLeanAvailable();
-  if (!avail.ok) {
-    return { ok: false, log: avail.message, status: "unavailable" };
-  }
-
-  let result: VerifyResult;
-
-  // ── Try server mode first (fast path) ──────────────────────────
-  const server = getLeanServer();
-  if (server) {
-    try {
-      if (!server.isRunning) {
-        await server.start();
-      }
-      const srvResult = await server.verify(sessionId, source);
-      if (srvResult.ok) {
-        result = { ok: true, log: srvResult.log || "ok", status: "ok" };
-        cacheSet(cacheKey, result);
-        return { ...result };
-      }
-      // Server said fail — check for infrastructure errors (e.g. missing
-      // Init.olean due to search-path misconfiguration). If detected, fall
-      // through to spawn which uses the standard `lean` binary and handles
-      // search paths correctly.
-      if (/IO error|could not resolve|unknown package/i.test(srvResult.log)) {
-        result = await verifyViaSpawn(sessionId, source);
-        cacheSet(cacheKey, result);
-        return { ...result };
-      }
-      result = { ok: false, log: srvResult.log, status: "fail" };
-      cacheSet(cacheKey, result);
-      return { ...result };
-    } catch {
-      // Server mode failed — fall through to spawn mode
+  // 2. Textual sorry gate for complete proofs (comments/strings ignored).
+  if (!opts.allowSorry) {
+    const { body } = splitHeader(source);
+    if (SORRY_TOKEN_RE.test(stripCommentsAndStrings(body))) {
+      const msg = "source contains `sorry`; final verify requires a complete proof";
+      return base({ log: msg, rejected: msg });
     }
   }
 
-  // ── Spawn fallback (slow path) ─────────────────────────────────
-  result = await verifyViaSpawn(sessionId, source);
+  // 3. Cache.
+  const cacheKey = buildVerifyCacheKey(source, opts);
+  const cached = cacheGet(cacheKey);
+  if (cached) return { ...cached, durationMs: 0 };
+
+  const avail = await checkLeanAvailable();
+  if (!avail.ok) {
+    return base({ log: avail.message, status: "unavailable" });
+  }
+
+  const checkAxioms = opts.checkAxioms ?? !!opts.theoremName;
+  const wantSignature = opts.wantSignature ?? (!!opts.theoremName && (opts.expectedSignature !== undefined || !opts.allowSorry));
+  const probes = buildProbes(opts.theoremName, checkAxioms, wantSignature);
+
+  // 4. REPL (fast path) then spawn fallback.
+  let raw: RawVerification | undefined;
+  if (serverMode() !== "spawn") {
+    try {
+      raw = await verifyViaRepl(source, probes);
+    } catch (e) {
+      if (e instanceof ReplError && (e.kind === "timeout" || e.kind === "lean")) {
+        // A timeout / Lean-level error is a verdict about this source, not
+        // an infrastructure failure: report it rather than re-running the
+        // same source through the slower spawn path.
+        const result = base({
+          log: `${VERIFY_LOG_FILE}:1:0: error: ${e.message}`,
+          backend: "repl",
+          messages: [{ severity: "error", line: 1, column: 0, message: e.message }],
+        });
+        cacheSet(cacheKey, result);
+        return result;
+      }
+      // unavailable / crashed / protocol → spawn fallback below
+    }
+  }
+  if (!raw) {
+    try {
+      raw = await verifyViaSpawn(sessionId, source, probes);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return base({ log: parseLeanLog(msg) || msg, status: "fail" });
+    }
+    if (looksLikeInfrastructureFailure(raw)) {
+      // `lake` exists but the sandbox is not built / a dependency is missing:
+      // that is "Lean unavailable", not a verdict about the source.
+      const detail = raw.messages.map((m) => m.message).join("\n").slice(0, 1500);
+      return base({
+        log: `Lean 沙箱不可用（请在 lean-sandbox 中运行 \`lake exe cache get && lake build && lake build repl\`）:\n${detail}`,
+        status: "unavailable",
+        backend: "spawn",
+      });
+    }
+  }
+
+  // 5. Verdict.
+  const result = deriveVerdict(raw, opts, checkAxioms, started);
   cacheSet(cacheKey, result);
-  return { ...result };
+  return result;
 }
 
-/** Original spawn-based verification (fallback when server mode is unavailable). */
+// ── Probes appended after the source (`#print axioms`, `#check`) ─────
+
+interface Probes {
+  name?: string;
+  axioms: boolean;
+  signature: boolean;
+  /** Lean text to append (empty when nothing is probed). */
+  text: string;
+}
+
+function buildProbes(name: string | undefined, axioms: boolean, signature: boolean): Probes {
+  if (!name) return { axioms: false, signature: false, text: "" };
+  const lines: string[] = [];
+  if (axioms) lines.push(`#print axioms ${name}`);
+  if (signature) lines.push(`#check @${name}`);
+  return { name, axioms, signature, text: lines.length ? "\n" + lines.join("\n") + "\n" : "" };
+}
+
+interface RawVerification {
+  backend: "repl" | "spawn";
+  messages: LeanDiagnostic[];
+  sorries: LeanSorryInfo[];
+  /** Info lines (with positions stripped) — axioms / check output live here. */
+  infos: string[];
+  /** True when Lean reported "declaration uses sorry" (spawn mode only needs this). */
+  sorryWarning: boolean;
+}
+
+// ── REPL path ─────────────────────────────────────────────────────────
+
+async function verifyViaRepl(source: string, probes: Probes): Promise<RawVerification> {
+  const { imports, body, headerLines } = splitHeader(source);
+  const pool = getReplPool(sandboxRoot());
+  const resp: ReplCommandResponse = await pool.withWorker(async (worker) => {
+    const env = await worker.headerEnv(imports);
+    return worker.command({ cmd: body + probes.text, env }, pool.config.commandTimeoutMs);
+  });
+
+  const messages: LeanDiagnostic[] = [];
+  const infos: string[] = [];
+  let sorryWarning = false;
+  for (const m of resp.messages) {
+    if (m.severity === "info") {
+      infos.push(m.data);
+      continue;
+    }
+    if (/declaration uses [`']sorry[`']/.test(m.data)) sorryWarning = true;
+    messages.push({
+      severity: m.severity,
+      line: m.pos.line + headerLines,
+      column: m.pos.column,
+      endLine: m.endPos ? m.endPos.line + headerLines : undefined,
+      endColumn: m.endPos?.column,
+      message: m.data,
+    });
+  }
+  const sorries: LeanSorryInfo[] = resp.sorries.map((s) => ({
+    line: (s.pos?.line ?? 0) + headerLines,
+    column: s.pos?.column ?? 0,
+    goal: s.goal,
+  }));
+  return { backend: "repl", messages, sorries, infos, sorryWarning };
+}
+
+// ── Spawn fallback (`lake env lean <file>`) ───────────────────────────
+
+const CLI_MESSAGE_RE = /^(.*?\.lean):(\d+):(\d+): (error|warning|info): ?(.*)$/;
+
 async function verifyViaSpawn(
   sessionId: string,
   source: string,
-): Promise<{ ok: boolean; log: string; status: BuildStatus }> {
+  probes: Probes,
+): Promise<RawVerification> {
   const root = sandboxRoot();
   const scratchDir = path.join(root, "Scratch");
   await fs.mkdir(scratchDir, { recursive: true });
-  const safeId = path.basename(sessionId.replace(/\\/g, "/"));
-  const filePath = path.join(scratchDir, `Session_${safeId}.lean`);
-  await fs.writeFile(filePath, source, "utf8");
+  // Unique file per verification: concurrent calls (and a fixed session id
+  // such as the autoformalizer's) must never overwrite each other.
+  const safeId = path.basename(sessionId.replace(/\\/g, "/")).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 40);
+  const filePath = path.join(scratchDir, `Verify_${safeId}_${randomUUID().slice(0, 8)}.lean`);
+  await fs.writeFile(filePath, source + probes.text, "utf8");
+  let output: string;
+  let exitError: string | undefined;
   try {
-    const log = await withLakeSlot(() =>
-      runCmd("lake", ["env", "lean", filePath], root, DEFAULT_TIMEOUT),
-    );
-    return { ok: true, log: parseLeanLog(log) || "ok", status: "ok" };
+    output = await withLakeSlot(() => runCmd("lake", ["env", "lean", filePath], root, spawnTimeoutMs()));
   } catch (e) {
-    const log = e instanceof Error ? e.message : String(e);
-    return { ok: false, log: parseLeanLog(log), status: "fail" };
+    // Non-zero exit: the output is in the error message.
+    exitError = e instanceof Error ? e.message : String(e);
+    output = exitError;
+  } finally {
+    await fs.unlink(filePath).catch(() => undefined);
   }
+
+  const messages: LeanDiagnostic[] = [];
+  const sorries: LeanSorryInfo[] = [];
+  const infos: string[] = [];
+  let sorryWarning = false;
+  let current: LeanDiagnostic | null = null;
+  let lastInfo = -1;
+  const lines = output.split(/\r?\n/);
+  for (const line of lines) {
+    const m = line.match(CLI_MESSAGE_RE);
+    if (m) {
+      const severity = m[4] as LeanDiagnostic["severity"];
+      current = {
+        severity,
+        line: parseInt(m[2], 10),
+        column: parseInt(m[3], 10),
+        message: m[5],
+      };
+      if (severity === "info") {
+        lastInfo = infos.push(m[5]) - 1;
+        current = null;
+      } else {
+        if (/declaration uses [`']sorry[`']/.test(m[5])) {
+          sorryWarning = true;
+          sorries.push({ line: current.line, column: current.column, goal: "" });
+        }
+        messages.push(current);
+        lastInfo = -1;
+      }
+      continue;
+    }
+    if (line.trim() === "" || line.startsWith("timeout after")) continue;
+    if (current) {
+      // continuation (e.g. goals under "unsolved goals")
+      current.message += "\n" + line;
+      continue;
+    }
+    if (/^\s/.test(line) && lastInfo >= 0) {
+      // continuation of a wrapped `#check` / `#print axioms` line
+      infos[lastInfo] += "\n" + line;
+      continue;
+    }
+    // Plain info output (`#print axioms`, `#check` print without a position)
+    lastInfo = infos.push(line.trim()) - 1;
+  }
+  if (exitError?.startsWith("timeout after")) {
+    messages.push({ severity: "error", line: 1, column: 0, message: exitError.split("\n")[0] });
+  } else if (exitError && messages.every((d) => d.severity !== "error")) {
+    // lean exited non-zero without a parsable error line (e.g. crash)
+    messages.push({ severity: "error", line: 1, column: 0, message: exitError.slice(0, 2000) });
+  }
+  return { backend: "spawn", messages, sorries, infos, sorryWarning };
 }
 
-function runCmd(
-  cmd: string,
-  args: string[],
-  cwd: string,
-  timeoutMs: number,
-): Promise<string> {
+/**
+ * True when the spawn output has no Lean diagnostic with a real position but
+ * mentions lake/toolchain problems — i.e. the environment, not the source,
+ * is broken.
+ */
+function looksLikeInfrastructureFailure(raw: RawVerification): boolean {
+  const positioned = raw.messages.some((m) => !(m.line === 1 && m.column === 0));
+  if (positioned) return false;
+  const text = [...raw.messages.map((m) => m.message), ...raw.infos].join("\n");
+  return /\b(lake|manifest|toolchain|elan|no such file|not found|unknown package|could not resolve|missing dependency|dependency)\b/i.test(text);
+}
+
+function runCmd(cmd: string, args: string[], cwd: string, timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { cwd, env: process.env });
     let out = "";
@@ -219,4 +485,104 @@ function runCmd(
       else reject(new Error(out || `exit ${code}`));
     });
   });
+}
+
+// ── Verdict ───────────────────────────────────────────────────────────
+
+function deriveVerdict(
+  raw: RawVerification,
+  opts: VerifyLeanOpts,
+  checkAxioms: boolean,
+  started: number,
+): LeanVerifyResult {
+  const messages = [...raw.messages];
+  const errors = messages.filter((m) => m.severity === "error");
+  let ok = errors.length === 0;
+
+  // Axioms / signature from the probe output.
+  let axioms: AxiomReport | undefined;
+  let signature: string | undefined;
+  if (opts.theoremName) {
+    for (const info of raw.infos) {
+      const ax = parseAxiomsMessage(info, opts.theoremName);
+      if (ax !== undefined && axioms === undefined) {
+        axioms = classifyAxioms(ax, { allowNative: allowNativeDecide() });
+        continue;
+      }
+      const sig = parseCheckMessage(info, opts.theoremName);
+      if (sig !== undefined && signature === undefined) signature = sig;
+    }
+  }
+
+  const sorryPresent = raw.sorries.length > 0 || raw.sorryWarning || axioms?.usesSorry === true;
+  if (!opts.allowSorry && sorryPresent) {
+    ok = false;
+    if (errors.length === 0) {
+      messages.push({
+        severity: "error",
+        line: raw.sorries[0]?.line ?? 1,
+        column: raw.sorries[0]?.column ?? 0,
+        message: "proof is incomplete: it still depends on `sorry`/`admit` (sorryAx)",
+      });
+    }
+  }
+
+  if (checkAxioms && opts.theoremName && ok) {
+    if (!axioms) {
+      ok = false;
+      messages.push({
+        severity: "error",
+        line: 1,
+        column: 0,
+        message: `could not determine the axioms of '${opts.theoremName}' (declaration missing or renamed?)`,
+      });
+    } else if (axioms.disallowed.length > 0) {
+      ok = false;
+      messages.push({
+        severity: "error",
+        line: 1,
+        column: 0,
+        message: `'${opts.theoremName}' depends on disallowed axioms: [${axioms.disallowed.join(", ")}]` +
+          (axioms.usesNative ? " (native_decide trusts the compiler, not the kernel)" : ""),
+      });
+    }
+  }
+
+  let signatureMatch: boolean | undefined;
+  if (opts.expectedSignature !== undefined && opts.theoremName) {
+    const expected = normalizeSignature(opts.expectedSignature);
+    signatureMatch = signature !== undefined && signature === expected;
+    if (!signatureMatch) {
+      ok = false;
+      messages.push({
+        severity: "error",
+        line: 1,
+        column: 0,
+        message: signature === undefined
+          ? `could not read the statement of '${opts.theoremName}' to compare with the validated one`
+          : `statement of '${opts.theoremName}' differs from the validated formalization:\n  proved:    ${signature}\n  validated: ${expected}`,
+      });
+    }
+  }
+
+  const log = formatLog(messages) || (ok ? "ok" : "verification failed (no messages)");
+  return {
+    ok,
+    log,
+    status: ok ? "ok" : "fail",
+    backend: raw.backend,
+    messages,
+    sorries: raw.sorries,
+    goals: raw.sorries.map((s) => s.goal),
+    axioms,
+    signature,
+    signatureMatch,
+    durationMs: Date.now() - started,
+  };
+}
+
+function formatLog(messages: LeanDiagnostic[]): string {
+  return messages
+    .map((m) => `${VERIFY_LOG_FILE}:${m.line}:${m.column}: ${m.severity}: ${m.message}`)
+    .join("\n");
 }

@@ -7,6 +7,7 @@ import { sorryReport } from "@/lib/lean/sorry-gate";
 import { assembleLeanSource } from "@/lib/lean/assemble";
 import { verifyLeanSource } from "@/lib/lean/sandbox";
 import { tryTrivialProof } from "@/lib/lean/trivial-proof";
+import { validateTheoremStatement } from "@/lib/lean/sanitize";
 import {
   createSession,
   updateSession,
@@ -520,6 +521,9 @@ async function handleTheoremProblem(
   let theoremName = "problem";
   let theoremType = "";
   let resolvedDomain = domain;
+  // Statement lock: the `#check` signature of the validated formalization.
+  // Every complete-proof verification below must reproduce it.
+  let frozenSignature: string | undefined;
 
   if (!opts.skip_autoformalize) {
     updateSession(session.id, { pipeline_stage: "autoformalizing" });
@@ -534,6 +538,7 @@ async function handleTheoremProblem(
       theorem_type: formalResult.theorem_type,
       math_domain: formalResult.domain,
       formal_statement: formalResult.formal_statement,
+      formal_signature: formalResult.formal_signature,
       formal_validated: formalResult.accepted,
       validation_results: formalResult.validation_results,
     });
@@ -541,6 +546,7 @@ async function handleTheoremProblem(
     theoremName = formalResult.theorem_name;
     theoremType = formalResult.theorem_type;
     resolvedDomain = formalResult.domain;
+    frozenSignature = formalResult.accepted ? formalResult.formal_signature : undefined;
 
     if (!formalResult.accepted) {
       const failedLayers = formalResult.validation_results.filter((v) => !v.pass);
@@ -579,6 +585,7 @@ async function handleTheoremProblem(
         { status: 400 },
       );
     }
+    frozenSignature = session.formal_validated ? session.formal_signature : undefined;
   }
 
   // ── Pre-check: try trivial one-liner proofs (rfl, simp, etc.) ──
@@ -589,6 +596,7 @@ async function handleTheoremProblem(
       theoremName,
       theoremType,
       useMathlib,
+      { expectedSignature: frozenSignature },
     );
     if (trivialResult) {
       events.push({
@@ -601,6 +609,9 @@ async function handleTheoremProblem(
         success: true,
         formal_statement: trivialResult.source,
         proof_code: trivialResult.source,
+        axioms: trivialResult.verification.axioms?.axioms,
+        statement_locked: frozenSignature !== undefined && trivialResult.verification.signatureMatch === true,
+        verifier: trivialResult.verification.backend,
       };
 
       updateSession(session.id, {
@@ -685,19 +696,26 @@ async function handleTheoremProblem(
     status: "pending",
   }));
 
+  // Statement lock: when autoformalization was accepted, the planner only
+  // produces steps — it may NOT change the theorem being proved. Without a
+  // validated statement, the planner's declaration is used if well-formed.
+  const validatedTheoremName = theoremName;
+  const validatedTheoremType = theoremType;
+  if (frozenSignature === undefined && plan.theorem_type) {
+    const candidateName = plan.theorem_name || theoremName;
+    const candidateType = normalizeTheoremType(plan.theorem_type);
+    if (validateTheoremStatement(candidateName, candidateType).ok) {
+      theoremName = candidateName;
+      theoremType = candidateType;
+    }
+  }
+
   updateSession(session.id, {
-    theorem_name: plan.theorem_name || theoremName,
-    theorem_type: normalizeTheoremType(plan.theorem_type || theoremType),
+    theorem_name: theoremName,
+    theorem_type: theoremType,
     selected_method_id: method.id,
     steps: proofSteps,
   });
-
-  // Save autoformalize-validated theorem declaration before plan overrides
-  const validatedTheoremName = theoremName;
-  const validatedTheoremType = theoremType;
-
-  theoremName = plan.theorem_name || theoremName;
-  theoremType = normalizeTheoremType(plan.theorem_type || theoremType);
 
   events.push({
     stage: "planning",
@@ -777,6 +795,8 @@ async function handleTheoremProblem(
     theoremType,
     config: { maxSorry: adaptiveMaxSorry, useMathlib },
     domain: resolvedDomain,
+    // Goal state at the start of the proof (from the preflight `sorry`).
+    initialGoal: preflight.goals?.[0],
     onProgress: (progress) => {
       events.push({
         stage: "solving",
@@ -798,7 +818,12 @@ async function handleTheoremProblem(
     useMathlib,
   });
 
-  const finalResult = await verifyLeanSource(session.id, finalSource);
+  // Complete-proof verification: no sorry, standard axioms only, and the
+  // proved statement must match the validated one.
+  const finalResult = await verifyLeanSource(session.id, finalSource, {
+    theoremName,
+    expectedSignature: frozenSignature,
+  });
   const report = sorryReport(searchResult.sorryLabels);
 
   // Build lean_proof_attempt from the theorem pipeline results
@@ -813,6 +838,9 @@ async function handleTheoremProblem(
     limitations: searchResult.sorryLabels.map(
       (s) => `步骤 ${s.step_index + 1}: ${s.reason}`,
     ),
+    axioms: finalResult.axioms?.axioms,
+    statement_locked: frozenSignature !== undefined && finalResult.signatureMatch === true,
+    verifier: finalResult.backend,
   };
 
   // Update NL solution with proof context if available

@@ -30,7 +30,10 @@ export async function POST(req: Request) {
   if (!method) {
     return NextResponse.json({ error: "method not found" }, { status: 400 });
   }
-  const theoremType = body.theorem_type ?? session.theorem_type;
+  // Statement lock: with a validated formalization the client may not
+  // substitute another theorem statement.
+  const frozen = session.formal_validated && !!session.formal_signature;
+  const theoremType = frozen ? session.theorem_type : (body.theorem_type ?? session.theorem_type);
   if (!theoremType) {
     return NextResponse.json(
       { error: "theorem_type required (body or session)" },

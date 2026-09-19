@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { planSteps } from "@/lib/llm/plan";
+import { normalizeTheoremType } from "@/lib/llm/autoformalize";
+import { validateTheoremStatement } from "@/lib/lean/sanitize";
 import { LlmError } from "@/lib/llm/client";
 import {
   getSessionAsync,
@@ -54,10 +56,24 @@ export async function POST(req: Request) {
       },
     }).catch(() => null);
 
+    // Statement lock: a validated formalization is never overwritten by the
+    // planner; otherwise accept the planner's declaration only if well-formed.
+    const frozen = session.formal_validated && !!session.formal_signature;
+    let theoremName = session.theorem_name;
+    let theoremType = session.theorem_type;
+    if (!frozen) {
+      const candidateName = plan.theorem_name || theoremName || "problem";
+      const candidateType = normalizeTheoremType(plan.theorem_type || theoremType || "");
+      if (validateTheoremStatement(candidateName, candidateType).ok) {
+        theoremName = candidateName;
+        theoremType = candidateType;
+      }
+    }
+
     const updated = updateSession(session.id, {
       steps,
-      theorem_name: plan.theorem_name,
-      theorem_type: plan.theorem_type,
+      theorem_name: theoremName,
+      theorem_type: theoremType,
       assembled_lean: "",
       build_status: "idle",
       nl_solution: nlSolution ?? undefined,

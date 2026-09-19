@@ -10,8 +10,31 @@ vi.mock("@/lib/lean/sandbox", () => ({
 }));
 
 import { chatJson } from "@/lib/llm/client";
-import { verifyLeanSource } from "@/lib/lean/sandbox";
+import { verifyLeanSource, type LeanVerifyResult } from "@/lib/lean/sandbox";
 import { proveStepWithRepair } from "@/lib/llm/prove-step";
+
+/** Build a verifier result with sensible defaults for the fields tests don't care about. */
+function verifyResult(partial: Partial<LeanVerifyResult>): LeanVerifyResult {
+  return {
+    ok: false,
+    log: "",
+    status: "fail",
+    backend: "repl",
+    messages: [],
+    sorries: [],
+    goals: [],
+    durationMs: 1,
+    ...partial,
+  };
+}
+
+/** Result of the prefix (goal-state) verification that precedes every attempt. */
+const PREFIX_OK = verifyResult({
+  ok: true,
+  log: "ok",
+  status: "ok",
+  goals: ["n : Nat\n⊢ n + 0 = n"],
+});
 
 const method: MethodOption = {
   id: "m1",
@@ -70,16 +93,9 @@ describe("proveStepWithRepair", () => {
 
     const verifyMock = vi.mocked(verifyLeanSource);
     verifyMock
-      .mockResolvedValueOnce({
-        ok: false,
-        log: "type mismatch",
-        status: "fail",
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        log: "ok",
-        status: "ok",
-      });
+      .mockResolvedValueOnce(PREFIX_OK) // goal-state probe before the loop
+      .mockResolvedValueOnce(verifyResult({ ok: false, log: "type mismatch", status: "fail" }))
+      .mockResolvedValueOnce(verifyResult({ ok: true, log: "ok", status: "ok" }));
 
     const result = await proveStepWithRepair({
       session,
@@ -89,10 +105,15 @@ describe("proveStepWithRepair", () => {
     });
 
     expect(chatMock).toHaveBeenCalledTimes(2);
-    expect(verifyMock).toHaveBeenCalledTimes(2);
+    expect(verifyMock).toHaveBeenCalledTimes(3);
     expect(result.step.status).toBe("ok");
     expect(result.step.lean_code).toBe("rfl");
     expect(result.buildStatus).toBe("idle");
+
+    // The Lean goal state from the prefix probe is handed to the prover.
+    const firstPrompt = chatMock.mock.calls[0][0] as { user: string };
+    expect(firstPrompt.user).toContain("Current Lean goal state");
+    expect(firstPrompt.user).toContain("⊢ n + 0 = n");
   });
 
   it("short-circuits on Lean unavailable without further LLM calls", async () => {
@@ -103,11 +124,8 @@ describe("proveStepWithRepair", () => {
     });
 
     const verifyMock = vi.mocked(verifyLeanSource);
-    verifyMock.mockResolvedValueOnce({
-      ok: false,
-      log: "lake missing",
-      status: "unavailable",
-    });
+    const unavailable = verifyResult({ ok: false, log: "lake missing", status: "unavailable", backend: "none" });
+    verifyMock.mockResolvedValueOnce(unavailable).mockResolvedValueOnce(unavailable);
 
     const result = await proveStepWithRepair({
       session,
@@ -117,7 +135,7 @@ describe("proveStepWithRepair", () => {
     });
 
     expect(chatMock).toHaveBeenCalledTimes(1);
-    expect(verifyMock).toHaveBeenCalledTimes(1);
+    expect(verifyMock).toHaveBeenCalledTimes(2);
     expect(result.step.status).toBe("pending");
     expect(result.buildStatus).toBe("unavailable");
     expect(result.step.build_log).toContain("lake missing");
@@ -150,11 +168,9 @@ describe("proveStepWithRepair", () => {
       plain_explanation: "intro n",
       lean_code: "intro n",
     });
-    vi.mocked(verifyLeanSource).mockResolvedValueOnce({
-      ok: true,
-      log: "ok",
-      status: "ok",
-    });
+    vi.mocked(verifyLeanSource)
+      .mockResolvedValueOnce(PREFIX_OK)
+      .mockResolvedValueOnce(verifyResult({ ok: true, log: "ok", status: "ok" }));
 
     await proveStepWithRepair({
       session: multiStep,
@@ -163,8 +179,11 @@ describe("proveStepWithRepair", () => {
       theoremType: multiStep.theorem_type!,
     });
 
-    const source = vi.mocked(verifyLeanSource).mock.calls[0][1];
-    const opts = vi.mocked(verifyLeanSource).mock.calls[0][2];
+    // calls[0] is the goal-state probe (prefix + sorry), calls[1] the step.
+    const probeSource = vi.mocked(verifyLeanSource).mock.calls[0][1];
+    expect(probeSource).toMatch(/:= by\s*\n\s*sorry/);
+    const source = vi.mocked(verifyLeanSource).mock.calls[1][1];
+    const opts = vi.mocked(verifyLeanSource).mock.calls[1][2];
     expect(source).toMatch(/intro n\s*\n\s*sorry/);
     expect(opts).toEqual({ allowSorry: true });
   });

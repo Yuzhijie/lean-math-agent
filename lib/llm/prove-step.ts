@@ -19,9 +19,20 @@ export async function proveOneStep(args: {
   classifiedErrors?: ClassifiedError[];
   useMathlib?: boolean;
   domain?: MathDomain;
+  /**
+   * Pretty-printed Lean goal state the step starts from (hypotheses and
+   * `⊢ goal`), as reported by the verifier at the `sorry` that follows the
+   * previous steps. This is what a human sees in the infoview and is far
+   * more useful to the model than the planner's informal `lean_goal`.
+   */
+  goalState?: string;
 }) {
   const step = args.steps.find((s) => s.index === args.stepIndex);
   if (!step) throw new Error(`missing step ${args.stepIndex}`);
+
+  const goalContext = args.goalState
+    ? `\n\nCurrent Lean goal state at this step (from the Lean checker; the tactics you write must make progress on exactly this):\n\`\`\`\n${args.goalState}\n\`\`\``
+    : "";
 
   // Choose system prompt based on Mathlib availability
   const systemPrompt = args.useMathlib
@@ -71,7 +82,7 @@ export async function proveOneStep(args: {
       },
       null,
       2,
-    ) + repairContext + lemmaContext,
+    ) + goalContext + repairContext + lemmaContext,
     schema: proveStepResponseSchema,
     schemaName: "proveStepResponse",
   });
@@ -98,6 +109,25 @@ export async function proveStepWithRepair(args: {
   let classifiedErrors: ClassifiedError[] | undefined;
   const hasLaterSteps = steps.some((s) => s.index > args.stepIndex);
 
+  // Goal state the step starts from: verify the prefix of earlier steps with
+  // a trailing `sorry`; the verifier reports the goal at that sorry.
+  let goalState: string | undefined;
+  if (process.env.LEAN_SERVER_MODE !== "spawn") {
+    // (spawn mode cannot report goals, so skip the extra compile there)
+    const priorCodes = stepCodesUpTo(steps, args.stepIndex - 1);
+    const prefixSource = assembleLeanSource({
+      theoremName: args.session.theorem_name ?? "problem",
+      theoremType: args.theoremType,
+      stepCodes: priorCodes,
+      appendSorry: true,
+      useMathlib: args.useMathlib,
+    });
+    const prefix = await verifyLeanSource(args.session.id, prefixSource, { allowSorry: true });
+    // The trailing sorry is the last one in source order.
+    const last = prefix.goals?.[prefix.goals.length - 1];
+    if (prefix.ok && last) goalState = last;
+  }
+
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     const gen = await proveOneStep({
       problemText: args.session.problem_text,
@@ -109,6 +139,7 @@ export async function proveStepWithRepair(args: {
       classifiedErrors,
       useMathlib: args.useMathlib,
       domain: args.domain,
+      goalState,
     });
     const idx = steps.findIndex((s) => s.index === args.stepIndex);
     steps[idx] = {

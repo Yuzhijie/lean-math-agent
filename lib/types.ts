@@ -190,6 +190,12 @@ export interface ValidationResult {
   layer: number;     // 1-5
   pass: boolean;
   detail: string;
+  /**
+   * True when the check could not actually run (LLM error / Lean unavailable)
+   * and `pass` is a default rather than a verdict. Shown to the user so a
+   * "validated" statement is never mistaken for a fully checked one.
+   */
+  skipped?: boolean;
 }
 
 // ── Session ───────────────────────────────────────────────────────────
@@ -208,6 +214,13 @@ export interface Session {
   selected_method_id?: string;
   theorem_name?: string;
   theorem_type?: string;
+  /**
+   * Pretty-printed type of the validated theorem (`#check @name`), recorded
+   * when autoformalization was accepted. Final verification must reproduce
+   * exactly this signature, so later stages cannot silently prove a
+   * different statement ("statement lock").
+   */
+  formal_signature?: string;
   steps: ProofStep[];
   assembled_lean: string;
   build_status: BuildStatus;
@@ -293,6 +306,12 @@ export interface LeanProofAttempt {
   proof_code?: string;        // the Lean proof (if successful)
   failure_reason?: string;    // why it couldn't be formalized (Chinese)
   limitations?: string[];     // specific limitations encountered
+  /** Axioms the final proof depends on (from `#print axioms`). */
+  axioms?: string[];
+  /** True when the proved statement matched the validated formalization. */
+  statement_locked?: boolean;
+  /** Which backend produced the verdict. */
+  verifier?: "repl" | "spawn" | "none";
 }
 
 // ── Generated Problem ────────────────────────────────────────────────

@@ -40,6 +40,7 @@ next-env.d.ts
 # lean sandbox
 lean-sandbox/.lake/
 lean-sandbox/Scratch/Session_*.lean
+lean-sandbox/Scratch/Verify_*.lean
 
 # runtime data (sessions, caches, local SQLite DBs) — never commit
 /.data/

@@ -39,6 +39,8 @@ interface ProofState {
   sorryCount: number;
   errorCount: number;
   history: string[];         // what was tried (for deduplication)
+  /** Lean goal state facing `currentStepIndex` (from the verifier), if known. */
+  goalState?: string;
 }
 
 export interface ProofSearchResult {
@@ -78,6 +80,8 @@ export async function proofSearch(args: {
   theoremType: string;
   config?: Partial<ProofSearchConfig>;
   domain?: MathDomain;
+  /** Goal state at the start of the proof (e.g. from a preflight `sorry`). */
+  initialGoal?: string;
   onProgress?: (state: {
     step: number;
     total: number;
@@ -101,6 +105,7 @@ export async function proofSearch(args: {
     sorryCount: 0,
     errorCount: 0,
     history: [],
+    goalState: args.initialGoal,
   };
 
   // Priority queue: lower score = higher priority
@@ -177,6 +182,7 @@ export async function proofSearch(args: {
           classifiedErrors,
           useMathlib: config.useMathlib,
           domain: args.domain,
+          goalState: state.goalState,
         });
 
         // Deduplicate
@@ -227,12 +233,15 @@ export async function proofSearch(args: {
             status: "ok",
             build_log: result.log,
           };
-          // Advance to next step
+          // Advance to next step. The goal at the trailing `sorry` is the
+          // state the next step starts from.
           const nextState: ProofState = {
             ...state,
             steps: newSteps,
             currentStepIndex: stepIdx + 1,
             history: [...state.history, `step ${stepIdx}: ok`],
+            // trailing sorry = last goal in source order
+            goalState: result.goals?.[result.goals.length - 1] || undefined,
           };
           nextState.score = scoreState(nextState, totalSteps);
           queue.push(nextState);
@@ -282,6 +291,7 @@ export async function proofSearch(args: {
           steps: newSteps,
           currentStepIndex: stepIdx + 1,
           history: [...state.history, `step ${stepIdx}: trivial (${fallback.tactic})`],
+          goalState: undefined,
         };
         nextState.score = scoreState(nextState, totalSteps);
 
@@ -312,6 +322,7 @@ export async function proofSearch(args: {
         currentStepIndex: stepIdx + 1,
         sorryCount: state.sorryCount + 1,
         history: [...state.history, `step ${stepIdx}: sorry (${sorryLbl.reason})`],
+        goalState: undefined,
       };
       nextState.score = scoreState(nextState, totalSteps);
 

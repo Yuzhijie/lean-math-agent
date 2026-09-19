@@ -30,7 +30,14 @@ export async function POST(req: Request) {
       .filter(Boolean),
     useMathlib: true,
   });
-  const result = await verifyLeanSource(session.id, assembled_lean);
+  // Complete-proof verification: no sorry, standard axioms only, and — when
+  // the statement was validated by autoformalization — the same signature.
+  const theoremName = session.theorem_name ?? "problem";
+  const expectedSignature = session.formal_validated ? session.formal_signature : undefined;
+  const result = await verifyLeanSource(session.id, assembled_lean, {
+    theoremName,
+    expectedSignature,
+  });
 
   // Build lean_proof_attempt from verification results
   const sorrySteps = session.steps.filter((s) => s.status === "sorry");
@@ -45,7 +52,7 @@ export async function POST(req: Request) {
       ? sorrySteps.length > 0
         ? `Lean 编译通过，但有 ${sorrySteps.length} 个步骤使用了 sorry（未完成的证明）`
         : undefined
-      : `Lean 验证失败`,
+      : `Lean 验证失败: ${result.log.slice(0, 300)}`,
     limitations: [
       ...sorrySteps.map(
         (s) => `步骤 ${s.index + 1} (${s.plain_goal}): 使用了 sorry，需要进一步完善`,
@@ -54,6 +61,9 @@ export async function POST(req: Request) {
         (s) => `步骤 ${s.index + 1} (${s.plain_goal}): 证明失败`,
       ),
     ],
+    axioms: result.axioms?.axioms,
+    statement_locked: expectedSignature !== undefined && result.signatureMatch === true,
+    verifier: result.backend,
   };
 
   const updated = updateSession(session.id, {
@@ -69,5 +79,12 @@ export async function POST(req: Request) {
     build_status: updated.build_status,
     assembled_lean: updated.assembled_lean,
     lean_proof_attempt: leanProofAttempt,
+    verification: {
+      backend: result.backend,
+      axioms: result.axioms?.axioms ?? null,
+      disallowed_axioms: result.axioms?.disallowed ?? null,
+      statement_locked: leanProofAttempt.statement_locked,
+      signature: result.signature ?? null,
+    },
   });
 }

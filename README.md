@@ -13,11 +13,21 @@ Interactive Lean 4 math problem solver (MVP). Domain: Nat/Int equalities.
 npm install
 ```
 
-Install Lean via elan if needed, then build the sandbox:
+Install Lean via elan if needed, then build the sandbox and the REPL used for verification:
 
 ```bash
-cd lean-sandbox && lake build && cd ..
+cd lean-sandbox
+lake exe cache get      # Mathlib .olean cache (much faster than building)
+lake build              # LeanSandbox
+lake build repl         # leanprover-community/repl → .lake/packages/repl/.lake/build/bin/repl
+cd ..
 ```
+
+Verification runs through persistent REPL workers (`LEAN_SERVER_MODE=server`, the default):
+Mathlib is imported once per worker and reused, sorry goals are reported back to the
+prover, and a proof is only accepted when it has no `sorry`/`admit`, depends only on the
+standard axioms, and proves exactly the statement that autoformalization validated.
+If the REPL binary is missing the app falls back to `lake env lean <file>` per verification.
 
 Copy env template and set your LLM credentials:
 

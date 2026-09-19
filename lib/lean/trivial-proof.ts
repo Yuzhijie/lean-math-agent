@@ -1,5 +1,5 @@
 import { assembleLeanSource } from "./assemble";
-import { verifyLeanSource } from "./sandbox";
+import { verifyLeanSource, type LeanVerifyResult } from "./sandbox";
 
 /**
  * Single-tactic proofs to try for trivial theorems.
@@ -64,6 +64,15 @@ export async function tryTrivialTactic(
   return null;
 }
 
+export interface TrivialProofOptions {
+  /**
+   * Signature recorded when the statement was validated (statement lock).
+   * When given, a tactic only counts as a proof if the proved declaration
+   * has exactly this type.
+   */
+  expectedSignature?: string;
+}
+
 /**
  * Attempt to prove a theorem with a single trivial tactic.
  *
@@ -71,14 +80,19 @@ export async function tryTrivialTactic(
  * this avoids the full pipeline (planner → per-step LLM → repair loop)
  * which tends to over-decompose and produce `sorry` for trivial goals.
  *
- * Returns the winning tactic and assembled source on success, or null.
+ * Each candidate is a COMPLETE proof, so it goes through the full
+ * verification (no sorry, only standard axioms, statement lock).
+ *
+ * Returns the winning tactic, assembled source, log and verification
+ * result on success, or null.
  */
 export async function tryTrivialProof(
   sessionId: string,
   theoremName: string,
   theoremType: string,
   useMathlib: boolean,
-): Promise<{ tactic: string; source: string; log: string } | null> {
+  options: TrivialProofOptions = {},
+): Promise<{ tactic: string; source: string; log: string; verification: LeanVerifyResult } | null> {
   for (const tactic of TRIVIAL_TACTICS) {
     const source = assembleLeanSource({
       theoremName,
@@ -87,9 +101,13 @@ export async function tryTrivialProof(
       useMathlib,
     });
 
-    const result = await verifyLeanSource(sessionId, source);
+    const result = await verifyLeanSource(sessionId, source, {
+      theoremName,
+      expectedSignature: options.expectedSignature,
+    });
+    if (result.status === "unavailable") return null;
     if (result.ok) {
-      return { tactic, source, log: result.log };
+      return { tactic, source, log: result.log, verification: result };
     }
   }
   return null;

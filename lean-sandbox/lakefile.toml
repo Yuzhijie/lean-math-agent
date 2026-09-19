@@ -1,5 +1,5 @@
 name = "lean_sandbox"
-version = "0.2.0"
+version = "0.3.0"
 defaultTargets = ["LeanSandbox"]
 
 [[require]]
@@ -7,9 +7,15 @@ name = "mathlib"
 git = "https://github.com/leanprover-community/mathlib4"
 rev = "v4.33.1"
 
+# Lean REPL (https://github.com/leanprover-community/repl): the verification
+# backend used by lib/lean/repl.ts. Tagged per Lean release; v4.33.0 is the
+# latest tag compatible with the v4.33.1 toolchain. Build it with
+#   lake build repl
+# and the binary lands in .lake/packages/repl/.lake/build/bin/repl.
+[[require]]
+name = "repl"
+git = "https://github.com/leanprover-community/repl"
+rev = "v4.33.0"
+
 [[lean_lib]]
 name = "LeanSandbox"
-
-[[lean_exe]]
-name = "lean-server"
-root = "LeanServer"

@@ -3,7 +3,8 @@ import { formalizeResponseSchema, backTranslationSchema } from "../schemas";
 import { chatJson, chatText, LlmError } from "./client";
 import { FORMALIZER_SYSTEM, BACK_TRANSLATE_SYSTEM, EQUIVALENCE_CHECK_SYSTEM } from "./agent-prompt";
 import { verifyLeanSource } from "../lean/sandbox";
-import { assembleLeanSource } from "../lean/assemble";
+import { validateTheoremStatement } from "../lean/sanitize";
+import { z } from "zod";
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -12,6 +13,8 @@ export interface AutoformalizeResult {
   theorem_type: string;
   domain: MathDomain;
   formal_statement: string; // full `theorem ... := by sorry` source
+  /** `#check @name` of the validated statement (statement lock); undefined if Lean was unavailable. */
+  formal_signature?: string;
   validation_results: ValidationResult[];
   accepted: boolean;
 }
@@ -89,24 +92,26 @@ export async function autoformalize(args: {
     const results: ValidationResult[] = [];
 
     // Layer 1: Elaborability — can Lean compile this with sorry?
-    let l1 = await layerElaborability(formalStatement);
-    results.push(l1);
-    if (!l1.pass) {
+    // Also records the pretty-printed signature (`#check @name`) that the
+    // final verification must reproduce (statement lock).
+    let l1 = await layerElaborability(formal.theorem_name, formal.theorem_type);
+    results.push(l1.result);
+    if (!l1.result.pass) {
       // ── Targeted repair: feed Lean error back to LLM to fix just the type ──
       const repaired = await repairTheoremType(
         args.problemText,
         formal,
-        l1.detail,
+        l1.result.detail,
       );
       if (repaired) {
         formal.theorem_name = repaired.theorem_name;
         formal.theorem_type = repaired.theorem_type;
         formalStatement = `theorem ${formal.theorem_name} ${formal.theorem_type} := by sorry`;
         // Re-check elaborability with repaired type
-        l1 = await layerElaborability(formalStatement);
-        results[0] = l1;
+        l1 = await layerElaborability(formal.theorem_name, formal.theorem_type);
+        results[0] = l1.result;
       }
-      if (!l1.pass) {
+      if (!l1.result.pass) {
         lastResult = {
           theorem_name: formal.theorem_name,
           theorem_type: formal.theorem_type,
@@ -118,6 +123,7 @@ export async function autoformalize(args: {
         continue;
       }
     }
+    const formalSignature = l1.signature;
 
     // Layer 2: Non-triviality — is it a tautology or vacuous?
     const l2 = await layerNonTriviality(formal);
@@ -128,6 +134,7 @@ export async function autoformalize(args: {
         theorem_type: formal.theorem_type,
         domain: formal.domain,
         formal_statement: formalStatement,
+        formal_signature: formalSignature,
         validation_results: results,
         accepted: false,
       };
@@ -147,6 +154,7 @@ export async function autoformalize(args: {
         theorem_type: formal.theorem_type,
         domain: formal.domain,
         formal_statement: formalStatement,
+        formal_signature: formalSignature,
         validation_results: results,
         accepted: false,
       };
@@ -167,6 +175,7 @@ export async function autoformalize(args: {
       theorem_type: formal.theorem_type,
       domain: formal.domain,
       formal_statement: formalStatement,
+      formal_signature: formalSignature,
       validation_results: results,
       accepted,
     };
@@ -182,32 +191,48 @@ export async function autoformalize(args: {
 // ── Layer 1: Elaborability ────────────────────────────────────────────
 
 async function layerElaborability(
-  formalStatement: string,
-): Promise<ValidationResult> {
+  theoremName: string,
+  theoremType: string,
+): Promise<{ result: ValidationResult; signature?: string }> {
+  // The statement string is spliced into `theorem <name> <type> := by ...`
+  // by every later stage, so it must be a bare signature: single line, no
+  // `:=`, no comments, no forbidden commands.
+  const shape = validateTheoremStatement(theoremName, theoremType);
+  if (!shape.ok) {
+    return { result: { layer: 1, pass: false, detail: `定理陈述格式无效: ${shape.reason}` } };
+  }
+  const formalStatement = `theorem ${theoremName} ${theoremType} := by sorry`;
   try {
     // Prepend Mathlib imports so the elaborability check can resolve Mathlib types
     const withImports = `import Mathlib\nimport Batteries\nimport Aesop\n\n${formalStatement}`;
     const res = await verifyLeanSource("autoformalize-l1", withImports, {
       allowSorry: true,
+      theoremName,
+      checkAxioms: false,
+      wantSignature: true,
     });
     if (res.status === "unavailable") {
       return {
-        layer: 1,
-        pass: true, // can't verify — assume OK (degrade gracefully)
-        detail: "Lean 不可用，跳过可阐述性检查",
+        result: {
+          layer: 1,
+          pass: true, // can't verify — assume OK (degrade gracefully)
+          skipped: true,
+          detail: "Lean 不可用，跳过可阐述性检查",
+        },
       };
     }
     return {
-      layer: 1,
-      pass: res.ok,
-      detail: res.ok ? "Lean 编译通过（with sorry）" : res.log,
+      result: {
+        layer: 1,
+        pass: res.ok,
+        detail: res.ok
+          ? `Lean 编译通过（with sorry）${res.signature ? `，陈述: ${res.signature}` : ""}`
+          : res.log,
+      },
+      signature: res.ok ? res.signature : undefined,
     };
   } catch {
-    return {
-      layer: 1,
-      pass: false,
-      detail: "Lean 编译异常",
-    };
+    return { result: { layer: 1, pass: false, detail: "Lean 编译异常" } };
   }
 }
 
@@ -269,7 +294,8 @@ Return JSON: { "is_non_trivial": boolean, "reasoning": string (Chinese) }`,
   } catch {
     return {
       layer: 2,
-      pass: true, // degrade gracefully
+      pass: true, // degrade gracefully — but marked as not actually checked
+      skipped: true,
       detail: "LLM 非平凡性检查失败，默认通过",
     };
   }
@@ -327,7 +353,8 @@ Rate equivalence 0-1 and explain any discrepancies.`,
   } catch {
     return {
       layer: 3,
-      pass: true, // degrade gracefully
+      pass: true, // degrade gracefully — but marked as not actually checked
+      skipped: true,
       detail: "回译检查失败，默认通过",
     };
   }
@@ -392,7 +419,8 @@ ${JSON.stringify(formal.numerical_instances, null, 2)}`,
   } catch {
     return {
       layer: 4,
-      pass: true, // degrade gracefully
+      pass: true, // degrade gracefully — but marked as not actually checked
+      skipped: true,
       detail: "数值验证失败，默认通过",
     };
   }
@@ -445,7 +473,8 @@ Return JSON: { "all_relevant": boolean, "suspicious": string[], "analysis": stri
   } catch {
     return {
       layer: 5,
-      pass: true, // degrade gracefully
+      pass: true, // degrade gracefully — but marked as not actually checked
+      skipped: true,
       detail: "假设相关性检查失败，默认通过",
     };
   }
@@ -500,6 +529,3 @@ Fix the theorem_name and/or theorem_type to make it compile. Keep the same mathe
     return null;
   }
 }
-
-// Need to import z for inline schemas
-import { z } from "zod";

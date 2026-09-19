@@ -16,7 +16,7 @@ AI-powered Lean 4 math theorem prover + problem solver. Single-page Next.js app.
 | Frontend | Next.js 15.5.2, React 19, Tailwind v4, shadcn/ui (Radix), KaTeX, Lucide icons |
 | Backend | Next.js API Routes (TypeScript), Zod validation |
 | LLM | OpenAI-compatible API (configurable via env), fallback chain, LRU cache |
-| Lean | Lean 4 + Mathlib v4.33.1 + Batteries + Aesop, persistent server (JSON-line protocol) |
+| Lean | Lean 4 + Mathlib v4.33.1 + Batteries + Aesop; verification via persistent `leanprover-community/repl` workers (env reuse, sorry goals, axiom + statement checks), `lake env lean` fallback |
 | Compute | Python SymPy HTTP microservice (9 endpoints) |
 | State | In-memory Map + JSON disk persistence |
 | Tests | Vitest (26 test files) |
@@ -118,8 +118,11 @@ lib/
     assemble.ts                     # Assemble Lean source from steps
     lemma-cache.ts                  # Mathlib lemma index (20+ built-in)
     parse-log.ts                    # Lean error parser (8 error kinds)
-    sandbox.ts                      # Lean verification (server + spawn fallback)
-    server.ts                       # Persistent Lean server (JSON-line stdin/stdout)
+    sandbox.ts                      # verifyLeanSource: sanitize → REPL/spawn → verdict (sorry, axioms, statement lock)
+    repl.ts                         # leanprover-community/repl client: worker pool, header env reuse, timeouts
+    sanitize.ts                     # Forbidden-command filter (#eval, elab, unsafe, axiom, …) + statement validation
+    axioms.ts                       # `#print axioms` / `#check` parsing, standard-axiom allowlist
+    trivial-proof.ts                # Single-tactic proof attempts (with full verification)
     sorry-gate.ts                   # Sorry labeling + verification report
   agents/
     orchestrator.ts                 # Multi-agent orchestration (parallel fan-out)
@@ -155,8 +158,7 @@ docs/
 
 lean-sandbox/
   LeanSandbox.lean                  # Library root (imports Mathlib + Batteries + Aesop)
-  LeanServer.lean                   # Persistent server binary (JSON-line protocol)
-  lakefile.toml                     # Lake build config (mathlib v4.33.1)
+  lakefile.toml                     # Lake build config (mathlib v4.33.1 + repl v4.33.0 dependency)
 
 Dockerfile                          # Multi-stage Next.js build
 Dockerfile.compute                  # Python compute server
@@ -171,8 +173,9 @@ components/ui/                      # 16 shadcn/ui primitives (+avatar, dropdown
 ## Key Patterns
 
 - **All LLM outputs validated by Zod** — one resample on invalid JSON, then throw
-- **Repair loop**: generate Lean code → compile → classify error → feed back → retry (max 3)
+- **Repair loop**: generate Lean code → compile → classify error → feed back → retry (max 3); the prover is given the Lean goal state (from the verifier's sorry goals) for the step it is working on
 - **Sorry degradation**: unprovable steps get `sorry` annotations, pipeline continues
+- **Trusted verification**: every source is sanitized (no `#eval`/`elab`/`unsafe`/`axiom`…); a complete proof counts only if Lean reports no errors, no `sorry` (textually AND via `#print axioms` — catches `admit`), only `propext`/`Classical.choice`/`Quot.sound`, and the proved statement's `#check` signature equals the one recorded when autoformalization was accepted (statement lock — the planner cannot change the theorem)
 - **4 problem types**: computational | theorem | optimization | find_all_values
 - **Dual solve paths**: `/api/solve` classifies and dispatches; individual endpoints for step-by-step control
 - **Dark theme UI**: Chinese-first, LaTeX via KaTeX, warm academic color palette
@@ -183,7 +186,8 @@ See `.env.example`:
 - `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` — LLM configuration
 - `LLM_FALLBACK_*` — Fallback model configuration
 - `LEAN_SANDBOX_PATH` — Path to lean-sandbox directory
-- `LEAN_BUILD_TIMEOUT_MS` — Lean compilation timeout
+- `LEAN_BUILD_TIMEOUT_MS` — Per-verification timeout
+- `LEAN_SERVER_MODE` (`server` = REPL workers, `spawn` = `lake env lean` per file), `LEAN_REPL_WORKERS`, `LEAN_REPL_MAX_USES`, `LEAN_SERVER_STARTUP_MS`, `LEAN_ALLOW_NATIVE_DECIDE` — verification backend
 - `LLM_RETRY_*`, `LLM_CACHE_*` — Retry and cache settings
 - `COMPUTE_ENGINE_URL` — Python SymPy server URL
 
@@ -204,7 +208,7 @@ npm run build                  # Production build
 - Optimization solver (deterministic combinatorial search)
 - Find-all-values solver (systematic search + completeness)
 - Multi-agent evaluation (orchestrator + strategist + critic)
-- Persistent Lean server with spawn fallback
+- Lean REPL worker pool (env reuse, goal states, axiom + statement checks) with spawn fallback
 - LLM client with fallback chain, caching, structured output
 - Problem generator (by grade/difficulty/domain)
 - Dark theme UI with KaTeX math rendering

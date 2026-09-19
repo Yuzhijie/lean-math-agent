@@ -608,6 +608,24 @@ export default function Home() {
                       </div>
                     </CardHeader>
                     <CardContent className="space-y-4">
+                      {leanProofAttempt.attempted && leanProofAttempt.success && (
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                          <Badge variant="secondary">
+                            公理：{leanProofAttempt.axioms && leanProofAttempt.axioms.length > 0
+                              ? leanProofAttempt.axioms.join(", ")
+                              : "无"}
+                          </Badge>
+                          <Badge variant={leanProofAttempt.statement_locked ? "success" : "warning"}>
+                            {leanProofAttempt.statement_locked
+                              ? "陈述与形式化校验一致"
+                              : "陈述未经形式化校验锁定"}
+                          </Badge>
+                          {leanProofAttempt.verifier && (
+                            <span>验证后端：{leanProofAttempt.verifier === "repl" ? "Lean REPL" : leanProofAttempt.verifier}</span>
+                          )}
+                        </div>
+                      )}
+
                       {leanProofAttempt.failure_reason && (
                         <div className="rounded-md border border-warning/30 bg-warning/5 px-4 py-3 text-sm text-warning">
                           {leanProofAttempt.failure_reason}
