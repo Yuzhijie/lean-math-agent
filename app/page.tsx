@@ -1,431 +1,676 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { BuildLog } from "./components/BuildLog";
+import { ErrorBanner } from "./components/ErrorBanner";
 import { LeanPane } from "./components/LeanPane";
+import { MathText } from "./components/MathText";
 import { MethodDetail } from "./components/MethodDetail";
 import { MethodList } from "./components/MethodList";
+import { MethodComparison } from "./components/MethodComparison";
+import { PipelineProgress } from "./components/PipelineProgress";
+import { ProblemGenerator } from "./components/ProblemGenerator";
+import { SessionHistory } from "./components/SessionHistory";
+import { StepCard } from "./components/StepCard";
 import { StepPane } from "./components/StepPane";
-import type {
-  BuildStatus,
-  MethodOption,
-  ProofStep,
-  StepStatus,
-} from "@/lib/types";
-
-type UiPhase = "idle" | "enumerated" | "planned" | "proving" | "verified";
-
-type ApiErrorBody = { error?: string };
-
-async function readJson<T>(res: Response): Promise<T> {
-  const data = (await res.json()) as T & ApiErrorBody;
-  if (!res.ok) {
-    throw new Error(data.error ?? `Request failed (${res.status})`);
-  }
-  return data;
-}
-
-function firstPendingIndex(steps: ProofStep[]): number | undefined {
-  const pending = steps.find((s) => s.status === "pending" || s.status === "fail");
-  return pending?.index;
-}
-
-function mergeStep(steps: ProofStep[], step: ProofStep): ProofStep[] {
-  return steps
-    .map((s) => (s.index === step.index ? step : s))
-    .sort((a, b) => a.index - b.index);
-}
+import { containsMath } from "@/lib/math-segments";
+import { useProofSession } from "./hooks/useProofSession";
+import { useProofActions } from "./hooks/useProofActions";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import { Separator } from "@/components/ui/separator";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import {
+  Calculator,
+  Sparkles,
+  BookOpen,
+  FlaskConical,
+  Sigma,
+  RotateCcw,
+  ChevronDown,
+  ChevronUp,
+  AlertTriangle,
+  AlertCircle,
+  Play,
+  ListOrdered,
+  CheckCircle2,
+  FileCode,
+  History,
+  Columns3,
+} from "lucide-react";
 
 export default function Home() {
-  const [phase, setPhase] = useState<UiPhase>("idle");
-  const [problemText, setProblemText] = useState(
-    "证明对任意自然数 n，n + 0 = n",
-  );
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [methods, setMethods] = useState<MethodOption[]>([]);
-  const [comparisonSummary, setComparisonSummary] = useState<string>();
-  const [outOfDomainWarning, setOutOfDomainWarning] = useState<string | null>(
-    null,
-  );
-  const [selectedMethodId, setSelectedMethodId] = useState<string>();
-  const [steps, setSteps] = useState<ProofStep[]>([]);
-  const [selectedStepIndex, setSelectedStepIndex] = useState<number>();
-  const [assembledLean, setAssembledLean] = useState("");
-  const [buildStatus, setBuildStatus] = useState<BuildStatus>("idle");
-  const [buildLog, setBuildLog] = useState("");
-  const [leanView, setLeanView] = useState<"full" | "step">("full");
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    state,
+    dispatch,
+    phase,
+    selectedMethod,
+    selectedStep,
+    activeStepIndex,
+    planned,
+    canProve,
+    canVerify,
+  } = useProofSession();
 
-  const selectedMethod = useMemo(
-    () => methods.find((m) => m.id === selectedMethodId),
-    [methods, selectedMethodId],
-  );
+  const {
+    enumerate,
+    planMethod,
+    proveStepAt,
+    proveAll,
+    verify,
+    solveAll,
+    switchMethod,
+    useGeneratedProblem,
+    loadSession,
+    retryLastAction,
+  } = useProofActions(state, dispatch);
 
-  const selectedStep = useMemo(
-    () => steps.find((s) => s.index === selectedStepIndex),
-    [steps, selectedStepIndex],
-  );
+  const {
+    problemText,
+    methods,
+    comparisonSummary,
+    outOfDomainWarning,
+    steps,
+    assembledLean,
+    buildStatus,
+    buildLog,
+    leanView,
+    busy,
+    error,
+    autoformalizeDetail,
+    validationResults,
+    showGenerator,
+    nlSolution,
+    leanProofAttempt,
+    solvedProblemType,
+    solveEvents,
+  } = state;
 
-  const planned = phase === "planned" || phase === "proving" || phase === "verified";
-  const canProve = planned && !!sessionId && steps.length > 0 && !busy;
-  const canVerify =
-    !!sessionId &&
-    !busy &&
-    steps.length > 0 &&
-    steps.every((s) => s.status === "ok" && s.lean_code.trim().length > 0);
+  const [activeTab, setActiveTab] = useState("solution");
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [showComparison, setShowComparison] = useState(false);
+  const [stepsExpanded, setStepsExpanded] = useState(false);
 
-  async function enumerate() {
-    setError(null);
-    setBusy("enumerate");
-    setPhase("idle");
-    setMethods([]);
-    setSelectedMethodId(undefined);
-    setSteps([]);
-    setSelectedStepIndex(undefined);
-    setAssembledLean("");
-    setBuildStatus("idle");
-    setBuildLog("");
-    setComparisonSummary(undefined);
-    setOutOfDomainWarning(null);
-    try {
-      const data = await readJson<{
-        session_id: string;
-        methods: MethodOption[];
-        comparison_summary?: string;
-        out_of_domain_warning?: string | null;
-      }>(
-        await fetch("/api/enumerate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ problem_text: problemText }),
-        }),
-      );
-      setSessionId(data.session_id);
-      setMethods(data.methods);
-      setComparisonSummary(data.comparison_summary);
-      setOutOfDomainWarning(data.out_of_domain_warning ?? null);
-      setPhase("enumerated");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "枚举失败");
-    } finally {
-      setBusy(null);
+  // Auto-select tab when session data changes (e.g., after loading history)
+  const prevSessionId = useRef(state.sessionId);
+  useEffect(() => {
+    if (state.sessionId && state.sessionId !== prevSessionId.current) {
+      prevSessionId.current = state.sessionId;
+      if (state.nlSolution) setActiveTab("solution");
+      else if (state.methods.length > 0) setActiveTab("methods");
+      else if (state.leanProofAttempt) setActiveTab("lean");
     }
-  }
+  }, [state.sessionId, state.nlSolution, state.methods.length, state.leanProofAttempt]);
 
-  async function planMethod(methodId: string) {
-    if (!sessionId) return;
-    setError(null);
-    setBusy("plan");
-    setSelectedMethodId(methodId);
-    setSteps([]);
-    setSelectedStepIndex(undefined);
-    setAssembledLean("");
-    setBuildStatus("idle");
-    setBuildLog("");
-    try {
-      const data = await readJson<{
-        session_id: string;
-        steps: ProofStep[];
-      }>(
-        await fetch("/api/plan", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session_id: sessionId, method_id: methodId }),
-        }),
-      );
-      const nextSteps = data.steps
-        .map((s) => ({
-          ...s,
-          plain_explanation: s.plain_explanation ?? "",
-          lean_code: s.lean_code ?? "",
-          status: (s.status ?? "pending") as StepStatus,
-        }))
-        .sort((a, b) => a.index - b.index);
-      setSteps(nextSteps);
-      setSelectedStepIndex(nextSteps[0]?.index);
-      setPhase("planned");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "规划失败");
-      setPhase("enumerated");
-    } finally {
-      setBusy(null);
-    }
-  }
+  const handleLoadSession = (sessionId: string) => {
+    void loadSession(sessionId);
+    setHistoryOpen(false);
+  };
 
-  async function proveStepAt(stepIndex: number, asRetry = false) {
-    if (!sessionId) return;
-    setError(null);
-    setBusy(asRetry ? "retry" : "prove");
-    setPhase("proving");
-    setSelectedStepIndex(stepIndex);
-    try {
-      const data = await readJson<{
-        session_id: string;
-        step: ProofStep;
-        assembled_lean: string;
-        build_status: BuildStatus;
-      }>(
-        await fetch("/api/prove-step", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session_id: sessionId, step_index: stepIndex }),
-        }),
-      );
-      setSteps((prev) => mergeStep(prev, data.step));
-      setAssembledLean(data.assembled_lean);
-      // prove-step never sets whole-proof "ok"; only unavailable or idle.
-      setBuildStatus(data.build_status);
-      if (data.step.build_log) {
-        setBuildLog(data.step.build_log);
-      }
-      if (data.build_status === "unavailable") {
-        setBuildLog(
-          data.step.build_log ??
-            "Lean/lake unavailable. Install elan/Lean and ensure lean-sandbox builds.",
-        );
-      }
-      setPhase("planned");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "证明本步失败");
-      setPhase("planned");
-    } finally {
-      setBusy(null);
-    }
-  }
+  const hasResults = !!(nlSolution || leanProofAttempt || methods.length > 0);
 
-  async function proveAll() {
-    if (!sessionId || steps.length === 0) return;
-    setError(null);
-    setBusy("prove-all");
-    setPhase("proving");
-    let current = [...steps];
-    try {
-      for (const step of current) {
-        if (step.status === "ok" && step.lean_code.trim()) continue;
-        setSelectedStepIndex(step.index);
-        const data = await readJson<{
-          step: ProofStep;
-          assembled_lean: string;
-          build_status: BuildStatus;
-        }>(
-          await fetch("/api/prove-step", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              session_id: sessionId,
-              step_index: step.index,
-            }),
-          }),
-        );
-        current = mergeStep(current, data.step);
-        setSteps(current);
-        setAssembledLean(data.assembled_lean);
-        setBuildStatus(data.build_status);
-        if (data.step.build_log) setBuildLog(data.step.build_log);
-        if (data.build_status === "unavailable") {
-          setBuildLog(
-            data.step.build_log ??
-              "Lean/lake unavailable. Install elan/Lean and ensure lean-sandbox builds.",
-          );
-          break;
-        }
-        if (data.step.status === "fail") break;
-      }
-      setPhase("planned");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "逐步生成失败");
-      setPhase("planned");
-    } finally {
-      setBusy(null);
-    }
-  }
+  const phaseLabel: Record<string, string> = {
+    idle: "就绪",
+    enumerated: "已枚举",
+    planned: "已规划",
+    proving: "证明中",
+    proved: "已证明",
+    verified: "已验证",
+    solved: "已求解",
+  };
 
-  async function verify() {
-    if (!sessionId) return;
-    setError(null);
-    setBusy("verify");
-    try {
-      const data = await readJson<{
-        ok: boolean;
-        log: string;
-        build_status: BuildStatus;
-        assembled_lean: string;
-      }>(
-        await fetch("/api/verify", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session_id: sessionId }),
-        }),
-      );
-      setAssembledLean(data.assembled_lean);
-      setBuildStatus(data.build_status);
-      setBuildLog(data.log);
-      setPhase(data.build_status === "ok" ? "verified" : "planned");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "验证失败");
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  function switchMethod() {
-    setSteps([]);
-    setSelectedStepIndex(undefined);
-    setAssembledLean("");
-    setBuildStatus("idle");
-    setBuildLog("");
-    setSelectedMethodId(undefined);
-    setPhase("enumerated");
-    setError(null);
-  }
-
-  const activeStepIndex =
-    selectedStepIndex ?? firstPendingIndex(steps) ?? steps[0]?.index;
+  const buildBadgeVariant =
+    buildStatus === "ok"
+      ? "success"
+      : buildStatus === "fail"
+        ? "destructive"
+        : buildStatus === "unavailable"
+          ? "warning"
+          : "secondary";
 
   return (
-    <main className="app-shell">
-      <h1 className="brand">Lean Math Agent</h1>
-      <p className="tagline">
-        枚举解法、逐步证明，并在本地 Lean 4 沙箱中验证 Nat/Int 等式问题。
-      </p>
+    <TooltipProvider>
+      <div className="relative z-10 min-h-screen">
+        {/* ── Sticky Header ──────────────────────────────────────────── */}
+        <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur-xl">
+          <div className="mx-auto max-w-6xl px-4 sm:px-6">
+            <div className="flex h-14 items-center justify-between">
+              {/* Brand */}
+              <div className="flex items-center gap-3">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/15 text-primary">
+                  <Sigma className="h-5 w-5" />
+                </div>
+                <div>
+                  <h1 className="font-serif text-base font-bold leading-none tracking-tight text-foreground">
+                    Lean Math Agent
+                  </h1>
+                  <p className="text-[11px] text-muted-foreground">
+                    AI × Lean 4 形式化证明
+                  </p>
+                </div>
+              </div>
 
-      <section className="problem-band">
-        <label className="problem-label" htmlFor="problem">
-          问题
-        </label>
-        <textarea
-          id="problem"
-          className="problem-textarea"
-          value={problemText}
-          onChange={(e) => setProblemText(e.target.value)}
-          disabled={!!busy}
-          rows={3}
-        />
-        <div className="problem-actions">
-          <button
-            type="button"
-            className="btn"
-            onClick={() => void enumerate()}
-            disabled={!!busy || !problemText.trim()}
-          >
-            {busy === "enumerate" ? "枚举中…" : "枚举解法"}
-          </button>
-          {busy ? (
-            <span className="status-line">工作中：{busy}</span>
-          ) : (
-            <span className="status-line">状态：{phase}</span>
-          )}
-          {error ? <span className="status-line error">{error}</span> : null}
-        </div>
-      </section>
-
-      {outOfDomainWarning ? (
-        <div className="banner-warn" role="status">
-          域外警告：{outOfDomainWarning}
-        </div>
-      ) : null}
-
-      {buildStatus === "unavailable" ? (
-        <div className="banner-unavailable" role="alert">
-          Lean / lake 不可用。请安装 elan 与 Lean 4，并确保{" "}
-          <code>lean-sandbox</code> 可 <code>lake build</code>。
-          {buildLog ? `\n\n${buildLog}` : null}
-        </div>
-      ) : null}
-
-      {phase !== "idle" ? (
-        <div className="methods-row">
-          <MethodList
-            methods={methods}
-            selectedId={selectedMethodId}
-            disabled={!!busy}
-            onSelect={(id) => void planMethod(id)}
-          />
-          <MethodDetail
-            method={selectedMethod}
-            comparisonSummary={comparisonSummary}
-          />
-        </div>
-      ) : null}
-
-      {planned || steps.length > 0 ? (
-        <>
-          <div className="workspace">
-            <div className="workspace-actions">
-              <button
-                type="button"
-                className="btn"
-                disabled={!canProve || activeStepIndex === undefined}
-                onClick={() =>
-                  activeStepIndex !== undefined &&
-                  void proveStepAt(activeStepIndex)
-                }
-              >
-                {busy === "prove" ? "证明中…" : "证明本步"}
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                disabled={!canProve}
-                onClick={() => void proveAll()}
-              >
-                {busy === "prove-all" ? "生成中…" : "全部逐步生成"}
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                disabled={!canVerify}
-                onClick={() => void verify()}
-              >
-                {busy === "verify" ? "验证中…" : "验证"}
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                disabled={
-                  !canProve ||
-                  activeStepIndex === undefined ||
-                  !selectedStep ||
-                  selectedStep.status === "pending"
-                }
-                onClick={() =>
-                  activeStepIndex !== undefined &&
-                  void proveStepAt(activeStepIndex, true)
-                }
-              >
-                {busy === "retry" ? "重试中…" : "重试本步"}
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                disabled={!!busy || phase === "idle"}
-                onClick={switchMethod}
-              >
-                换解法
-              </button>
-              <span className={`build-status-pill ${buildStatus}`}>
-                build: {buildStatus}
-              </span>
+              {/* Status */}
+              <div className="flex items-center gap-3">
+                <Badge variant="outline" className="hidden sm:inline-flex gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse-soft" />
+                  {phaseLabel[phase] ?? phase}
+                </Badge>
+                {buildStatus && buildStatus !== "idle" && (
+                  <Badge variant={buildBadgeVariant as "success" | "destructive" | "warning" | "secondary"}>
+                    build: {buildStatus}
+                  </Badge>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setHistoryOpen(true)}
+                  disabled={!!busy}
+                  className="gap-1.5"
+                >
+                  <History className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">历史</span>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => dispatch({ type: "TOGGLE_GENERATOR" })}
+                  disabled={!!busy}
+                  className="gap-1.5"
+                >
+                  <Sparkles className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">
+                    {showGenerator ? "收起" : "生成题目"}
+                  </span>
+                </Button>
+              </div>
             </div>
-            <StepPane
-              steps={steps}
-              selectedIndex={selectedStepIndex}
-              onSelect={setSelectedStepIndex}
-            />
-            <LeanPane
-              leanSource={assembledLean}
-              selectedStepCode={selectedStep?.lean_code}
-              view={leanView}
-              onViewChange={setLeanView}
-            />
           </div>
-          <BuildLog
-            log={buildLog}
-            defaultOpen={buildStatus === "fail" || buildStatus === "unavailable"}
-          />
-        </>
-      ) : null}
-    </main>
+        </header>
+
+        {/* ── Main Content ──────────────────────────────────────────── */}
+        <main className="mx-auto max-w-6xl px-4 sm:px-6 py-6 space-y-6">
+          {/* Problem Generator (collapsible) */}
+          {showGenerator && (
+            <div className="animate-slide-down">
+              <ProblemGenerator
+                onUseProblem={useGeneratedProblem}
+                onFormalize={useGeneratedProblem}
+                disabled={!!busy}
+              />
+            </div>
+          )}
+
+          {/* Problem Input Card */}
+          <Card className="animate-fade-in">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Calculator className="h-4 w-4 text-primary" />
+                  问题
+                </CardTitle>
+                {busy && (
+                  <Badge variant="info" className="gap-1.5 animate-pulse-soft">
+                    <span className="h-1.5 w-1.5 rounded-full bg-primary animate-spin" />
+                    工作中：{busy}
+                  </Badge>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <Textarea
+                value={problemText}
+                onChange={(e) =>
+                  dispatch({ type: "SET_PROBLEM_TEXT", text: e.target.value })
+                }
+                disabled={!!busy}
+                rows={3}
+                placeholder="输入数学问题，支持 LaTeX 公式（如 $x^2 + y^2 = z^2$）..."
+                className="min-h-[80px] text-base leading-relaxed"
+              />
+
+              {/* Math preview */}
+              {containsMath(problemText) && (
+                <div className="rounded-md border border-border/60 bg-muted/30 p-3 animate-fade-in">
+                  <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                    预览
+                  </span>
+                  <div className="mt-1.5 text-sm">
+                    <MathText text={problemText} />
+                  </div>
+                </div>
+              )}
+
+              {/* Action buttons */}
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <Button
+                  onClick={() => void solveAll()}
+                  disabled={!!busy || !problemText.trim()}
+                  loading={busy === "solve-all"}
+                  className="gap-1.5"
+                >
+                  <Play className="h-3.5 w-3.5" />
+                  一键求解
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => void enumerate()}
+                  disabled={!!busy || !problemText.trim()}
+                  loading={busy === "enumerate"}
+                  className="gap-1.5"
+                >
+                  <ListOrdered className="h-3.5 w-3.5" />
+                  枚举解法
+                </Button>
+              </div>
+
+              {/* Error banner */}
+              {error && (
+                <ErrorBanner
+                  error={error}
+                  detail={autoformalizeDetail}
+                  validationResults={validationResults}
+                  onRetry={retryLastAction}
+                  onDismiss={() => dispatch({ type: "DISMISS_ERROR" })}
+                />
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Warnings */}
+          {outOfDomainWarning && (
+            <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 text-sm animate-fade-in">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+              <div>
+                <span className="font-medium text-warning">域外警告：</span>
+                <span className="text-muted-foreground">{outOfDomainWarning}</span>
+              </div>
+            </div>
+          )}
+
+          {buildStatus === "unavailable" && (
+            <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm animate-fade-in">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+              <div className="text-muted-foreground">
+                Lean / lake 不可用。请安装 elan 与 Lean 4，并确保{" "}
+                <code className="rounded bg-muted px-1.5 py-0.5 text-xs font-mono">lean-sandbox</code>{" "}
+                可{" "}
+                <code className="rounded bg-muted px-1.5 py-0.5 text-xs font-mono">lake build</code>。
+              </div>
+            </div>
+          )}
+
+          {/* ── Pipeline Progress (real-time streaming) ───────────── */}
+          {(solveEvents.length > 0 || busy === "solve-all") && (
+            <PipelineProgress events={solveEvents} busy={busy} />
+          )}
+
+          {/* ── Results Section (Tabs) ──────────────────────────────── */}
+          {hasResults && (
+            <Tabs
+              value={activeTab}
+              onValueChange={setActiveTab}
+              className="animate-slide-up"
+            >
+              <TabsList className="w-full justify-start bg-transparent p-0 h-auto gap-1 mb-4">
+                {nlSolution && (
+                  <TabsTrigger value="solution" className="gap-1.5 data-[state=active]:bg-primary/10 data-[state=active]:text-primary">
+                    <BookOpen className="h-3.5 w-3.5" />
+                    解答
+                  </TabsTrigger>
+                )}
+                {methods.length > 0 && (
+                  <TabsTrigger value="methods" className="gap-1.5 data-[state=active]:bg-primary/10 data-[state=active]:text-primary">
+                    <ListOrdered className="h-3.5 w-3.5" />
+                    解法
+                    <span className="ml-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-bold text-primary">
+                      {methods.length}
+                    </span>
+                  </TabsTrigger>
+                )}
+                {(planned || steps.length > 0) && (
+                  <TabsTrigger value="proof" className="gap-1.5 data-[state=active]:bg-primary/10 data-[state=active]:text-primary">
+                    <FileCode className="h-3.5 w-3.5" />
+                    证明
+                  </TabsTrigger>
+                )}
+                {leanProofAttempt && (
+                  <TabsTrigger value="lean" className="gap-1.5 data-[state=active]:bg-primary/10 data-[state=active]:text-primary">
+                    <FlaskConical className="h-3.5 w-3.5" />
+                    Lean
+                  </TabsTrigger>
+                )}
+              </TabsList>
+
+              {/* ── Tab: NL Solution ──────────────────────────────── */}
+              <TabsContent value="solution">
+                {nlSolution && (
+                  <Card>
+                    <CardHeader>
+                      <div className="flex items-center justify-between">
+                        <CardTitle className="flex items-center gap-2">
+                          <BookOpen className="h-5 w-5 text-primary" />
+                          自然语言解答
+                        </CardTitle>
+                        <Badge
+                          variant={solvedProblemType === "theorem" ? "info" : "default"}
+                        >
+                          {solvedProblemType === "theorem" ? "定理证明" : "计算求解"}
+                        </Badge>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-5">
+                      {/* Summary */}
+                      <div className="rounded-lg bg-primary/5 border border-primary/10 p-4">
+                        <MathText text={nlSolution.summary} className="text-sm leading-relaxed" />
+                      </div>
+
+                      {/* Steps */}
+                      {nlSolution.steps.length > 3 && (
+                        <div className="flex justify-end">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={() => {
+                              // Toggle all steps via re-render key
+                              setStepsExpanded(!stepsExpanded);
+                            }}
+                          >
+                            {stepsExpanded ? "折叠全部" : "展开全部"}
+                          </Button>
+                        </div>
+                      )}
+                      {nlSolution.steps.map((step, i) => (
+                        <StepCard
+                          key={`${i}-${stepsExpanded}`}
+                          step={step}
+                          index={i}
+                          defaultOpen={
+                            nlSolution.steps.length <= 3 ||
+                            stepsExpanded ||
+                            i === 0 ||
+                            i === nlSolution.steps.length - 1
+                          }
+                        />
+                      ))}
+
+                      <Separator />
+
+                      {/* Final answer */}
+                      <div className="rounded-lg border-2 border-success/30 bg-success/5 p-4">
+                        <div className="text-[11px] font-bold uppercase tracking-wider text-success mb-2">
+                          <CheckCircle2 className="inline h-3.5 w-3.5 mr-1" />
+                          最终答案
+                        </div>
+                        <div className="text-base font-semibold">
+                          <MathText text={nlSolution.final_answer} />
+                        </div>
+                      </div>
+
+                      {/* Verification */}
+                      {nlSolution.verification && (
+                        <div className="rounded-lg border border-border/60 bg-muted/20 p-4 text-sm">
+                          <span className="font-semibold text-muted-foreground">验证：</span>
+                          <MathText text={nlSolution.verification} />
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+              </TabsContent>
+
+              {/* ── Tab: Methods ──────────────────────────────────── */}
+              <TabsContent value="methods">
+                {showComparison && state.methodScores.length > 0 ? (
+                  <div className="space-y-4">
+                    <div className="flex justify-end">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={() => setShowComparison(false)}
+                      >
+                        <Columns3 className="h-3.5 w-3.5 mr-1" />
+                        列表视图
+                      </Button>
+                    </div>
+                    <MethodComparison
+                      methods={methods}
+                      scores={state.methodScores}
+                      recommendedId={state.recommendedMethodId}
+                    />
+                  </div>
+                ) : (
+                  <>
+                    {state.methodScores.length > 0 && (
+                      <div className="flex justify-end mb-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs"
+                          onClick={() => setShowComparison(true)}
+                        >
+                          <Columns3 className="h-3.5 w-3.5 mr-1" />
+                          对比视图
+                        </Button>
+                      </div>
+                    )}
+                    <div className="grid grid-cols-1 md:grid-cols-[minmax(220px,0.85fr)_minmax(280px,1.15fr)] gap-4">
+                      <MethodList
+                        methods={methods}
+                        scores={state.methodScores}
+                        recommendedId={state.recommendedMethodId}
+                        selectedId={state.selectedMethodId ?? undefined}
+                        disabled={!!busy}
+                        onSelect={(id) => void planMethod(id)}
+                      />
+                      <MethodDetail
+                        method={selectedMethod}
+                        score={state.methodScores.find(
+                          (s) => s.method_id === state.selectedMethodId,
+                        )}
+                        comparisonSummary={comparisonSummary ?? undefined}
+                      />
+                    </div>
+                  </>
+                )}
+              </TabsContent>
+
+              {/* ── Tab: Proof Workspace ──────────────────────────── */}
+              <TabsContent value="proof">
+                <Card>
+                  <CardContent className="p-0">
+                    {/* Workspace actions */}
+                    <div className="flex flex-wrap items-center gap-2 border-b border-border p-4">
+                      <Button
+                        size="sm"
+                        disabled={!canProve || activeStepIndex === undefined}
+                        onClick={() =>
+                          activeStepIndex !== undefined &&
+                          void proveStepAt(activeStepIndex)
+                        }
+                        loading={busy === "prove"}
+                        className="gap-1.5"
+                      >
+                        <Play className="h-3.5 w-3.5" />
+                        证明本步
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!canProve}
+                        onClick={() => void proveAll()}
+                        loading={busy === "prove-all"}
+                        className="gap-1.5"
+                      >
+                        <ListOrdered className="h-3.5 w-3.5" />
+                        全部逐步生成
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!canVerify}
+                        onClick={() => void verify()}
+                        loading={busy === "verify"}
+                        className="gap-1.5"
+                      >
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        验证
+                      </Button>
+                      <Separator orientation="vertical" className="h-6" />
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={
+                              !canProve ||
+                              activeStepIndex === undefined ||
+                              !selectedStep ||
+                              selectedStep.status === "pending"
+                            }
+                            onClick={() =>
+                              activeStepIndex !== undefined &&
+                              void proveStepAt(activeStepIndex, true)
+                            }
+                            loading={busy === "retry"}
+                            className="gap-1.5"
+                          >
+                            <RotateCcw className="h-3.5 w-3.5" />
+                            重试
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>重试当前步骤的证明</TooltipContent>
+                      </Tooltip>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={!!busy || phase === "idle"}
+                        onClick={switchMethod}
+                      >
+                        换解法
+                      </Button>
+                    </div>
+
+                    {/* Steps + Lean side by side */}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-border">
+                      <StepPane
+                        steps={steps}
+                        selectedIndex={state.selectedStepIndex ?? undefined}
+                        onSelect={(idx) => dispatch({ type: "SELECT_STEP", index: idx })}
+                      />
+                      <LeanPane
+                        leanSource={assembledLean}
+                        selectedStepCode={selectedStep?.lean_code}
+                        view={leanView}
+                        onViewChange={(v) => dispatch({ type: "SET_LEAN_VIEW", view: v })}
+                      />
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Build log */}
+                <BuildLog
+                  log={buildLog}
+                  defaultOpen={buildStatus === "fail" || buildStatus === "unavailable"}
+                />
+              </TabsContent>
+
+              {/* ── Tab: Lean Proof Attempt ───────────────────────── */}
+              <TabsContent value="lean">
+                {leanProofAttempt && (
+                  <Card>
+                    <CardHeader>
+                      <div className="flex items-center justify-between">
+                        <CardTitle className="flex items-center gap-2">
+                          <FlaskConical className="h-5 w-5 text-primary" />
+                          Lean 4 形式化
+                        </CardTitle>
+                        <Badge
+                          variant={
+                            !leanProofAttempt.attempted
+                              ? "secondary"
+                              : leanProofAttempt.success
+                                ? "success"
+                                : "warning"
+                          }
+                        >
+                          {!leanProofAttempt.attempted
+                            ? "未尝试"
+                            : leanProofAttempt.success
+                              ? "✅ 证明成功"
+                              : "⚠️ 未能完成"}
+                        </Badge>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      {leanProofAttempt.failure_reason && (
+                        <div className="rounded-md border border-warning/30 bg-warning/5 px-4 py-3 text-sm text-warning">
+                          {leanProofAttempt.failure_reason}
+                        </div>
+                      )}
+
+                      {(leanProofAttempt.limitations?.length ?? 0) > 0 && (
+                        <ul className="list-inside list-disc space-y-1 text-sm text-muted-foreground">
+                          {leanProofAttempt.limitations!.map((lim, i) => (
+                            <li key={i}>{lim}</li>
+                          ))}
+                        </ul>
+                      )}
+
+                      {leanProofAttempt.proof_code && (
+                        <pre className="lean-code-block max-h-[28rem]">
+                          {leanProofAttempt.proof_code}
+                        </pre>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+              </TabsContent>
+            </Tabs>
+          )}
+
+          {/* ── Solve Events (collapsible log) ─────────────────────── */}
+          {solveEvents.length > 0 && (
+            <Card className="animate-fade-in">
+              <CardContent className="p-4">
+                <details>
+                  <summary className="flex cursor-pointer items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors select-none">
+                    <ChevronDown className="h-4 w-4" />
+                    求解过程日志 ({solveEvents.length} 条)
+                  </summary>
+                  <div className="mt-3 max-h-64 overflow-auto rounded-md bg-code-bg p-3 font-mono text-xs leading-relaxed text-muted-foreground">
+                    {solveEvents.map((evt, i) => (
+                      <div key={i}>
+                        <span className="text-primary/70">[{evt.stage}]</span>{" "}
+                        {evt.detail}
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              </CardContent>
+            </Card>
+          )}
+        </main>
+
+        {/* ── Session History Sidebar ──────────────────────────────── */}
+        <SessionHistory
+          open={historyOpen}
+          onOpenChange={setHistoryOpen}
+          onLoadSession={handleLoadSession}
+          refreshKey={state.sessionId}
+        />
+
+        {/* ── Footer ──────────────────────────────────────────────── */}
+        <footer className="border-t border-border/40 py-6 text-center text-xs text-muted-foreground">
+          <span className="text-gradient font-medium">Lean Math Agent</span>
+          {" "}— AI 驱动的数学定理证明
+        </footer>
+      </div>
+    </TooltipProvider>
   );
 }

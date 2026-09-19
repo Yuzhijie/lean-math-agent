@@ -1,0 +1,16 @@
+node_modules
+.next
+.git
+.gitignore
+*.md
+.env
+.env.local
+.data
+*.log
+.DS_Store
+lean-sandbox/.lake
+lean-sandbox/build
+tests
+docs
+.vscode
+.idea

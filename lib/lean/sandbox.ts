@@ -1,15 +1,67 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { BuildStatus } from "../types";
 import { parseLeanLog } from "./parse-log";
+import { getLeanServer } from "./server";
 
-const DEFAULT_TIMEOUT = Number(process.env.LEAN_BUILD_TIMEOUT_MS ?? 60_000);
+const DEFAULT_TIMEOUT = Number(process.env.LEAN_BUILD_TIMEOUT_MS ?? 120_000);
 /** Max concurrent `lake` / lean processes (in-process queue). */
 const LAKE_CONCURRENCY = Math.max(
   1,
   Math.min(2, Number(process.env.LEAN_LAKE_CONCURRENCY ?? 1)),
 );
+
+// ── Verification Result Cache ──────────────────────────────────────────
+//
+// LRU cache for Lean verification results keyed by SHA-256(source + allowSorry).
+// Avoids redundant `lake env lean` / server calls during repair loops.
+
+const VERIFY_CACHE_MAX = 256;
+
+interface VerifyResult {
+  ok: boolean;
+  log: string;
+  status: BuildStatus;
+}
+
+const verificationCache = new Map<string, VerifyResult>();
+
+function buildVerifyCacheKey(source: string, allowSorry: boolean): string {
+  return createHash("sha256")
+    .update(JSON.stringify({ source, allowSorry }))
+    .digest("hex");
+}
+
+function cacheGet(key: string): VerifyResult | undefined {
+  const v = verificationCache.get(key);
+  if (v === undefined) return undefined;
+  // LRU: move to most-recent position
+  verificationCache.delete(key);
+  verificationCache.set(key, v);
+  return v;
+}
+
+function cacheSet(key: string, value: VerifyResult): void {
+  if (verificationCache.has(key)) {
+    verificationCache.delete(key);
+  } else if (verificationCache.size >= VERIFY_CACHE_MAX) {
+    const oldest = verificationCache.keys().next().value;
+    if (oldest !== undefined) verificationCache.delete(oldest);
+  }
+  verificationCache.set(key, value);
+}
+
+/** Clear the verification cache (for testing). */
+export function clearVerificationCache(): void {
+  verificationCache.clear();
+}
+
+/** Current verification cache size (for testing/monitoring). */
+export function verificationCacheSize(): number {
+  return verificationCache.size;
+}
 
 const SORRY_RE = /\bsorry\b/;
 
@@ -71,10 +123,60 @@ export async function verifyLeanSource(
       status: "fail",
     };
   }
+
+  // ── Check verification cache ──────────────────────────────────
+  const cacheKey = buildVerifyCacheKey(source, !!opts?.allowSorry);
+  const cached = cacheGet(cacheKey);
+  if (cached) return { ...cached };
+
   const avail = await checkLeanAvailable();
   if (!avail.ok) {
     return { ok: false, log: avail.message, status: "unavailable" };
   }
+
+  let result: VerifyResult;
+
+  // ── Try server mode first (fast path) ──────────────────────────
+  const server = getLeanServer();
+  if (server) {
+    try {
+      if (!server.isRunning) {
+        await server.start();
+      }
+      const srvResult = await server.verify(sessionId, source);
+      if (srvResult.ok) {
+        result = { ok: true, log: srvResult.log || "ok", status: "ok" };
+        cacheSet(cacheKey, result);
+        return { ...result };
+      }
+      // Server said fail — check for infrastructure errors (e.g. missing
+      // Init.olean due to search-path misconfiguration). If detected, fall
+      // through to spawn which uses the standard `lean` binary and handles
+      // search paths correctly.
+      if (/IO error|could not resolve|unknown package/i.test(srvResult.log)) {
+        result = await verifyViaSpawn(sessionId, source);
+        cacheSet(cacheKey, result);
+        return { ...result };
+      }
+      result = { ok: false, log: srvResult.log, status: "fail" };
+      cacheSet(cacheKey, result);
+      return { ...result };
+    } catch {
+      // Server mode failed — fall through to spawn mode
+    }
+  }
+
+  // ── Spawn fallback (slow path) ─────────────────────────────────
+  result = await verifyViaSpawn(sessionId, source);
+  cacheSet(cacheKey, result);
+  return { ...result };
+}
+
+/** Original spawn-based verification (fallback when server mode is unavailable). */
+async function verifyViaSpawn(
+  sessionId: string,
+  source: string,
+): Promise<{ ok: boolean; log: string; status: BuildStatus }> {
   const root = sandboxRoot();
   const scratchDir = path.join(root, "Scratch");
   await fs.mkdir(scratchDir, { recursive: true });

@@ -1,9 +1,11 @@
-import type { BuildStatus, MethodOption, ProofStep, Session } from "../types";
+import type { BuildStatus, ClassifiedError, MathDomain, MethodOption, ProofStep, Session } from "../types";
 import { proveStepResponseSchema } from "../schemas";
 import { assembleLeanSource, stepCodesUpTo } from "../lean/assemble";
 import { verifyLeanSource } from "../lean/sandbox";
+import { classifyLeanErrors, formatErrorsForRepair } from "../lean/parse-log";
+import { suggestLemmasForProblem } from "../lean/lemma-cache";
 import { chatJson } from "./client";
-import { PROVE_STEP_SYSTEM } from "./prompts";
+import { PROVE_STEP_SYSTEM, PROVE_STEP_MATHLIB_SYSTEM, REPAIR_STRATEGIES } from "./prompts";
 
 const MAX_RETRIES = 3;
 
@@ -12,15 +14,56 @@ export async function proveOneStep(args: {
   method: MethodOption;
   steps: ProofStep[];
   stepIndex: number;
+  theoremType?: string;
   buildLog?: string;
+  classifiedErrors?: ClassifiedError[];
+  useMathlib?: boolean;
+  domain?: MathDomain;
 }) {
   const step = args.steps.find((s) => s.index === args.stepIndex);
   if (!step) throw new Error(`missing step ${args.stepIndex}`);
+
+  // Choose system prompt based on Mathlib availability
+  const systemPrompt = args.useMathlib
+    ? PROVE_STEP_MATHLIB_SYSTEM
+    : PROVE_STEP_SYSTEM;
+
+  // Build repair context if errors are classified
+  let repairContext = "";
+  if (args.classifiedErrors && args.classifiedErrors.length > 0) {
+    const formatted = formatErrorsForRepair(args.classifiedErrors);
+    repairContext = `\n\nClassified errors from last attempt:\n${formatted}`;
+
+    // Add strategy-specific hints for the primary error
+    const primary = args.classifiedErrors[0];
+    const strategyHint = REPAIR_STRATEGIES[primary.kind];
+    if (strategyHint) {
+      repairContext += `\n\nPrimary repair strategy: ${strategyHint}`;
+    }
+  }
+
+  // Inject relevant Mathlib lemma suggestions for the LLM
+  let lemmaContext = "";
+  if (args.useMathlib) {
+    try {
+      const lemmas = await suggestLemmasForProblem(args.problemText, args.domain, 8);
+      if (lemmas.length > 0) {
+        const lemmaList = lemmas
+          .map((l) => `${l.name} : ${l.type_signature}  -- ${l.description}`)
+          .join("\n");
+        lemmaContext = `\n\nRelevant Mathlib lemmas you can use directly (no need to reprove):\n${lemmaList}`;
+      }
+    } catch {
+      // Lemma suggestion is best-effort; don't block proof generation
+    }
+  }
+
   return chatJson({
-    system: PROVE_STEP_SYSTEM,
+    system: systemPrompt,
     user: JSON.stringify(
       {
         problemText: args.problemText,
+        theoremType: args.theoremType ?? null,
         method: args.method,
         step,
         prior_steps: args.steps.filter((s) => s.index < args.stepIndex),
@@ -28,7 +71,7 @@ export async function proveOneStep(args: {
       },
       null,
       2,
-    ),
+    ) + repairContext + lemmaContext,
     schema: proveStepResponseSchema,
     schemaName: "proveStepResponse",
   });
@@ -38,6 +81,8 @@ export type ProveStepRepairResult = {
   step: ProofStep;
   /** Only `/api/verify` may set session `ok`; repair leaves idle or signals unavailable. */
   buildStatus: Extract<BuildStatus, "idle" | "unavailable">;
+  classifiedErrors?: ClassifiedError[];
+  attempts: number;
 };
 
 export async function proveStepWithRepair(args: {
@@ -45,9 +90,12 @@ export async function proveStepWithRepair(args: {
   method: MethodOption;
   stepIndex: number;
   theoremType: string;
+  useMathlib?: boolean;
+  domain?: MathDomain;
 }): Promise<ProveStepRepairResult> {
   const steps = [...args.session.steps];
   let buildLog: string | undefined;
+  let classifiedErrors: ClassifiedError[] | undefined;
   const hasLaterSteps = steps.some((s) => s.index > args.stepIndex);
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
@@ -56,7 +104,11 @@ export async function proveStepWithRepair(args: {
       method: args.method,
       steps,
       stepIndex: args.stepIndex,
+      theoremType: args.theoremType,
       buildLog,
+      classifiedErrors,
+      useMathlib: args.useMathlib,
+      domain: args.domain,
     });
     const idx = steps.findIndex((s) => s.index === args.stepIndex);
     steps[idx] = {
@@ -70,6 +122,7 @@ export async function proveStepWithRepair(args: {
       theoremType: args.theoremType,
       stepCodes: stepCodesUpTo(steps, args.stepIndex),
       appendSorry: hasLaterSteps,
+      useMathlib: args.useMathlib,
     });
     const result = await verifyLeanSource(args.session.id, source, {
       allowSorry: true,
@@ -81,17 +134,22 @@ export async function proveStepWithRepair(args: {
         status: "pending",
         build_log: result.log,
       };
-      return { step: steps[idx], buildStatus: "unavailable" };
+      return { step: steps[idx], buildStatus: "unavailable", attempts: attempt + 1 };
     }
     if (result.ok) {
       steps[idx] = { ...steps[idx], status: "ok", build_log: result.log };
-      return { step: steps[idx], buildStatus: "idle" };
+      return { step: steps[idx], buildStatus: "idle", attempts: attempt + 1 };
     }
+
+    // Classify errors for targeted repair
     buildLog = result.log;
+    classifiedErrors = classifyLeanErrors(result.log);
     steps[idx] = { ...steps[idx], status: "fail", build_log: result.log };
   }
   return {
     step: steps.find((s) => s.index === args.stepIndex)!,
     buildStatus: "idle",
+    classifiedErrors,
+    attempts: MAX_RETRIES,
   };
 }

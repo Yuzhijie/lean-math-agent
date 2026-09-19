@@ -1,0 +1,15 @@
+# Python SymPy compute server
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies
+COPY scripts/requirements.txt* ./
+RUN pip install --no-cache-dir -r requirements.txt 2>/dev/null || pip install --no-cache-dir sympy flask flask-cors
+
+# Copy compute server
+COPY scripts/compute-server.py .
+
+EXPOSE 8765
+
+CMD ["python", "compute-server.py"]

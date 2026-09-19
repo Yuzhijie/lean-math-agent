@@ -2,13 +2,14 @@ import { NextResponse } from "next/server";
 import { assembleLeanSource, stepCodesUpTo } from "@/lib/lean/assemble";
 import { proveStepWithRepair } from "@/lib/llm/prove-step";
 import { LlmError } from "@/lib/llm/client";
-import { getSession, updateSession } from "@/lib/session-store";
+import { getSessionAsync, updateSession } from "@/lib/session-store";
 
 export async function POST(req: Request) {
   const body = (await req.json()) as {
     session_id?: string;
     step_index?: number;
     theorem_type?: string;
+    use_mathlib?: boolean;
   };
   if (!body.session_id?.trim() || typeof body.step_index !== "number") {
     return NextResponse.json(
@@ -16,7 +17,7 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
-  const session = getSession(body.session_id);
+  const session = await getSessionAsync(body.session_id);
   if (!session) {
     return NextResponse.json({ error: "session not found" }, { status: 404 });
   }
@@ -36,6 +37,7 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
+  const useMathlib = body.use_mathlib ?? true;
   if (!session.steps.some((s) => s.index === body.step_index)) {
     return NextResponse.json({ error: "step not found" }, { status: 400 });
   }
@@ -46,6 +48,8 @@ export async function POST(req: Request) {
       method,
       stepIndex: body.step_index,
       theoremType,
+      useMathlib,
+      domain: session.math_domain,
     });
     const steps = session.steps.map((s) =>
       s.index === proved.index ? proved : s,
@@ -55,6 +59,7 @@ export async function POST(req: Request) {
       theoremName: session.theorem_name ?? "problem",
       theoremType,
       stepCodes: stepCodesUpTo(steps, body.step_index),
+      useMathlib,
     });
     const updated = updateSession(session.id, {
       steps,

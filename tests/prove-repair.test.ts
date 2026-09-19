@@ -43,7 +43,12 @@ const session: Session = {
   ],
   assembled_lean: "",
   build_status: "idle",
+  pipeline_stage: "solving",
+  formal_validated: false,
+  validation_results: [],
+  sorry_labels: [],
   created_at: 1,
+  updated_at: 1,
 };
 
 describe("proveStepWithRepair", () => {

@@ -1,6 +1,15 @@
 name = "lean_sandbox"
-version = "0.1.0"
+version = "0.2.0"
 defaultTargets = ["LeanSandbox"]
+
+[[require]]
+name = "mathlib"
+git = "https://github.com/leanprover-community/mathlib4"
+rev = "v4.33.1"
 
 [[lean_lib]]
 name = "LeanSandbox"
+
+[[lean_exe]]
+name = "lean-server"
+root = "LeanServer"

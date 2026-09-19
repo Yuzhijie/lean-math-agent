@@ -70,4 +70,17 @@ describeLean("LeanSandbox integration", () => {
     expect(res.ok).toBe(false);
     expect(res.status).toBe("fail");
   });
+
+  it("verifyLeanSource tries server mode then falls back to spawn", async () => {
+    // This test verifies the integration: verifyLeanSource should work
+    // regardless of whether server mode is available, falling back to spawn.
+    const src = assembleLeanSource({
+      theoremName: "fallback_test",
+      theoremType: "(n : Nat) : n + 0 = n",
+      stepCodes: ["rfl"],
+    });
+    const res = await verifyLeanSource("fallback-test", src);
+    expect(res.status).toBe("ok");
+    expect(res.ok).toBe(true);
+  });
 });

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   enumerateResponseSchema,
   planResponseSchema,
+  generateProblemResponseSchema,
 } from "@/lib/schemas";
 
 const method = (id: string) => ({
@@ -60,6 +61,50 @@ describe("enumerateResponseSchema", () => {
             confidence: 1,
           },
         ],
+      }),
+    ).toThrow();
+  });
+});
+
+describe("generateProblemResponseSchema leniency", () => {
+  const problem = (overrides: Record<string, unknown> = {}) => ({
+    statement: "求方程 x^2 - 5x + 6 = 0 的所有实数解。",
+    answer: "x = 2 或 x = 3",
+    hints: ["因式分解", "试根", "韦达定理"],
+    grade_level: "high",
+    difficulty: "standard",
+    domain: "algebra",
+    suggested_techniques: ["algebraic_manipulation"],
+    source_inspiration: "课本习题",
+    estimated_solve_time: "5分钟",
+    ...overrides,
+  });
+
+  it("trims hints to at most 5 instead of rejecting", () => {
+    const parsed = generateProblemResponseSchema.parse({
+      problems: [problem({ hints: ["h1", "h2", "h3", "h4", "h5", "h6", "h7"] })],
+    });
+    expect(parsed.problems[0].hints).toEqual(["h1", "h2", "h3", "h4", "h5"]);
+  });
+
+  it("accepts null diagram_svg and coerces to undefined", () => {
+    const parsed = generateProblemResponseSchema.parse({
+      problems: [problem({ diagram_svg: null })],
+    });
+    expect(parsed.problems[0].diagram_svg).toBeUndefined();
+  });
+
+  it("passes through a real diagram_svg string", () => {
+    const parsed = generateProblemResponseSchema.parse({
+      problems: [problem({ diagram_svg: "<svg></svg>" })],
+    });
+    expect(parsed.problems[0].diagram_svg).toBe("<svg></svg>");
+  });
+
+  it("still rejects an empty hints array", () => {
+    expect(() =>
+      generateProblemResponseSchema.parse({
+        problems: [problem({ hints: [] })],
       }),
     ).toThrow();
   });
