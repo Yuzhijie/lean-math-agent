@@ -185,7 +185,7 @@ See `.env.example`:
 - `LEAN_SANDBOX_PATH` — Path to lean-sandbox directory
 - `LEAN_BUILD_TIMEOUT_MS` — Lean compilation timeout
 - `LLM_RETRY_*`, `LLM_CACHE_*` — Retry and cache settings
-- `COMPUTE_SERVER_URL` — Python SymPy server URL
+- `COMPUTE_ENGINE_URL` — Python SymPy server URL
 
 ## Running
 
