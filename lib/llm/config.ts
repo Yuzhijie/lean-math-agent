@@ -91,6 +91,12 @@ export interface LlmConfig {
    * (LLM_REASONING_TOKEN_BUDGET, default 16384).
    */
   reasoningTokenBudget: number;
+  /**
+   * How the reasoning effort is sent (LLM_REASONING_PARAM): "auto" (default)
+   * uses OpenRouter's `reasoning: { effort }` object on openrouter.ai and
+   * OpenAI's top-level `reasoning_effort` elsewhere; the other values force one.
+   */
+  reasoningParam: "auto" | "reasoning_effort" | "reasoning";
   /** Enable in-memory LRU response cache (default false) */
   cacheEnabled: boolean;
   /** Max entries in the LRU cache (default 100) */
@@ -175,6 +181,11 @@ export function loadConfig(): LlmConfig {
       "auto",
     ),
     reasoningTokenBudget: parseNonNegativeInt(process.env.LLM_REASONING_TOKEN_BUDGET, 16_384),
+    reasoningParam: parseChoice(
+      process.env.LLM_REASONING_PARAM,
+      ["auto", "reasoning_effort", "reasoning"] as const,
+      "auto",
+    ),
     cacheEnabled: process.env.LLM_CACHE_ENABLED === "true",
     cacheMaxSize: parsePositiveInt(process.env.LLM_CACHE_MAX_SIZE, 100),
     logLevel,

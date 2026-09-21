@@ -22,7 +22,7 @@ const MESSAGES = [
 const VARS = [
   "LLM_REASONING_EFFORT", "LLM_PROVER_REASONING_EFFORT", "LLM_PLANNER_REASONING_EFFORT",
   "LLM_SAMPLING_PARAMS", "LLM_MAX_TOKENS_PARAM", "LLM_REASONING_TOKEN_BUDGET",
-  "LLM_PROVER_MODEL", "LLM_PROVER_BASE_URL", "LLM_ENABLE_THINKING",
+  "LLM_PROVER_MODEL", "LLM_PROVER_BASE_URL", "LLM_ENABLE_THINKING", "LLM_REASONING_PARAM",
 ];
 
 beforeEach(() => {
@@ -134,8 +134,8 @@ describe("request body for non-OpenAI models", () => {
   });
 
   it("an explicit LLM_REASONING_EFFORT turns any model into a reasoning call (no sampling params, budget added)", async () => {
-    process.env.LLM_BASE_URL = "https://openrouter.ai/api/v1";
-    process.env.LLM_MODEL = "deepseek/deepseek-r1";
+    process.env.LLM_BASE_URL = "https://my-gateway.example/v1";
+    process.env.LLM_MODEL = "deepseek-r1";
     process.env.LLM_REASONING_EFFORT = "low";
     await chatText({ messages: MESSAGES, temperature: 0.8, maxTokens: 1000 });
     const [body] = bodies();
@@ -165,6 +165,40 @@ describe("request body for non-OpenAI models", () => {
     expect(prover.temperature).toBeUndefined();
     expect(general).toMatchObject({ model: "qwen3.8-max", temperature: 0.2, max_tokens: 4096 });
     expect(general.reasoning_effort).toBeUndefined();
+  });
+});
+
+describe("request body through OpenRouter", () => {
+  it("uses openai/gpt-5.6-luna with OpenRouter's reasoning object and max_tokens, no sampling params", async () => {
+    process.env.LLM_BASE_URL = "https://openrouter.ai/api/v1";
+    process.env.LLM_MODEL = "openai/gpt-5.6-luna";
+    process.env.LLM_REASONING_EFFORT = "medium";
+    await chatText({ messages: MESSAGES, temperature: 0.8, topP: 0.9, maxTokens: 4096 });
+    const [body] = bodies();
+    expect(body.model).toBe("openai/gpt-5.6-luna");
+    expect(body.reasoning).toEqual({ effort: "medium" });
+    expect(body.reasoning_effort).toBeUndefined();
+    expect(body.max_tokens).toBe(4096 + 16_384);
+    expect(body.max_completion_tokens).toBeUndefined();
+    expect(body.temperature).toBeUndefined();
+    expect(body.top_p).toBeUndefined();
+    expect(String(vi.mocked(fetch).mock.calls[0][0])).toBe("https://openrouter.ai/api/v1/chat/completions");
+  });
+
+  it("a non-reasoning model on OpenRouter keeps the classic parameters; LLM_REASONING_PARAM can force the field", async () => {
+    process.env.LLM_BASE_URL = "https://openrouter.ai/api/v1";
+    process.env.LLM_MODEL = "qwen/qwen3-235b-a22b";
+    await chatText({ messages: MESSAGES, temperature: 0.2, maxTokens: 1000 });
+    expect(bodies()[0]).toMatchObject({ temperature: 0.2, max_tokens: 1000 });
+    expect(bodies()[0].reasoning).toBeUndefined();
+
+    process.env.LLM_MODEL = "openai/gpt-5.6-luna";
+    process.env.LLM_REASONING_EFFORT = "high";
+    process.env.LLM_REASONING_PARAM = "reasoning_effort";
+    await chatText({ messages: MESSAGES });
+    expect(bodies()[1].reasoning_effort).toBe("high");
+    expect(bodies()[1].reasoning).toBeUndefined();
+    delete process.env.LLM_REASONING_PARAM;
   });
 });
 

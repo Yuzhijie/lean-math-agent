@@ -61,6 +61,10 @@ GPT-5.x, GPT-6 and o-series models are recognised by name: the client omits `tem
 instead of `max_tokens` (plus `LLM_REASONING_TOKEN_BUDGET` for hidden reasoning), and passes
 `reasoning_effort`. Use `LLM_PROVER_REASONING_EFFORT=high` to spend more thinking on proofs only.
 
+Through OpenRouter the same model is `LLM_BASE_URL=https://openrouter.ai/api/v1`,
+`LLM_MODEL=openai/gpt-5.6-luna`, `LLM_API_KEY=sk-or-v1-…`; the effort is then sent as OpenRouter's
+`reasoning: { effort }` object and the cap as `max_tokens`.
+
 ### Prover model (recommended)
 
 Every LLM call carries a role — `prover` (writes Lean), `planner` (formalize / plan / score)

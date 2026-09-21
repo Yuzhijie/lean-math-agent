@@ -230,12 +230,18 @@ export function buildRequestBody(
     (config.samplingParams === "auto" && (effort === "none" || (!byName && effort === undefined)));
 
   const openAiHost = /api\.openai\.com|openai\.azure\.com/i.test(endpoint.baseUrl);
+  // OpenRouter normalises OpenAI models itself: it documents `max_tokens`
+  // and the `reasoning: { effort }` object, and ignores what a model does
+  // not support — so it gets the generic dialect plus its reasoning object.
+  const openRouter = /openrouter\.ai/i.test(endpoint.baseUrl);
   const maxTokensKey =
     config.maxTokensParam === "auto"
-      ? byName || openAiHost
+      ? (byName || openAiHost) && !openRouter
         ? "max_completion_tokens"
         : "max_tokens"
       : config.maxTokensParam;
+  const reasoningParam =
+    config.reasoningParam === "auto" ? (openRouter ? "reasoning" : "reasoning_effort") : config.reasoningParam;
   const maxTokens =
     options.maxTokens === undefined
       ? undefined
@@ -250,7 +256,11 @@ export function buildRequestBody(
     ...(sendSampling && options.topP !== undefined ? { top_p: options.topP } : {}),
     ...(maxTokens !== undefined ? { [maxTokensKey]: maxTokens } : {}),
     ...(options.stop && options.stop.length ? { stop: options.stop } : {}),
-    ...(effort !== undefined ? { reasoning_effort: effort } : {}),
+    ...(effort !== undefined
+      ? reasoningParam === "reasoning"
+        ? { reasoning: { effort } }
+        : { reasoning_effort: effort }
+      : {}),
     ...(config.enableThinking ? { enable_thinking: true } : {}),
     ...(options.jsonMode ? { response_format: { type: "json_object" } } : {}),
   };
