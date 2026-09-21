@@ -117,18 +117,14 @@ export function loadConfig(): LlmConfig {
     // This allows config to be loaded in contexts that don't make API calls.
   }
 
-  const baseUrl = (
-    process.env.LLM_BASE_URL ?? "https://api.openai.com/v1"
-  ).replace(/\/$/, "");
-  const model = process.env.LLM_MODEL ?? "gpt-4.1";
+  const baseUrl = normalizeBaseUrl(process.env.LLM_BASE_URL, "LLM_BASE_URL") ?? "https://api.openai.com/v1";
+  const model = normalizeModel(process.env.LLM_MODEL) ?? "gpt-4.1";
 
   // Parse fallback models
   const fallbackModels = parseFallbackModels(
     process.env.LLM_FALLBACK_MODELS,
   );
-  const fallbackBaseUrl = (
-    process.env.LLM_FALLBACK_BASE_URL ?? baseUrl
-  ).replace(/\/$/, "");
+  const fallbackBaseUrl = normalizeBaseUrl(process.env.LLM_FALLBACK_BASE_URL, "LLM_FALLBACK_BASE_URL") ?? baseUrl;
   const fallbackApiKey = process.env.LLM_FALLBACK_API_KEY ?? apiKey ?? "";
 
   const fallbacks: ModelEndpoint[] = fallbackModels.map((m) => ({
@@ -197,9 +193,45 @@ function roleChain(role: string, defaultBaseUrl: string, defaultApiKey: string):
     process.env[`LLM_${role}_MODEL`] ?? process.env[`LLM_${role}_MODELS`],
   );
   if (models.length === 0) return [];
-  const baseUrl = (process.env[`LLM_${role}_BASE_URL`] ?? defaultBaseUrl).replace(/\/$/, "");
+  const baseUrl = normalizeBaseUrl(process.env[`LLM_${role}_BASE_URL`], `LLM_${role}_BASE_URL`) ?? defaultBaseUrl;
   const apiKey = process.env[`LLM_${role}_API_KEY`] ?? defaultApiKey;
   return models.map((m) => ({ model: m, baseUrl, apiKey }));
+}
+
+/** Thrown by loadConfig for an unusable value; the client reports it without retrying. */
+export class LlmConfigError extends Error {}
+
+/**
+ * Clean up a base URL from the environment. Tolerates the usual copy-paste
+ * accidents — surrounding quotes, whitespace, a repeated `NAME=` prefix, a
+ * pasted `/chat/completions` endpoint, trailing slashes — and rejects
+ * anything that is still not an http(s) URL with a message that names the
+ * variable, instead of letting fetch fail with "Failed to parse URL".
+ */
+export function normalizeBaseUrl(raw: string | undefined, name: string): string | undefined {
+  if (raw === undefined) return undefined;
+  let v = raw.trim().replace(/^["']|["']$/g, "").trim();
+  if (v === "") return undefined;
+  // `LLM_BASE_URL=LLM_BASE_URL=https://…` (the variable name pasted into its own value)
+  v = v.replace(/^(?:[A-Z][A-Z0-9_]*=)+/, "");
+  v = v.replace(/\/+$/, "").replace(/\/(?:chat\/completions|completions)$/i, "").replace(/\/+$/, "");
+  let parsed: URL;
+  try {
+    parsed = new URL(v);
+  } catch {
+    throw new LlmConfigError(`${name} is not a valid URL: "${raw}" (expected e.g. https://api.openai.com/v1)`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new LlmConfigError(`${name} must start with http:// or https:// (got "${raw}")`);
+  }
+  return v;
+}
+
+/** Trim quotes/whitespace and a pasted `LLM_MODEL=` prefix from a model name. */
+function normalizeModel(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  const v = raw.trim().replace(/^["']|["']$/g, "").replace(/^(?:[A-Z][A-Z0-9_]*=)+/, "").trim();
+  return v === "" ? undefined : v;
 }
 
 function parseEffort(raw: string | undefined): ReasoningEffort | undefined {

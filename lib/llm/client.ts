@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { isOpenAiReasoningModel, loadConfig, type LlmConfig, type ModelEndpoint, type ModelRole } from "./config";
+import { isOpenAiReasoningModel, loadConfig, LlmConfigError, type LlmConfig, type ModelEndpoint, type ModelRole } from "./config";
 import { buildCacheKey, getGlobalCache } from "./cache";
 import { parseAndRecordUsage, setPriceTable, type RawUsage } from "./usage-tracker";
 import { logLlm, logDebug, type LlmLogEntry } from "./logger";
@@ -264,7 +264,14 @@ async function rawChatMessages(
   messages: ChatMessage[],
   options: CallOptions = {},
 ): Promise<string> {
-  const config = loadConfig();
+  let config: LlmConfig;
+  try {
+    config = loadConfig();
+  } catch (e) {
+    // A broken .env value is a configuration problem, not a transient error.
+    if (e instanceof LlmConfigError) throw new LlmError(e.message);
+    throw e;
+  }
   setPriceTable(config.prices);
   const role: ModelRole = options.role ?? "general";
   const temp = options.temperature ?? 0.2;

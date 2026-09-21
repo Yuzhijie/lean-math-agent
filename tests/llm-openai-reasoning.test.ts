@@ -167,3 +167,28 @@ describe("request body for non-OpenAI models", () => {
     expect(general.reasoning_effort).toBeUndefined();
   });
 });
+
+describe("environment value hygiene", () => {
+  it("repairs a base URL that has its own variable name pasted into it, or the full endpoint", async () => {
+    process.env.LLM_BASE_URL = "LLM_BASE_URL=https://api.openai.com/v1";
+    expect(loadConfig().primary.baseUrl).toBe("https://api.openai.com/v1");
+    process.env.LLM_BASE_URL = " 'https://api.openai.com/v1/chat/completions' ";
+    expect(loadConfig().primary.baseUrl).toBe("https://api.openai.com/v1");
+    process.env.LLM_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/";
+    expect(loadConfig().primary.baseUrl).toBe("https://dashscope.aliyuncs.com/compatible-mode/v1");
+    process.env.LLM_MODEL = "LLM_MODEL=gpt-5.6-luna";
+    expect(loadConfig().primary.model).toBe("gpt-5.6-luna");
+    await chatText({ messages: MESSAGES });
+    expect(String(vi.mocked(fetch).mock.calls[0][0])).toBe("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions");
+  });
+
+  it("reports an unusable base URL by name instead of a fetch parse failure", async () => {
+    process.env.LLM_BASE_URL = "api.openai.com/v1";
+    await expect(chatText({ messages: MESSAGES })).rejects.toThrow(/LLM_BASE_URL is not a valid URL/);
+    process.env.LLM_BASE_URL = "https://api.openai.com/v1";
+    process.env.LLM_PROVER_MODEL = "gpt-5.6-luna";
+    process.env.LLM_PROVER_BASE_URL = "ftp://prover.test/v1";
+    await expect(chatText({ messages: MESSAGES, role: "prover" })).rejects.toThrow(/LLM_PROVER_BASE_URL must start with http/);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
