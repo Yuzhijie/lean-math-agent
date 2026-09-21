@@ -45,6 +45,22 @@ Required in `.env.local`:
 
 Optional: `LEAN_SANDBOX_PATH`, `LEAN_BUILD_TIMEOUT_MS` (see `.env.example`).
 
+### OpenAI GPT-5.x (e.g. GPT-5.6 Luna)
+
+```bash
+LLM_API_KEY=sk-...
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_MODEL=gpt-5.6-luna
+LLM_REASONING_EFFORT=medium      # none | minimal | low | medium | high | xhigh | max
+LLM_TIMEOUT_MS=300000            # reasoning calls are slower
+LLM_PRICES={"gpt-5.6-luna":{"input":0.2,"output":1.2}}
+```
+
+GPT-5.x, GPT-6 and o-series models are recognised by name: the client omits `temperature`/`top_p`
+(rejected by these models unless `LLM_REASONING_EFFORT=none`), sends `max_completion_tokens`
+instead of `max_tokens` (plus `LLM_REASONING_TOKEN_BUDGET` for hidden reasoning), and passes
+`reasoning_effort`. Use `LLM_PROVER_REASONING_EFFORT=high` to spend more thinking on proofs only.
+
 ### Prover model (recommended)
 
 Every LLM call carries a role — `prover` (writes Lean), `planner` (formalize / plan / score)

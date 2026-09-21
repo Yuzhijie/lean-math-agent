@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { loadConfig, type ModelEndpoint, type ModelRole } from "./config";
+import { isOpenAiReasoningModel, loadConfig, type LlmConfig, type ModelEndpoint, type ModelRole } from "./config";
 import { buildCacheKey, getGlobalCache } from "./cache";
 import { parseAndRecordUsage, setPriceTable, type RawUsage } from "./usage-tracker";
 import { logLlm, logDebug, type LlmLogEntry } from "./logger";
@@ -203,6 +203,60 @@ export function extractJson(text: string): unknown {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// ── Request body (provider dialects) ─────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════
+
+/**
+ * Chat Completions body for one endpoint. OpenAI reasoning models
+ * (GPT-5.x incl. gpt-5.6-luna, GPT-6, o-series) speak a different dialect:
+ * they reject `temperature`/`top_p` unless reasoning is "none", reject
+ * `max_tokens` in favour of `max_completion_tokens` (which also counts the
+ * hidden reasoning tokens), and take `reasoning_effort`. Everything is
+ * overridable from the environment (see LlmConfig).
+ */
+export function buildRequestBody(
+  config: LlmConfig,
+  endpoint: ModelEndpoint,
+  role: ModelRole,
+  messages: ChatMessage[],
+  options: CallOptions,
+): Record<string, unknown> {
+  const byName = isOpenAiReasoningModel(endpoint.model);
+  const effort = config.roleReasoningEffort[role] ?? config.reasoningEffort;
+  const reasoningOn = effort !== undefined ? effort !== "none" : byName;
+
+  const sendSampling =
+    config.samplingParams === "always" ||
+    (config.samplingParams === "auto" && (effort === "none" || (!byName && effort === undefined)));
+
+  const openAiHost = /api\.openai\.com|openai\.azure\.com/i.test(endpoint.baseUrl);
+  const maxTokensKey =
+    config.maxTokensParam === "auto"
+      ? byName || openAiHost
+        ? "max_completion_tokens"
+        : "max_tokens"
+      : config.maxTokensParam;
+  const maxTokens =
+    options.maxTokens === undefined
+      ? undefined
+      : reasoningOn
+        ? options.maxTokens + config.reasoningTokenBudget
+        : options.maxTokens;
+
+  return {
+    model: endpoint.model,
+    messages,
+    ...(sendSampling && options.temperature !== undefined ? { temperature: options.temperature } : {}),
+    ...(sendSampling && options.topP !== undefined ? { top_p: options.topP } : {}),
+    ...(maxTokens !== undefined ? { [maxTokensKey]: maxTokens } : {}),
+    ...(options.stop && options.stop.length ? { stop: options.stop } : {}),
+    ...(effort !== undefined ? { reasoning_effort: effort } : {}),
+    ...(config.enableThinking ? { enable_thinking: true } : {}),
+    ...(options.jsonMode ? { response_format: { type: "json_object" } } : {}),
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // ── Core API call — enhanced with retry, fallback, cache, tracking ───
 // ══════════════════════════════════════════════════════════════════════
 
@@ -292,18 +346,9 @@ async function rawChatMessages(
             Authorization: `Bearer ${endpoint.apiKey}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            model: endpoint.model,
-            temperature: temp,
-            messages,
-            ...(options.topP !== undefined ? { top_p: options.topP } : {}),
-            ...(options.maxTokens !== undefined ? { max_tokens: options.maxTokens } : {}),
-            ...(options.stop && options.stop.length ? { stop: options.stop } : {}),
-            ...(config.enableThinking ? { enable_thinking: true } : {}),
-            ...(jsonMode
-              ? { response_format: { type: "json_object" } }
-              : {}),
-          }),
+          body: JSON.stringify(
+            buildRequestBody(config, endpoint, role, messages, { ...options, temperature: temp, jsonMode }),
+          ),
           signal: AbortSignal.timeout(Math.min(remaining, requestTimeout)),
         });
 
