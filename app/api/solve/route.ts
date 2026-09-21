@@ -1,13 +1,5 @@
 import { NextResponse } from "next/server";
-import { autoformalize, normalizeTheoremType } from "@/lib/llm/autoformalize";
-import { enumerateMethods } from "@/lib/llm/enumerate";
-import { planSteps } from "@/lib/llm/plan";
-import { proofSearch } from "@/lib/search/proof-search";
-import { sorryReport } from "@/lib/lean/sorry-gate";
-import { assembleLeanSource } from "@/lib/lean/assemble";
-import { verifyLeanSource } from "@/lib/lean/sandbox";
-import { tryTrivialProof } from "@/lib/lean/trivial-proof";
-import { validateTheoremStatement } from "@/lib/lean/sanitize";
+import { autoformalize } from "@/lib/llm/autoformalize";
 import {
   createSession,
   updateSession,
@@ -15,15 +7,14 @@ import {
   saveSessionToDisk,
 } from "@/lib/session-store";
 import { LlmError } from "@/lib/llm/client";
+import { withUsageScope } from "@/lib/llm/usage-tracker";
 import { classifyProblem } from "@/lib/llm/classify-problem";
 import { solveComputational } from "@/lib/compute/solver";
 import { solveOptimization } from "@/lib/compute/optimization-solver";
 import { solveFindAll } from "@/lib/compute/find-all-solver";
 import { extractOptimizationStructure } from "@/lib/llm/optimization-extract";
-import {
-  generateNLSolution,
-  generateNLTheoremSolution,
-} from "@/lib/llm/nl-solution";
+import { generateNLSolution } from "@/lib/llm/nl-solution";
+import { runTheoremPipeline, type TheoremPipelineOptions } from "@/lib/pipeline/theorem-pipeline";
 import type {
   LeanProofAttempt,
   MathDomain,
@@ -34,13 +25,8 @@ import type {
 interface SolveRequest {
   problem_text?: string;
   session_id?: string;
-  options?: {
-    skip_autoformalize?: boolean;
-    skip_nl_solution?: boolean;
+  options?: TheoremPipelineOptions & {
     skip_lean_attempt?: boolean;
-    max_sorry?: number;
-    method_selection?: "first" | "best_confidence";
-    use_mathlib?: boolean;
     force_type?: "computational" | "theorem" | "optimization" | "find_all_values";
     skip_cross_validation?: boolean;
     find_all_search_range?: { min: number; max: number };
@@ -68,65 +54,50 @@ export async function POST(req: Request) {
 
   const opts = body.options ?? {};
   const useMathlib = opts.use_mathlib ?? true;
-  const maxSorry = opts.max_sorry ?? 2;
   const events: Array<{ stage: string; detail: string }> = [];
+  const sess: Session = session;
 
-  try {
-    // ── Stage 0: Classify problem type ──────────────────────────────
-    const classification = await classifyProblem(session.problem_text);
-    const problemType = opts.force_type ?? classification.problem_type;
+  // Everything below runs in one usage scope so LLM calls (by role/model)
+  // and Lean verifications are attributed to this run.
+  return withUsageScope(async (metrics) => {
+    try {
+      // ── Stage 0: Classify problem type ──────────────────────────────
+      const classification = await classifyProblem(sess.problem_text);
+      const problemType = opts.force_type ?? classification.problem_type;
 
-    events.push({
-      stage: "classifying",
-      detail: `问题类型: ${problemType}`,
-    });
+      events.push({
+        stage: "classifying",
+        detail: `问题类型: ${problemType}`,
+      });
 
-    if (problemType === "computational") {
-      return await handleComputationalProblem(
-        session,
-        opts,
-        events,
+      let response: Response;
+      if (problemType === "computational") {
+        response = await handleComputationalProblem(sess, opts, events);
+      } else if (problemType === "optimization") {
+        response = await handleOptimizationProblem(sess, opts, events);
+      } else if (problemType === "find_all_values") {
+        response = await handleFindAllProblem(sess, opts, events, classification.find_all_hints);
+      } else {
+        response = await handleTheoremProblem(sess, opts, events, useMathlib, sess.math_domain, metrics);
+      }
+      updateSession(sess.id, { metrics: metrics() });
+      await saveSessionToDisk(sess.id);
+      return response;
+    } catch (e) {
+      updateSession(sess.id, { pipeline_stage: "failed", metrics: metrics() });
+      await saveSessionToDisk(sess.id);
+      const msg = e instanceof LlmError ? e.message : "solve pipeline failed";
+      return NextResponse.json(
+        {
+          error: msg,
+          session_id: sess.id,
+          pipeline_events: events,
+          metrics: metrics(),
+        },
+        { status: 502 },
       );
     }
-
-    if (problemType === "optimization") {
-      return await handleOptimizationProblem(
-        session,
-        opts,
-        events,
-      );
-    }
-
-    if (problemType === "find_all_values") {
-      return await handleFindAllProblem(
-        session,
-        opts,
-        events,
-        classification.find_all_hints,
-      );
-    }
-
-    return await handleTheoremProblem(
-      session,
-      opts,
-      events,
-      useMathlib,
-      maxSorry,
-      session.math_domain,
-    );
-  } catch (e) {
-    updateSession(session.id, { pipeline_stage: "failed" });
-    await saveSessionToDisk(session.id);
-    const msg = e instanceof LlmError ? e.message : "solve pipeline failed";
-    return NextResponse.json(
-      {
-        error: msg,
-        session_id: session.id,
-        pipeline_events: events,
-      },
-      { status: 502 },
-    );
-  }
+  });
 }
 
 // ── Computational Problem Handler ─────────────────────────────────────
@@ -488,420 +459,20 @@ async function handleTheoremProblem(
   opts: NonNullable<SolveRequest["options"]>,
   events: Array<{ stage: string; detail: string }>,
   useMathlib: boolean,
-  maxSorry: number,
-  domain?: MathDomain,
+  domain: MathDomain | undefined,
+  metrics: () => import("@/lib/llm/usage-tracker").RunMetrics,
 ) {
-  // Step 1: Generate natural language solution first (NL first)
-  let nlSolution: NaturalLanguageSolution | undefined;
-
-  if (!opts.skip_nl_solution) {
-    updateSession(session.id, { pipeline_stage: "nl_solving" });
-    events.push({ stage: "nl_solving", detail: "生成自然语言解答..." });
-
-    try {
-      nlSolution = await generateNLSolution({
-        problemText: session.problem_text,
-        problemType: "theorem",
-      });
-
-      updateSession(session.id, { nl_solution: nlSolution });
-      events.push({
-        stage: "nl_solving",
-        detail: `✅ 自然语言解答完成 (${nlSolution.steps.length} 步)`,
-      });
-    } catch (e) {
-      events.push({
-        stage: "nl_solving",
-        detail: `⚠️ 自然语言解答失败: ${e instanceof Error ? e.message : "未知错误"}`,
-      });
-    }
-  }
-
-  // Step 2: Autoformalize (optional)
-  let theoremName = "problem";
-  let theoremType = "";
-  let resolvedDomain = domain;
-  // Statement lock: the `#check` signature of the validated formalization.
-  // Every complete-proof verification below must reproduce it.
-  let frozenSignature: string | undefined;
-
-  if (!opts.skip_autoformalize) {
-    updateSession(session.id, { pipeline_stage: "autoformalizing" });
-    events.push({ stage: "autoformalizing", detail: "开始自动形式化..." });
-
-    const formalResult = await autoformalize({
-      problemText: session.problem_text,
-    });
-
-    updateSession(session.id, {
-      theorem_name: formalResult.theorem_name,
-      theorem_type: formalResult.theorem_type,
-      math_domain: formalResult.domain,
-      formal_statement: formalResult.formal_statement,
-      formal_signature: formalResult.formal_signature,
-      formal_validated: formalResult.accepted,
-      validation_results: formalResult.validation_results,
-    });
-
-    theoremName = formalResult.theorem_name;
-    theoremType = formalResult.theorem_type;
-    resolvedDomain = formalResult.domain;
-    frozenSignature = formalResult.accepted ? formalResult.formal_signature : undefined;
-
-    if (!formalResult.accepted) {
-      const failedLayers = formalResult.validation_results.filter((v) => !v.pass);
-      const detail = failedLayers.map((v) => `Layer ${v.layer}: ${v.detail}`).join("; ");
-      updateSession(session.id, {
-        build_status: "fail",
-        pipeline_stage: "complete",
-      });
-      events.push({
-        stage: "autoformalizing",
-        detail: `❌ 形式化验证未通过 (${failedLayers.length} 层失败)`,
-      });
-      await saveSessionToDisk(session.id);
-      return NextResponse.json(
-        {
-          session_id: session.id,
-          pipeline_events: events,
-          error: "autoformalize_failed",
-          detail: `形式化验证未通过: ${detail}`,
-          validation_results: formalResult.validation_results,
-        },
-        { status: 422 },
-      );
-    }
-
-    events.push({
-      stage: "autoformalizing",
-      detail: `✅ 形式化验证通过 (domain: ${formalResult.domain})`,
-    });
-  } else {
-    theoremName = session.theorem_name ?? "problem";
-    theoremType = session.theorem_type ?? "";
-    if (!theoremType) {
-      return NextResponse.json(
-        { error: "skip_autoformalize requires theorem_type in session" },
-        { status: 400 },
-      );
-    }
-    frozenSignature = session.formal_validated ? session.formal_signature : undefined;
-  }
-
-  // ── Pre-check: try trivial one-liner proofs (rfl, simp, etc.) ──
-  // Avoids the full pipeline for theorems provable by a single tactic.
-  try {
-    const trivialResult = await tryTrivialProof(
-      session.id,
-      theoremName,
-      theoremType,
-      useMathlib,
-      { expectedSignature: frozenSignature },
-    );
-    if (trivialResult) {
-      events.push({
-        stage: "trivial_proof",
-        detail: `✅ 简单证明成功 (${trivialResult.tactic})`,
-      });
-
-      const leanProofAttempt: LeanProofAttempt = {
-        attempted: true,
-        success: true,
-        formal_statement: trivialResult.source,
-        proof_code: trivialResult.source,
-        axioms: trivialResult.verification.axioms?.axioms,
-        statement_locked: frozenSignature !== undefined && trivialResult.verification.signatureMatch === true,
-        verifier: trivialResult.verification.backend,
-      };
-
-      updateSession(session.id, {
-        assembled_lean: trivialResult.source,
-        build_status: "ok",
-        pipeline_stage: "complete",
-        lean_proof_attempt: leanProofAttempt,
-      });
-
-      events.push({
-        stage: "complete",
-        detail: "✅ 完全形式化验证通过（简单证明）",
-      });
-
-      await saveSessionToDisk(session.id);
-
-      return NextResponse.json({
-        session_id: session.id,
-        pipeline_events: events,
-        problem_type: "theorem",
-        nl_solution: nlSolution,
-        lean_proof_attempt: leanProofAttempt,
-        theorem_name: theoremName,
-        theorem_type: theoremType,
-        method: { id: "trivial", title: `简单证明 (${trivialResult.tactic})`, category: "other" },
-        steps: [],
-        sorry_labels: [],
-        fully_verified: true,
-        build_status: "ok",
-        total_attempts: 1,
-        sorry_report: {
-          fully_verified: true,
-          summary: "✅ 完全形式化验证通过",
-          details: [],
-        },
-        assembled_lean: trivialResult.source,
-        build_log: trivialResult.log,
-      });
-    }
-  } catch {
-    // Trivial proof check failed (e.g. Lean unavailable) — continue to full pipeline
-  }
-
-  // Step 3: Enumerate methods
-  updateSession(session.id, { pipeline_stage: "enumerating" });
-  events.push({ stage: "enumerating", detail: "枚举解法..." });
-
-  const enumResult = await enumerateMethods(session.problem_text, resolvedDomain);
-  updateSession(session.id, {
-    methods: enumResult.methods,
-    comparison_summary: enumResult.comparison_summary,
-    out_of_domain_warning: enumResult.out_of_domain_warning ?? undefined,
-  });
-
-  events.push({
-    stage: "enumerating",
-    detail: `找到 ${enumResult.methods.length} 种解法`,
-  });
-
-  // Step 4: Select method
-  const method =
-    opts.method_selection === "first"
-      ? enumResult.methods[0]
-      : enumResult.methods.reduce((best, cur) =>
-          cur.confidence > best.confidence ? cur : best,
-        );
-
-  events.push({
-    stage: "selecting",
-    detail: `选择方法: ${method.title} (${method.category}, confidence: ${method.confidence})`,
-  });
-
-  // Step 5: Plan steps
-  updateSession(session.id, { pipeline_stage: "solving" });
-  events.push({ stage: "planning", detail: "规划证明步骤..." });
-
-  const plan = await planSteps(session.problem_text, method, useMathlib);
-  const proofSteps: import("@/lib/types").ProofStep[] = plan.steps.map((s: { index: number; plain_goal: string; lean_goal: string }) => ({
-    ...s,
-    plain_explanation: "",
-    lean_code: "",
-    status: "pending",
-  }));
-
-  // Statement lock: when autoformalization was accepted, the planner only
-  // produces steps — it may NOT change the theorem being proved. Without a
-  // validated statement, the planner's declaration is used if well-formed.
-  const validatedTheoremName = theoremName;
-  const validatedTheoremType = theoremType;
-  if (frozenSignature === undefined && plan.theorem_type) {
-    const candidateName = plan.theorem_name || theoremName;
-    const candidateType = normalizeTheoremType(plan.theorem_type);
-    if (validateTheoremStatement(candidateName, candidateType).ok) {
-      theoremName = candidateName;
-      theoremType = candidateType;
-    }
-  }
-
-  updateSession(session.id, {
-    theorem_name: theoremName,
-    theorem_type: theoremType,
-    selected_method_id: method.id,
-    steps: proofSteps,
-  });
-
-  events.push({
-    stage: "planning",
-    detail: `规划了 ${proofSteps.length} 个步骤`,
-  });
-
-  // Pre-flight: verify theorem declaration compiles before expensive proof search
-  let preflightSource = assembleLeanSource({
-    theoremName,
-    theoremType,
-    stepCodes: ["sorry"],
+  const outcome = await runTheoremPipeline({
+    session,
+    opts,
     useMathlib,
+    domain,
+    onEvent: (e) => events.push(e),
   });
-  let preflight = await verifyLeanSource(session.id, preflightSource, {
-    allowSorry: true,
-  });
-
-  // If plan's theorem_type fails to compile, fall back to the autoformalize-validated version
-  if (
-    preflight.status !== "unavailable" &&
-    !preflight.ok &&
-    (theoremName !== validatedTheoremName || theoremType !== validatedTheoremType)
-  ) {
-    events.push({
-      stage: "preflight",
-      detail: `⚠️ plan 定理声明编译失败，回退到 autoformalize 版本`,
-    });
-    theoremName = validatedTheoremName;
-    theoremType = validatedTheoremType;
-    updateSession(session.id, {
-      theorem_name: theoremName,
-      theorem_type: theoremType,
-    });
-    preflightSource = assembleLeanSource({
-      theoremName,
-      theoremType,
-      stepCodes: ["sorry"],
-      useMathlib,
-    });
-    preflight = await verifyLeanSource(session.id, preflightSource, {
-      allowSorry: true,
-    });
-  }
-
-  if (preflight.status !== "unavailable" && !preflight.ok) {
-    events.push({
-      stage: "preflight",
-      detail: `⚠️ 定理声明编译失败: ${preflight.log.slice(0, 200)}`,
-    });
-    updateSession(session.id, {
-      build_status: "fail",
-      pipeline_stage: "complete",
-    });
-    await saveSessionToDisk(session.id);
-    return NextResponse.json({
-      session_id: session.id,
-      pipeline_events: events,
-      error: "theorem_declaration_invalid",
-      detail: preflight.log,
-    }, { status: 422 });
-  }
-
-  // Scale sorry budget: allow ~50% of steps to be sorry, minimum 2
-  const adaptiveMaxSorry = opts.max_sorry ?? Math.max(2, Math.ceil(proofSteps.length * 0.5));
-
-  // Step 6: Solve with best-first search
-  events.push({ stage: "solving", detail: "开始最佳优先证明搜索..." });
-
-  const searchResult = await proofSearch({
-    session: {
-      ...session,
-      theorem_name: theoremName,
-      theorem_type: theoremType,
-      steps: proofSteps,
-    },
-    method,
-    theoremType,
-    config: { maxSorry: adaptiveMaxSorry, useMathlib },
-    domain: resolvedDomain,
-    // Goal state at the start of the proof (from the preflight `sorry`).
-    initialGoal: preflight.goals?.[0],
-    onProgress: (progress) => {
-      events.push({
-        stage: "solving",
-        detail: `步骤 ${progress.step + 1}/${progress.total}: ${progress.status}`,
-      });
-    },
-  });
-
-  // Step 7: Final verification
-  updateSession(session.id, {
-    steps: searchResult.steps,
-    sorry_labels: searchResult.sorryLabels,
-  });
-
-  const finalSource = assembleLeanSource({
-    theoremName,
-    theoremType,
-    stepCodes: searchResult.steps.map((s) => s.lean_code).filter(Boolean),
-    useMathlib,
-  });
-
-  // Complete-proof verification: no sorry, standard axioms only, and the
-  // proved statement must match the validated one.
-  const finalResult = await verifyLeanSource(session.id, finalSource, {
-    theoremName,
-    expectedSignature: frozenSignature,
-  });
-  const report = sorryReport(searchResult.sorryLabels);
-
-  // Build lean_proof_attempt from the theorem pipeline results
-  const leanProofAttempt: LeanProofAttempt = {
-    attempted: true,
-    success: finalResult.ok && searchResult.fullyVerified,
-    formal_statement: finalSource,
-    proof_code: finalSource,
-    failure_reason: finalResult.ok
-      ? undefined
-      : `Lean 验证失败: ${finalResult.log.slice(0, 500)}`,
-    limitations: searchResult.sorryLabels.map(
-      (s) => `步骤 ${s.step_index + 1}: ${s.reason}`,
-    ),
-    axioms: finalResult.axioms?.axioms,
-    statement_locked: frozenSignature !== undefined && finalResult.signatureMatch === true,
-    verifier: finalResult.backend,
-  };
-
-  // Update NL solution with proof context if available
-  if (!opts.skip_nl_solution && nlSolution) {
-    try {
-      const enrichedNL = await generateNLTheoremSolution({
-        problemText: session.problem_text,
-        methodTitle: method.title,
-        proofSteps: searchResult.steps.map((s) => ({
-          plain_goal: s.plain_goal,
-          plain_explanation: s.plain_explanation,
-        })),
-      });
-      nlSolution = enrichedNL;
-      updateSession(session.id, { nl_solution: enrichedNL });
-    } catch {
-      // Keep original NL solution
-    }
-  }
-
-  updateSession(session.id, {
-    assembled_lean: finalSource,
-    build_status: finalResult.status === "unavailable" ? "unavailable" : finalResult.ok ? "ok" : "fail",
-    pipeline_stage: "complete",
-    lean_proof_attempt: leanProofAttempt,
-  });
-
-  events.push({
-    stage: "complete",
-    detail: finalResult.ok
-      ? report.summary
-      : `❌ 最终验证失败: ${finalResult.log.slice(0, 200)}`,
-  });
-
-  await saveSessionToDisk(session.id);
-
-  return NextResponse.json({
-    session_id: session.id,
-    pipeline_events: events,
-    problem_type: "theorem",
-    // NL solution (displayed first)
-    nl_solution: nlSolution,
-    // Lean proof attempt (displayed second)
-    lean_proof_attempt: leanProofAttempt,
-    // Theorem-specific details
-    theorem_name: theoremName,
-    theorem_type: theoremType,
-    method: {
-      id: method.id,
-      title: method.title,
-      category: method.category,
-    },
-    steps: searchResult.steps,
-    sorry_labels: searchResult.sorryLabels,
-    fully_verified: searchResult.fullyVerified && finalResult.ok,
-    build_status: finalResult.status === "unavailable" ? "unavailable" : finalResult.ok ? "ok" : "fail",
-    total_attempts: searchResult.totalAttempts,
-    sorry_report: report,
-    assembled_lean: finalSource,
-    build_log: finalResult.log,
-  });
+  return NextResponse.json(
+    { ...outcome.body, pipeline_events: events, metrics: metrics() },
+    { status: outcome.status },
+  );
 }
 
 // ── Lean Formalization Attempt for Computational Problems ─────────────

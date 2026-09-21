@@ -87,6 +87,7 @@ export default function Home() {
     leanProofAttempt,
     solvedProblemType,
     solveEvents,
+    runMetrics,
   } = state;
 
   const [activeTab, setActiveTab] = useState("solution");
@@ -623,6 +624,16 @@ export default function Home() {
                           {leanProofAttempt.verifier && (
                             <span>验证后端：{leanProofAttempt.verifier === "repl" ? "Lean REPL" : leanProofAttempt.verifier}</span>
                           )}
+                          {leanProofAttempt.strategy && (
+                            <span>
+                              证明方式：
+                              {leanProofAttempt.strategy === "whole_proof"
+                                ? `整体证明（${leanProofAttempt.attempts ?? "?"} 个候选 / ${leanProofAttempt.rounds ?? "?"} 轮）`
+                                : leanProofAttempt.strategy === "trivial"
+                                  ? "单策略"
+                                  : `分步搜索（${leanProofAttempt.attempts ?? "?"} 次尝试）`}
+                            </span>
+                          )}
                         </div>
                       )}
 
@@ -650,6 +661,23 @@ export default function Home() {
                 )}
               </TabsContent>
             </Tabs>
+          )}
+
+          {/* ── Run metrics ─────────────────────────────────────────── */}
+          {runMetrics && (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-xs text-muted-foreground animate-fade-in">
+              <span>LLM 调用 {runMetrics.llm_calls} 次</span>
+              <span>
+                tokens {runMetrics.prompt_tokens + runMetrics.completion_tokens}
+                {runMetrics.by_role?.prover ? `（prover ${runMetrics.by_role.prover.requests} 次）` : ""}
+              </span>
+              {runMetrics.estimated_cost !== undefined && <span>估算费用 {runMetrics.estimated_cost.toFixed(4)}</span>}
+              <span>
+                Lean 验证 {runMetrics.lean_verifications} 次
+                {runMetrics.lean_verifications > 0 ? `（${(runMetrics.lean_verify_ms / 1000).toFixed(1)}s）` : ""}
+              </span>
+              <span>总耗时 {(runMetrics.wall_ms / 1000).toFixed(1)}s</span>
+            </div>
           )}
 
           {/* ── Solve Events (collapsible log) ─────────────────────── */}

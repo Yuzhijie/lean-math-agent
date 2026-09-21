@@ -58,3 +58,6 @@ lean-sandbox/.next/
 # python bytecode
 __pycache__/
 *.pyc
+
+# benchmark results
+/bench/results/

@@ -14,5 +14,6 @@ export async function planSteps(
     user: JSON.stringify({ problemText, method }, null, 2),
     schema: planResponseSchema,
     schemaName: "planResponse",
+    role: "planner",
   });
 }

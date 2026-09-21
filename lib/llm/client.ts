@@ -1,10 +1,27 @@
 import { z } from "zod";
-import { loadConfig, type ModelEndpoint } from "./config";
+import { loadConfig, type ModelEndpoint, type ModelRole } from "./config";
 import { buildCacheKey, getGlobalCache } from "./cache";
-import { parseAndRecordUsage, type RawUsage } from "./usage-tracker";
+import { parseAndRecordUsage, setPriceTable, type RawUsage } from "./usage-tracker";
 import { logLlm, logDebug, type LlmLogEntry } from "./logger";
 
 export class LlmError extends Error {}
+
+/** Sampling / routing options shared by every entry point. */
+export interface CallOptions {
+  /** Which endpoint chain to use (default "general"). See ModelRole. */
+  role?: ModelRole;
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
+  /** Stop sequences (useful for completion-style prover models). */
+  stop?: string[];
+  /** Per-call timeout override (ms). Falls back to config LLM_TIMEOUT_MS. */
+  timeoutMs?: number;
+  /** Send `response_format: json_object`. Default: config LLM_JSON_MODE for JSON calls, off for text. */
+  jsonMode?: boolean;
+  /** Bypass the response cache (sampling at temperature > 0 must not be served from it). */
+  noCache?: boolean;
+}
 
 // ── Message types for multi-turn conversations ────────────────────────
 export interface ChatMessage {
@@ -13,39 +30,30 @@ export interface ChatMessage {
 }
 
 // ── Single-turn convenience (backward compatible) ─────────────────────
-export async function chatJson<T>(args: {
+export async function chatJson<T>(args: CallOptions & {
   system: string;
   user: string;
   schema: z.ZodType<T, z.ZodTypeDef, unknown>;
   schemaName: string;
-  temperature?: number;
-  /** Per-call timeout override (ms). Falls back to config LLM_TIMEOUT_MS. */
-  timeoutMs?: number;
   /** Max Zod-validation retries (default 1). Set 0 for time-sensitive calls. */
   maxRetries?: number;
 }): Promise<T> {
+  const { system, user, ...rest } = args;
   return chatJsonMultiTurn({
+    ...rest,
     messages: [
-      { role: "system", content: args.system },
-      { role: "user", content: args.user },
+      { role: "system", content: system },
+      { role: "user", content: user },
     ],
-    schema: args.schema,
-    schemaName: args.schemaName,
-    temperature: args.temperature,
-    timeoutMs: args.timeoutMs,
-    maxRetries: args.maxRetries,
   });
 }
 
 // ── Multi-turn with Zod validation + retry ────────────────────────────
-export async function chatJsonMultiTurn<T>(args: {
+export async function chatJsonMultiTurn<T>(args: CallOptions & {
   messages: ChatMessage[];
   schema: z.ZodType<T, z.ZodTypeDef, unknown>;
   schemaName: string;
-  temperature?: number;
   maxRetries?: number;
-  /** Per-call timeout override (ms). Falls back to config LLM_TIMEOUT_MS. */
-  timeoutMs?: number;
 }): Promise<T> {
   const maxRetries = args.maxRetries ?? 1;
   const messages = [...args.messages];
@@ -58,7 +66,11 @@ export async function chatJsonMultiTurn<T>(args: {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const remaining = deadline - Date.now();
     if (remaining < 5_000) break;
-    const raw = await rawChatMessages(messages, args.temperature, Math.min(remaining, perCallTimeout));
+    const raw = await rawChatMessages(messages, {
+      ...args,
+      timeoutMs: Math.min(remaining, perCallTimeout),
+      jsonMode: args.jsonMode ?? loadConfig().jsonMode,
+    });
     const parsed = tryParse(args.schema, raw);
     if (parsed.ok) return parsed.value;
 
@@ -86,13 +98,45 @@ export async function chatJsonMultiTurn<T>(args: {
 }
 
 // ── Raw text chat (no JSON validation) ────────────────────────────────
-export async function chatText(args: {
+export async function chatText(args: CallOptions & {
   messages: ChatMessage[];
-  temperature?: number;
-  /** Per-call timeout override (ms). Falls back to config LLM_TIMEOUT_MS. */
-  timeoutMs?: number;
 }): Promise<string> {
-  return rawChatMessages(args.messages, args.temperature, args.timeoutMs);
+  // Free text must not be forced into JSON mode (Lean code, prose).
+  return rawChatMessages(args.messages, { ...args, jsonMode: args.jsonMode ?? false });
+}
+
+// ── Sampling: n independent completions ───────────────────────────────
+
+/**
+ * Draw `n` independent samples (parallel requests at `temperature`, default
+ * 0.8). Providers differ in `n` support, so this issues separate requests.
+ * Resolves with the successful samples (duplicates removed) as long as at
+ * least one succeeded; throws the last error when all failed.
+ */
+export async function sampleText(args: CallOptions & {
+  messages: ChatMessage[];
+  n: number;
+}): Promise<string[]> {
+  const n = Math.max(1, Math.floor(args.n));
+  const opts: CallOptions = {
+    ...args,
+    temperature: args.temperature ?? 0.8,
+    jsonMode: args.jsonMode ?? false,
+    noCache: args.noCache ?? true,
+  };
+  const settled = await Promise.allSettled(
+    Array.from({ length: n }, () => rawChatMessages(args.messages, opts)),
+  );
+  const ok: string[] = [];
+  let lastError: unknown;
+  for (const r of settled) {
+    if (r.status === "fulfilled") ok.push(r.value);
+    else lastError = r.reason;
+  }
+  if (ok.length === 0) {
+    throw lastError instanceof Error ? lastError : new LlmError(String(lastError));
+  }
+  return [...new Set(ok)];
 }
 
 // ── Parsing helpers ───────────────────────────────────────────────────
@@ -164,27 +208,40 @@ export function extractJson(text: string): unknown {
 
 async function rawChatMessages(
   messages: ChatMessage[],
-  temperature?: number,
-  timeoutMs?: number,
+  options: CallOptions = {},
 ): Promise<string> {
   const config = loadConfig();
-  const temp = temperature ?? 0.2;
-  const requestTimeout = timeoutMs ?? config.timeoutMs;
+  setPriceTable(config.prices);
+  const role: ModelRole = options.role ?? "general";
+  const temp = options.temperature ?? 0.2;
+  const requestTimeout = options.timeoutMs ?? config.timeoutMs;
+  const jsonMode = options.jsonMode ?? config.jsonMode;
+  // Identity of the sampling configuration, for the cache key.
+  const paramsKey = JSON.stringify({
+    role,
+    topP: options.topP ?? null,
+    maxTokens: options.maxTokens ?? null,
+    stop: options.stop ?? null,
+    jsonMode,
+  });
 
   // Overall deadline: allows ~2.5 sequential request attempts within the
   // per-request timeout budget, preventing unbounded retry/fallback loops
   // from exceeding the caller's time window.
   const deadline = Date.now() + Math.max(requestTimeout * 2.5, 150_000);
 
-  if (!config.primary.apiKey) {
+  // ── Build endpoint chain for the role ────────────────────────────
+  const endpoints: ModelEndpoint[] = config.roles[role] ?? config.roles.general;
+  if (!endpoints.some((e) => e.apiKey)) {
     throw new LlmError("LLM_API_KEY is not set");
   }
 
   // ── Check cache ──────────────────────────────────────────────────
-  if (config.cacheEnabled) {
+  const useCache = config.cacheEnabled && !options.noCache;
+  if (useCache) {
     const cache = getGlobalCache(config.cacheMaxSize);
     const cacheKey = buildCacheKey(
-      config.primary.model,
+      `${endpoints[0].model}|${paramsKey}`,
       messages,
       temp,
     );
@@ -204,8 +261,6 @@ async function rawChatMessages(
     }
   }
 
-  // ── Build endpoint chain: primary + fallbacks ────────────────────
-  const endpoints: ModelEndpoint[] = [config.primary, ...config.fallbacks];
   let lastError = "";
 
   for (let epIdx = 0; epIdx < endpoints.length; epIdx++) {
@@ -241,8 +296,11 @@ async function rawChatMessages(
             model: endpoint.model,
             temperature: temp,
             messages,
+            ...(options.topP !== undefined ? { top_p: options.topP } : {}),
+            ...(options.maxTokens !== undefined ? { max_tokens: options.maxTokens } : {}),
+            ...(options.stop && options.stop.length ? { stop: options.stop } : {}),
             ...(config.enableThinking ? { enable_thinking: true } : {}),
-            ...(config.jsonMode
+            ...(jsonMode
               ? { response_format: { type: "json_object" } }
               : {}),
           }),
@@ -266,7 +324,7 @@ async function rawChatMessages(
           }
 
           // ── Track usage ─────────────────────────────────────
-          const usage = parseAndRecordUsage(endpoint.model, data.usage);
+          const usage = parseAndRecordUsage(endpoint.model, data.usage, { role, latencyMs });
 
           // ── Log ─────────────────────────────────────────────
           const logEntry: LlmLogEntry = {
@@ -288,10 +346,10 @@ async function rawChatMessages(
           });
 
           // ── Cache ───────────────────────────────────────────
-          if (config.cacheEnabled) {
+          if (useCache) {
             const cache = getGlobalCache(config.cacheMaxSize);
             const cacheKey = buildCacheKey(
-              endpoint.model,
+              `${endpoints[0].model}|${paramsKey}`,
               messages,
               temp,
             );

@@ -23,6 +23,7 @@ function verifyResult(partial: Partial<LeanVerifyResult>): LeanVerifyResult {
     messages: [],
     sorries: [],
     goals: [],
+    infos: [],
     durationMs: 1,
     ...partial,
   };

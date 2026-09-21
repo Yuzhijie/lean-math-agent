@@ -5,7 +5,7 @@
 AI-powered Lean 4 math theorem prover + problem solver. Single-page Next.js app.
 - User inputs a math problem in natural language (Chinese)
 - System classifies problem type → dispatches to appropriate solver pipeline
-- Theorem problems: autoformalize → enumerate methods → plan steps → best-first proof search → Lean 4 verify
+- Theorem problems: autoformalize → trivial tactics → whole-proof prover loop (sample → verify → repair with Lean feedback) → enumerate methods → plan steps → best-first proof search → Lean 4 verify
 - Computational problems: equation setup → SymPy solve → cross-validate → NL explanation
 - Also handles: optimization (deterministic search), find-all-values (systematic enumeration)
 
@@ -13,13 +13,13 @@ AI-powered Lean 4 math theorem prover + problem solver. Single-page Next.js app.
 
 | Layer | Tech |
 |-------|------|
-| Frontend | Next.js 15.5.2, React 19, Tailwind v4, shadcn/ui (Radix), KaTeX, Lucide icons |
+| Frontend | Next.js 16, React 19, Tailwind v4, shadcn/ui (Radix), KaTeX, Lucide icons |
 | Backend | Next.js API Routes (TypeScript), Zod validation |
-| LLM | OpenAI-compatible API (configurable via env), fallback chain, LRU cache |
+| LLM | OpenAI-compatible API (configurable via env), role routing (general / prover / planner), sampling, fallback chain, LRU cache, per-run metrics |
 | Lean | Lean 4 + Mathlib v4.33.1 + Batteries + Aesop; verification via persistent `leanprover-community/repl` workers (env reuse, sorry goals, axiom + statement checks), `lake env lean` fallback |
 | Compute | Python SymPy HTTP microservice (9 endpoints) |
 | State | In-memory Map + JSON disk persistence |
-| Tests | Vitest (26 test files) |
+| Tests | Vitest (50 test files) |
 
 ## Project Structure
 
@@ -69,7 +69,7 @@ app/
     plan/route.ts                   # Method → proof step sequence
     prove-step/route.ts             # Single step + repair loop (≤3 retries)
     session/[id]/route.ts           # GET session state
-    solve/route.ts                  # One-click pipeline (classifies + dispatches)
+    solve/route.ts                  # One-click pipeline (classifies + dispatches; theorem path in lib/pipeline)
     solve-compute/route.ts          # Standalone computational solver
     solve-geometry/route.ts         # Geometry solver (Clingo ASP)
     verify/route.ts                 # Final Lean verification
@@ -93,13 +93,17 @@ lib/
     neo4j-client.ts                 # Neo4j driver + query functions
   geometry/
     clingo-solver.ts                # Clingo ASP geometry solver
+  pipeline/
+    theorem-pipeline.ts             # Theorem pipeline shared by /api/solve and /api/solve-stream
+  prover/
+    whole-proof.ts                  # Whole-proof loop: sample k proofs → verify → repair with feedback + suggestions
   llm/
-    client.ts                       # Core LLM client (retry, fallback, cache, Zod)
-    config.ts                       # LLM config from env vars
+    client.ts                       # Core LLM client (roles, sampling, retry, fallback, cache, Zod)
+    config.ts                       # LLM config from env vars (role chains, prices)
     cache.ts                        # LRU response cache (SHA-256 keyed)
     logger.ts                       # Structured JSON logger
-    usage-tracker.ts                # Token usage tracking
-    prompts.ts                      # Legacy prompts (enumerate/plan/prove-step)
+    usage-tracker.ts                # Usage records + per-run scope (RunMetrics)
+    prompts.ts                      # Prompts (enumerate/plan/prove-step/whole-proof, Lean 4 pitfalls)
     agent-prompt.ts                 # Agent system prompts (6 roles + 10 domains)
     autoformalize.ts                # 5-layer autoformalization pipeline
     classify-problem.ts             # Problem type classifier
@@ -111,7 +115,7 @@ lib/
     nl-solution.ts                  # NL solution generation (per problem type)
     optimization-extract.ts         # Optimization structure extraction
     plan.ts                         # Proof step planning
-    prove-step.ts                   # Step proof + repair loop
+    prove-step.ts                   # Step proof (single + k sampled candidates) + repair loop
     answer-verifier.ts              # Programmatic answer verification
     compute-prompts.ts              # Compute pipeline prompts
   lean/
@@ -123,6 +127,9 @@ lib/
     sanitize.ts                     # Forbidden-command filter (#eval, elab, unsafe, axiom, …) + statement validation
     axioms.ts                       # `#print axioms` / `#check` parsing, standard-axiom allowlist
     trivial-proof.ts                # Single-tactic proof attempts (with full verification)
+    feedback.ts                     # Verification result → proof-relative feedback for the model
+    suggest.ts                      # exact?/apply?/simp? probes at the failing goal ("Try this" parsing)
+    loogle.ts                       # Optional Loogle client (LOOGLE_URL) for unknown identifiers
     sorry-gate.ts                   # Sorry labeling + verification report
   agents/
     orchestrator.ts                 # Multi-agent orchestration (parallel fan-out)
@@ -136,9 +143,13 @@ lib/
     sympy-bridge.ts                 # HTTP client to Python compute server
   search/
     priority-queue.ts               # Generic min-heap priority queue
-    proof-search.ts                 # Best-first proof search engine
+    proof-search.ts                 # Best-first search: k candidates/step, parallel verify, goal dedupe, beam
+
+bench/
+  theorems.json                     # Benchmark statements (easy/medium/hard) for `npm run bench`
 
 scripts/
+  bench.ts                          # Prover benchmark (pass rate, wall time, tokens, cost, Lean verifications)
   compute-server.py                 # Python SymPy HTTP server (9 POST endpoints)
   compute-server-v2.py              # Extended server with algebra module
   requirements.txt                  # Python dependencies (sympy, flask)
@@ -166,14 +177,16 @@ docker-compose.yml                  # Service orchestration (web + compute + neo
 nginx.conf                          # Reverse proxy with rate limiting
 .dockerignore                       # Docker build exclusions
 
-tests/                              # 30 Vitest test files (+4 P3 tests)
+tests/                              # 50 Vitest test files (unit + fake REPL + real-Lean integration)
 components/ui/                      # 16 shadcn/ui primitives (+avatar, dropdown-menu, label)
 ```
 
 ## Key Patterns
 
 - **All LLM outputs validated by Zod** — one resample on invalid JSON, then throw
-- **Repair loop**: generate Lean code → compile → classify error → feed back → retry (max 3); the prover is given the Lean goal state (from the verifier's sorry goals) for the step it is working on
+- **Whole-proof first**: the prover role samples complete proofs (`sampleText`, temperature 0.8, no cache) which are verified in parallel; the best failure is repaired with positioned errors / open goals (`lib/lean/feedback.ts`) plus `exact?`/`apply?`/`simp?` suggestions (`lib/lean/suggest.ts`); the statement is always re-assembled from the validated declaration
+- **Repair loop**: generate Lean code → compile → classify error → feed back → retry (max 3); the prover is given the Lean goal state (from the verifier's sorry goals) for the step it is working on; the stepwise search samples k candidates per step, verifies them in parallel and branches on distinct goal states (beam-bounded)
+- **Roles + metrics**: `chatJson`/`sampleText` take `role: "prover" | "planner"`; endpoint chains come from `LLM_PROVER_*` / `LLM_PLANNER_*`; every solve runs in `withUsageScope`, and `verifyLeanSource` records itself, so responses/sessions carry `metrics` (calls, tokens, cost, verifications, wall time)
 - **Sorry degradation**: unprovable steps get `sorry` annotations, pipeline continues
 - **Trusted verification**: every source is sanitized (no `#eval`/`elab`/`unsafe`/`axiom`…); a complete proof counts only if Lean reports no errors, no `sorry` (textually AND via `#print axioms` — catches `admit`), only `propext`/`Classical.choice`/`Quot.sound`, and the proved statement's `#check` signature equals the one recorded when autoformalization was accepted (statement lock — the planner cannot change the theorem)
 - **4 problem types**: computational | theorem | optimization | find_all_values
@@ -185,6 +198,9 @@ components/ui/                      # 16 shadcn/ui primitives (+avatar, dropdown
 See `.env.example`:
 - `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` — LLM configuration
 - `LLM_FALLBACK_*` — Fallback model configuration
+- `LLM_PROVER_*` (incl. `LLM_PROVER_STEPWISE`), `LLM_PLANNER_*`, `LLM_PRICES` — role endpoints and cost table
+- `WHOLE_PROOF_*`, `LEAN_SUGGEST_TIMEOUT_MS`, `LOOGLE_URL` — whole-proof loop, library search
+- `PROOF_SEARCH_SAMPLES`, `PROOF_SEARCH_BEAM`, `PROOF_SEARCH_MAX_EXPANSIONS`, `SOLVE_MULTI_AGENT` — stepwise search
 - `LEAN_SANDBOX_PATH` — Path to lean-sandbox directory
 - `LEAN_BUILD_TIMEOUT_MS` — Per-verification timeout
 - `LEAN_SERVER_MODE` (`server` = REPL workers, `spawn` = `lake env lean` per file), `LEAN_REPL_WORKERS`, `LEAN_REPL_MAX_USES`, `LEAN_SERVER_STARTUP_MS`, `LEAN_ALLOW_NATIVE_DECIDE` — verification backend
@@ -196,8 +212,9 @@ See `.env.example`:
 ```bash
 npm run dev                    # Start Next.js dev server (Turbopack)
 python scripts/compute-server.py  # Start SymPy compute server (port 8765)
-npx vitest run                 # Run all 26 test files
+npx vitest run                 # Run all test files
 npm run build                  # Production build
+npm run bench -- --samples 4   # Prover benchmark over bench/theorems.json (LLM key + Lean sandbox required)
 ```
 
 ## Current Status & TODO
@@ -209,7 +226,8 @@ npm run build                  # Production build
 - Find-all-values solver (systematic search + completeness)
 - Multi-agent evaluation (orchestrator + strategist + critic)
 - Lean REPL worker pool (env reuse, goal states, axiom + statement checks) with spawn fallback
-- LLM client with fallback chain, caching, structured output
+- LLM client with role routing, sampling, fallback chain, caching, structured output, per-run metrics
+- Whole-proof prover loop with Lean feedback + library-search suggestions; best-first stepwise search with sampled candidates
 - Problem generator (by grade/difficulty/domain)
 - Dark theme UI with KaTeX math rendering
 
@@ -221,10 +239,9 @@ npm run build                  # Production build
 
 ### 🔲 Medium Priority (expand capabilities)
 5. **Algebra step-by-step display** — `/api/solve` returns `solution_steps` but UI doesn't render them well
-6. **Lean proof caching** — `lib/lean/` has no result cache; repeated verifications waste time
-7. **Method comparison view** — Show side-by-side evaluation scores for enumerated methods
-8. **Session persistence upgrade** — Replace JSON file store with SQLite or similar
-9. **Test coverage gaps** — No API route integration tests, no frontend component tests
+6. **Method comparison view** — Show side-by-side evaluation scores for enumerated methods
+7. **Session persistence upgrade** — Replace JSON file store with SQLite or similar
+8. **Test coverage gaps** — No API route integration tests, no frontend component tests
 
 ### ✅ Low Priority (P3 — completed in v0.2.0)
 10. **User authentication** (NextAuth) — `lib/auth.ts`, `app/api/auth/`, Prisma adapter

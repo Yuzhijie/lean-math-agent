@@ -627,14 +627,29 @@ describe("backward compatibility", () => {
     expect(body.enable_thinking).toBe(true);
   });
 
-  it("sends response_format: json_object by default", async () => {
+  it("sends response_format: json_object by default for JSON calls", async () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValueOnce(okResponse(TEST_JSON_CONTENT));
+
+    await chatJson({
+      system: "s",
+      user: "u",
+      schema: z.object({ answer: z.number() }),
+      schemaName: "answer",
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
+    expect(body.response_format).toEqual({ type: "json_object" });
+  });
+
+  it("never forces JSON mode on free-text calls (chatText)", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(okResponse("theorem t : True := trivial"));
 
     await chatText({ messages: TEST_MESSAGES });
 
     const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string);
-    expect(body.response_format).toEqual({ type: "json_object" });
+    expect(body.response_format).toBeUndefined();
   });
 
   it("omits response_format when LLM_JSON_MODE=false", async () => {

@@ -4,12 +4,13 @@ import { assembleLeanSource, stepCodesUpTo } from "../lean/assemble";
 import { verifyLeanSource } from "../lean/sandbox";
 import { classifyLeanErrors, formatErrorsForRepair } from "../lean/parse-log";
 import { suggestLemmasForProblem } from "../lean/lemma-cache";
-import { chatJson } from "./client";
+import { chatJson, extractJson, sampleText } from "./client";
+import { loadConfig, type ModelRole } from "./config";
 import { PROVE_STEP_SYSTEM, PROVE_STEP_MATHLIB_SYSTEM, REPAIR_STRATEGIES } from "./prompts";
 
 const MAX_RETRIES = 3;
 
-export async function proveOneStep(args: {
+export interface ProveStepArgs {
   problemText: string;
   method: MethodOption;
   steps: ProofStep[];
@@ -26,7 +27,15 @@ export async function proveOneStep(args: {
    * more useful to the model than the planner's informal `lean_goal`.
    */
   goalState?: string;
-}) {
+}
+
+export interface ProveStepOutput {
+  plain_explanation: string;
+  lean_code: string;
+}
+
+/** The (system, user) prompt for one step — shared by the single call and the sampler. */
+export async function buildProveStepPrompt(args: ProveStepArgs): Promise<{ system: string; user: string }> {
   const step = args.steps.find((s) => s.index === args.stepIndex);
   if (!step) throw new Error(`missing step ${args.stepIndex}`);
 
@@ -69,23 +78,86 @@ export async function proveOneStep(args: {
     }
   }
 
-  return chatJson({
+  return {
     system: systemPrompt,
-    user: JSON.stringify(
-      {
-        problemText: args.problemText,
-        theoremType: args.theoremType ?? null,
-        method: args.method,
-        step,
-        prior_steps: args.steps.filter((s) => s.index < args.stepIndex),
-        build_log: args.buildLog ?? null,
-      },
-      null,
-      2,
-    ) + goalContext + repairContext + lemmaContext,
+    user:
+      JSON.stringify(
+        {
+          problemText: args.problemText,
+          theoremType: args.theoremType ?? null,
+          method: args.method,
+          step,
+          prior_steps: args.steps.filter((s) => s.index < args.stepIndex),
+          build_log: args.buildLog ?? null,
+        },
+        null,
+        2,
+      ) + goalContext + repairContext + lemmaContext,
+  };
+}
+
+/**
+ * Role for the stepwise (JSON) prover calls. Specialised prover models are
+ * trained on whole proofs, not on `{plain_explanation, lean_code}` JSON, so
+ * when a dedicated prover endpoint is configured the stepwise calls stay on
+ * the general chain unless LLM_PROVER_STEPWISE=true. Without a dedicated
+ * prover the "prover" role is the general chain anyway (and keeps the
+ * metrics attribution by role).
+ */
+export function stepwiseRole(): ModelRole {
+  if (process.env.LLM_PROVER_STEPWISE === "true") return "prover";
+  const cfg = loadConfig();
+  const dedicated = cfg.roles.prover[0]?.model !== cfg.roles.general[0]?.model ||
+    cfg.roles.prover[0]?.baseUrl !== cfg.roles.general[0]?.baseUrl;
+  return dedicated ? "general" : "prover";
+}
+
+/** One step from the prover (deterministic, validated, cached). */
+export async function proveOneStep(args: ProveStepArgs): Promise<ProveStepOutput> {
+  const { system, user } = await buildProveStepPrompt(args);
+  return chatJson({
+    system,
+    user,
     schema: proveStepResponseSchema,
     schemaName: "proveStepResponse",
+    role: stepwiseRole(),
   });
+}
+
+/**
+ * `n` independent candidates for a step (temperature sampling, no cache),
+ * deduplicated by lean_code and validated. Falls back to a single
+ * `proveOneStep` call when none of the samples parses.
+ */
+export async function proveStepCandidates(
+  args: ProveStepArgs & { n: number; temperature?: number },
+): Promise<ProveStepOutput[]> {
+  if (args.n <= 1) return [await proveOneStep(args)];
+  const { system, user } = await buildProveStepPrompt(args);
+  const samples = await sampleText({
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+    n: args.n,
+    role: stepwiseRole(),
+    temperature: args.temperature ?? 0.7,
+    jsonMode: loadConfig().jsonMode,
+  });
+  const out: ProveStepOutput[] = [];
+  const seen = new Set<string>();
+  for (const text of samples) {
+    try {
+      const parsed = proveStepResponseSchema.parse(extractJson(text));
+      const key = parsed.lean_code.trim();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(parsed);
+    } catch {
+      // unparsable sample — skip
+    }
+  }
+  return out.length > 0 ? out : [await proveOneStep(args)];
 }
 
 export type ProveStepRepairResult = {

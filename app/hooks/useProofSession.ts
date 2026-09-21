@@ -10,6 +10,7 @@ import type {
   ProofStep,
   StepStatus,
 } from "@/lib/types";
+import type { RunMetrics } from "@/lib/llm/usage-tracker";
 
 // ── State ──────────────────────────────────────────────────────────────
 
@@ -40,6 +41,8 @@ export interface ProofSessionState {
   leanProofAttempt: LeanProofAttempt | null;
   solvedProblemType: "computational" | "theorem" | null;
   solveEvents: Array<{ stage: string; detail: string }>;
+  /** What the last solve run consumed (LLM calls/tokens, Lean verifications, wall time). */
+  runMetrics: RunMetrics | null;
 
   // autoformalize failure detail
   autoformalizeDetail: string | null;
@@ -123,6 +126,7 @@ export type Action =
       buildStatus?: BuildStatus;
       buildLog?: string;
       solveEvents: Array<{ stage: string; detail: string }>;
+      metrics?: RunMetrics;
     }
 
   // solve progress (streaming)
@@ -175,6 +179,7 @@ export const INITIAL_STATE: ProofSessionState = {
   leanProofAttempt: null,
   solvedProblemType: null,
   solveEvents: [],
+  runMetrics: null,
   autoformalizeDetail: null,
   validationResults: null,
   busy: null,
@@ -240,6 +245,7 @@ function reducer(
         leanProofAttempt: null,
         solvedProblemType: null,
         solveEvents: [],
+        runMetrics: null,
         autoformalizeDetail: null,
         validationResults: null,
         error: null,
@@ -357,6 +363,7 @@ function reducer(
         assembledLean: action.assembledLean ?? "",
         buildStatus: action.buildStatus ?? "idle",
         buildLog: action.buildLog ?? "",
+        runMetrics: action.metrics ?? null,
         busy: null,
       };
     }

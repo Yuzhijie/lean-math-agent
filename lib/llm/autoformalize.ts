@@ -80,6 +80,7 @@ export async function autoformalize(args: {
       user: `Formalize the following math problem as a Lean 4 theorem statement:\n\n${args.problemText}${retryContext}`,
       schema: formalizeResponseSchema,
       schemaName: "formalizeResponse",
+      role: "planner",
     });
 
     // Normalize theorem_type to always start with ':'
@@ -284,6 +285,7 @@ Return JSON: { "is_non_trivial": boolean, "reasoning": string (Chinese) }`,
       }),
       schemaName: "nonTrivialityCheck",
       temperature: 0,
+      role: "planner",
     });
 
     return {
@@ -316,6 +318,7 @@ async function layerBackTranslation(
       schema: backTranslationSchema,
       schemaName: "backTranslation",
       temperature: 0,
+      role: "planner",
     });
 
     // Step 3b: Compare original and back-translated NL
@@ -343,6 +346,7 @@ Rate equivalence 0-1 and explain any discrepancies.`,
       }),
       schemaName: "equivalenceCheck",
       temperature: 0,
+      role: "planner",
     });
 
     return {
@@ -404,6 +408,7 @@ ${JSON.stringify(formal.numerical_instances, null, 2)}`,
       }),
       schemaName: "numericalVerification",
       temperature: 0,
+      role: "planner",
     });
 
     return {
@@ -461,6 +466,7 @@ Return JSON: { "all_relevant": boolean, "suspicious": string[], "analysis": stri
       }),
       schemaName: "hypothesisRelevance",
       temperature: 0,
+      role: "planner",
     });
 
     return {
@@ -521,6 +527,7 @@ Fix the theorem_name and/or theorem_type to make it compile. Keep the same mathe
       }),
       schemaName: "repairTheoremType",
       temperature: 0,
+      role: "planner",
     });
 
     repaired.theorem_type = normalizeTheoremType(repaired.theorem_type);

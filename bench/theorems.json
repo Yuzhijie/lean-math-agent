@@ -1,0 +1,18 @@
+[
+  { "id": "nat_add_zero", "difficulty": "easy", "name": "nat_add_zero", "type": "(n : ℕ) : n + 0 = n" },
+  { "id": "add_comm_nat", "difficulty": "easy", "name": "add_comm_nat", "type": "(a b : ℕ) : a + b = b + a" },
+  { "id": "logic_and", "difficulty": "easy", "name": "logic_and", "type": "(p q : Prop) (hp : p) (hq : q) : p ∧ q ∧ p" },
+  { "id": "exists_square", "difficulty": "easy", "name": "exists_square", "type": ": ∃ n : ℕ, n * n = 49" },
+  { "id": "linear_solve", "difficulty": "easy", "name": "linear_solve", "type": "(x : ℝ) (h : 2 * x + 3 = 7) : x = 2" },
+  { "id": "dvd_trans_int", "difficulty": "easy", "name": "dvd_trans_int", "type": "(a b c : ℤ) (h1 : a ∣ b) (h2 : b ∣ c) : a ∣ c" },
+  { "id": "sq_sum_nonneg", "difficulty": "easy", "name": "sq_sum_nonneg", "type": "(x y : ℝ) : 0 ≤ x ^ 2 + y ^ 2" },
+  { "id": "recurrence_value", "difficulty": "medium", "name": "recurrence_value", "type": "(f : ℕ → ℕ) (hf : ∀ n, f (n + 1) = f n + 2) (h0 : f 0 = 1) : f 3 = 7" },
+  { "id": "amgm_two", "difficulty": "medium", "name": "amgm_two", "type": "(x y : ℝ) : x * y ≤ (x ^ 2 + y ^ 2) / 2" },
+  { "id": "even_square", "difficulty": "medium", "name": "even_square", "type": "(n : ℕ) (h : Even n) : Even (n ^ 2)" },
+  { "id": "prime_two", "difficulty": "medium", "name": "prime_two", "type": ": Nat.Prime 2" },
+  { "id": "abs_bound", "difficulty": "medium", "name": "abs_bound", "type": "(a b : ℝ) (h : |a - b| < 1) (h2 : |b| < 2) : |a| < 3" },
+  { "id": "sqrt_four", "difficulty": "medium", "name": "sqrt_four", "type": ": Real.sqrt 4 = 2" },
+  { "id": "gauss_sum", "difficulty": "hard", "name": "gauss_sum", "type": "(n : ℕ) : (∑ i ∈ Finset.range (n + 1), i) * 2 = n * (n + 1)" },
+  { "id": "square_mod_four", "difficulty": "hard", "name": "square_mod_four", "type": "(n : ℕ) : n ^ 2 % 4 = 0 ∨ n ^ 2 % 4 = 1" },
+  { "id": "ratio_ge_two", "difficulty": "hard", "name": "ratio_ge_two", "type": "(a b : ℝ) (ha : 0 < a) (hb : 0 < b) : 2 ≤ a / b + b / a" }
+]

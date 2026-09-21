@@ -31,6 +31,7 @@ export async function evaluateMethods(args: {
     user: userMessage,
     schema: evaluateResponseSchema,
     schemaName: "evaluateResponse",
+    role: "planner",
   });
 
   return {

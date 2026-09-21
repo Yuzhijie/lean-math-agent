@@ -11,6 +11,7 @@ import type {
   ProofStep,
   StepStatus,
 } from "@/lib/types";
+import type { RunMetrics } from "@/lib/llm/usage-tracker";
 import type { Action, ProofSessionState } from "./useProofSession";
 
 type ApiErrorBody = { error?: string };
@@ -340,7 +341,8 @@ export function useProofActions(
                 assembledLean: data.assembled_lean as string | undefined,
                 buildStatus: data.build_status as BuildStatus | undefined,
                 buildLog: data.build_log as string | undefined,
-                solveEvents: [],
+                solveEvents: (data.pipeline_events as Array<{ stage: string; detail: string }> | undefined) ?? [],
+                metrics: data.metrics as RunMetrics | undefined,
               });
             } else if (event.type === "error") {
               throw new Error((event.error as string) ?? "solve pipeline failed");

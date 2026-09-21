@@ -78,6 +78,7 @@ vi.mock("@/lib/lean/sandbox", () => ({
       backend: "repl",
       messages: [],
       sorries: [],
+      infos: [],
       goals: opts?.allowSorry ? ["n : Nat\n⊢ n + 0 = n"] : [],
       axioms: complete ? { axioms: ["propext"], disallowed: [], usesSorry: false, usesNative: false } : undefined,
       signature: VALIDATED_SIG,

@@ -23,6 +23,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { BuildStatus } from "../types";
+import { recordVerification } from "../llm/usage-tracker";
 import { parseLeanLog } from "./parse-log";
 import { getReplPool, ReplError, replLauncherFromEnv, type ReplCommandResponse } from "./repl";
 import { sanitizeLeanSource, splitHeader, stripCommentsAndStrings } from "./sanitize";
@@ -76,6 +77,11 @@ export interface LeanVerifyResult {
   sorries: LeanSorryInfo[];
   /** Goals at each sorry, in source order (empty strings in spawn mode). */
   goals: string[];
+  /**
+   * Info-level output (positions stripped): `#print axioms` / `#check`
+   * results, and "Try this: …" suggestions from `exact?`/`apply?`/`simp?`.
+   */
+  infos: string[];
   /** Axiom report for `theoremName`, when it was checked. */
   axioms?: AxiomReport;
   /** Pretty-printed type of `theoremName` (`#check @name`), when requested. */
@@ -84,6 +90,8 @@ export interface LeanVerifyResult {
   signatureMatch?: boolean;
   /** Set when the source was rejected before Lean ran. */
   rejected?: string;
+  /** True when served from the verification cache (durationMs is then 0). */
+  cached?: boolean;
   durationMs: number;
 }
 
@@ -220,6 +228,19 @@ export async function verifyLeanSource(
   opts: VerifyLeanOpts = {},
 ): Promise<LeanVerifyResult> {
   const started = Date.now();
+  const result = await verifyLeanSourceUncounted(sessionId, source, opts, started);
+  // Attribute the verification to the running pipeline (usage scope), so
+  // the solve response can report how much Lean work a run needed.
+  recordVerification(result.cached ? "cache" : result.backend, Date.now() - started);
+  return result;
+}
+
+async function verifyLeanSourceUncounted(
+  sessionId: string,
+  source: string,
+  opts: VerifyLeanOpts,
+  started: number,
+): Promise<LeanVerifyResult> {
   const base = (partial: Partial<LeanVerifyResult>): LeanVerifyResult => ({
     ok: false,
     log: "",
@@ -228,6 +249,7 @@ export async function verifyLeanSource(
     messages: [],
     sorries: [],
     goals: [],
+    infos: [],
     durationMs: Date.now() - started,
     ...partial,
   });
@@ -250,7 +272,7 @@ export async function verifyLeanSource(
   // 3. Cache.
   const cacheKey = buildVerifyCacheKey(source, opts);
   const cached = cacheGet(cacheKey);
-  if (cached) return { ...cached, durationMs: 0 };
+  if (cached) return { ...cached, durationMs: 0, cached: true };
 
   const avail = await checkLeanAvailable();
   if (!avail.ok) {
@@ -574,6 +596,7 @@ function deriveVerdict(
     messages,
     sorries: raw.sorries,
     goals: raw.sorries.map((s) => s.goal),
+    infos: raw.infos,
     axioms,
     signature,
     signatureMatch,

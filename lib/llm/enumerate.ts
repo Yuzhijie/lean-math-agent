@@ -16,5 +16,6 @@ export async function enumerateMethods(
     user: `Problem:\n${problemText}`,
     schema: enumerateResponseSchema,
     schemaName: "enumerateResponse",
+    role: "planner",
   });
 }

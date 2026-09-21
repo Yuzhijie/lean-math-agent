@@ -35,6 +35,14 @@ export class PriorityQueue<T> {
     return [...this.heap];
   }
 
+  /** Keep only the `keep` best items (beam search). */
+  prune(keep: number): void {
+    if (keep < 0 || this.heap.length <= keep) return;
+    const sorted = [...this.heap].sort(this.compare);
+    this.heap = sorted.slice(0, keep);
+    // A sorted array is a valid min-heap.
+  }
+
   private bubbleUp(idx: number): void {
     while (idx > 0) {
       const parent = Math.floor((idx - 1) / 2);

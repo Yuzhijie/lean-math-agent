@@ -39,6 +39,7 @@ export async function runStrategist(
     user: userMessage,
     schema: strategistResponseSchema,
     schemaName: "strategistResponse",
+    role: "planner",
   });
 
   // Ensure each method has the assigned technique tags

@@ -1,3 +1,17 @@
+/**
+ * Best-first stepwise proof search.
+ *
+ * Each search state is a partial proof (steps 0..i-1 verified, with the
+ * Lean goal state facing step i). Expanding a state samples `samplesPerStep`
+ * candidate tactic blocks for step i from the prover, verifies all of them
+ * in parallel (prefix + trailing `sorry`), and pushes one child per
+ * distinct resulting goal state — so genuinely different tactics branch,
+ * identical outcomes do not. When no candidate verifies, the best failure
+ * is repaired sequentially (`maxRetriesPerStep` rounds with Lean's errors
+ * in the prompt), then a single-tactic fallback is tried, and finally the
+ * step is degraded to `sorry` within the sorry budget. The queue is a beam
+ * of `maxQueueSize` states ordered by progress and penalties.
+ */
 import type {
   ClassifiedError,
   MathDomain,
@@ -6,9 +20,9 @@ import type {
   Session,
   SorryLabel,
 } from "../types";
-import { proveOneStep } from "../llm/prove-step";
+import { proveOneStep, proveStepCandidates, type ProveStepOutput } from "../llm/prove-step";
 import { assembleLeanSource, stepCodesUpTo } from "../lean/assemble";
-import { verifyLeanSource } from "../lean/sandbox";
+import { verifyLeanSource, type LeanVerifyResult } from "../lean/sandbox";
 import { classifyLeanErrors } from "../lean/parse-log";
 import { labelSorry } from "../lean/sorry-gate";
 import { tryTrivialTactic } from "../lean/trivial-proof";
@@ -16,19 +30,36 @@ import { PriorityQueue } from "./priority-queue";
 
 // ── Configuration ─────────────────────────────────────────────────────
 
-interface ProofSearchConfig {
-  maxRetriesPerStep: number;  // repair attempts per step (default 3)
-  maxSorry: number;           // max sorry-labeled steps before giving up (default 2)
-  maxQueueSize: number;       // max states in the priority queue (default 5)
-  useMathlib: boolean;        // use Mathlib imports (default true)
+export interface ProofSearchConfig {
+  /** Sequential repair attempts per expansion after the sampled candidates all fail (default 3). */
+  maxRetriesPerStep: number;
+  /** Max sorry-labeled steps before a branch is abandoned (default 2). */
+  maxSorry: number;
+  /** Beam width: states kept in the queue (default 5). */
+  maxQueueSize: number;
+  /** Use Mathlib imports (default true). */
+  useMathlib: boolean;
+  /** Candidates sampled per expansion (default PROOF_SEARCH_SAMPLES, 2). */
+  samplesPerStep: number;
+  /** Safety cap on expansions (default 40). */
+  maxExpansions: number;
 }
 
-const DEFAULT_CONFIG: ProofSearchConfig = {
-  maxRetriesPerStep: 3,
-  maxSorry: 2,
-  maxQueueSize: 5,
-  useMathlib: true,
-};
+function envNumber(name: string, dflt: number): number {
+  const v = Number(process.env[name]);
+  return process.env[name] !== undefined && process.env[name] !== "" && Number.isFinite(v) ? v : dflt;
+}
+
+function defaultConfig(): ProofSearchConfig {
+  return {
+    maxRetriesPerStep: 3,
+    maxSorry: 2,
+    maxQueueSize: envNumber("PROOF_SEARCH_BEAM", 5),
+    useMathlib: true,
+    samplesPerStep: Math.max(1, Math.floor(envNumber("PROOF_SEARCH_SAMPLES", 2))),
+    maxExpansions: envNumber("PROOF_SEARCH_MAX_EXPANSIONS", 40),
+  };
+}
 
 // ── Proof State ───────────────────────────────────────────────────────
 
@@ -49,6 +80,8 @@ export interface ProofSearchResult {
   fullyVerified: boolean;
   totalAttempts: number;
   bestScore: number;
+  /** States expanded. */
+  expansions: number;
 }
 
 // ── Scoring ───────────────────────────────────────────────────────────
@@ -57,23 +90,18 @@ function scoreState(state: ProofState, totalSteps: number): number {
   const progress = state.currentStepIndex / Math.max(totalSteps, 1);
   const sorryPenalty = state.sorryCount * 2;
   const errorPenalty = state.errorCount * 0.5;
-  // Lower score = higher priority
-  // Progress (0-1, negate to reward progress) + penalties
+  // Lower score = higher priority: reward progress, penalise sorries/errors.
   return -progress + sorryPenalty + errorPenalty;
 }
 
-// ── Deduplication ─────────────────────────────────────────────────────
-
-function codeHash(steps: ProofStep[]): string {
-  return steps.map((s) => s.lean_code || "").join("|");
+/** Identity of a child state for deduplication: the goal it faces, else its code. */
+function childKey(stepIdx: number, goalState: string | undefined, code: string): string {
+  const goal = goalState?.replace(/\s+/g, " ").trim();
+  return goal ? `${stepIdx}:goal:${goal}` : `${stepIdx}:code:${code.trim()}`;
 }
 
 // ── Main Search ───────────────────────────────────────────────────────
 
-/**
- * Best-first proof search that manages alternative proof attempts.
- * For each pending step, tries generation → compile → repair → alternative tactics → sorry degradation.
- */
 export async function proofSearch(args: {
   session: Session;
   method: MethodOption;
@@ -88,18 +116,15 @@ export async function proofSearch(args: {
     status: "proving" | "ok" | "fail" | "sorry";
   }) => void;
 }): Promise<ProofSearchResult> {
-  const config = { ...DEFAULT_CONFIG, ...args.config };
+  const config: ProofSearchConfig = { ...defaultConfig() };
+  for (const [k, v] of Object.entries(args.config ?? {})) {
+    if (v !== undefined) (config as unknown as Record<string, unknown>)[k] = v;
+  }
   const totalSteps = args.session.steps.length;
-
-  // Initialize with plan steps
-  const initialSteps: ProofStep[] = args.session.steps.map((s) => ({
-    ...s,
-    lean_code: "",
-    status: "pending" as const,
-  }));
+  const theoremName = args.session.theorem_name ?? "problem";
 
   const initialState: ProofState = {
-    steps: initialSteps,
+    steps: args.session.steps.map((s) => ({ ...s, lean_code: "", status: "pending" as const })),
     currentStepIndex: 0,
     score: 0,
     sorryCount: 0,
@@ -108,30 +133,48 @@ export async function proofSearch(args: {
     goalState: args.initialGoal,
   };
 
-  // Priority queue: lower score = higher priority
   const queue = new PriorityQueue<ProofState>((a, b) => a.score - b.score);
   queue.push(initialState);
 
   let bestState = initialState;
   let totalAttempts = 0;
-  const seenCodes = new Set<string>();
+  let expansions = 0;
+  const seenChildren = new Set<string>();
 
-  while (queue.size > 0) {
+  const pushChild = (child: ProofState, code: string): boolean => {
+    const key = childKey(child.currentStepIndex, child.goalState, code);
+    if (seenChildren.has(key)) return false;
+    seenChildren.add(key);
+    child.score = scoreState(child, totalSteps);
+    queue.push(child);
+    queue.prune(config.maxQueueSize);
+    return true;
+  };
+
+  const verifyPrefix = (steps: ProofStep[], stepIdx: number): Promise<LeanVerifyResult> =>
+    verifyLeanSource(
+      args.session.id,
+      assembleLeanSource({
+        theoremName,
+        theoremType: args.theoremType,
+        stepCodes: stepCodesUpTo(steps, stepIdx),
+        appendSorry: stepIdx < totalSteps - 1,
+        useMathlib: config.useMathlib,
+      }),
+      { allowSorry: true },
+    );
+
+  while (queue.size > 0 && expansions < config.maxExpansions) {
     const state = queue.pop()!;
-
-    // Skip if we've exceeded sorry budget
     if (state.sorryCount > config.maxSorry) continue;
+    expansions++;
 
-    // Track best state (most progress)
-    if (state.currentStepIndex > bestState.currentStepIndex) {
-      bestState = state;
-    }
+    if (state.currentStepIndex > bestState.currentStepIndex) bestState = state;
 
-    // All steps proved?
+    // ── Goal: all steps proved → final assembly must verify ────────────
     if (state.currentStepIndex >= totalSteps) {
-      // Verify final assembly
       const source = assembleLeanSource({
-        theoremName: args.session.theorem_name ?? "problem",
+        theoremName,
         theoremType: args.theoremType,
         stepCodes: state.steps.map((s) => s.lean_code).filter(Boolean),
         useMathlib: config.useMathlib,
@@ -140,236 +183,228 @@ export async function proofSearch(args: {
       if (result.ok) {
         return {
           steps: state.steps,
-          sorryLabels: state.steps
-            .filter((s) => s.status === "sorry")
-            .map((s) => s.sorry_label!),
+          sorryLabels: state.steps.filter((s) => s.status === "sorry").map((s) => s.sorry_label!),
           fullyVerified: state.sorryCount === 0,
           totalAttempts,
           bestScore: state.score,
+          expansions,
         };
       }
-      // Final verification failed — continue search
-      continue;
+      continue; // final verification failed — explore other branches
     }
 
-    // Try to prove the current step
     const stepIdx = state.currentStepIndex;
-    args.onProgress?.({
-      step: stepIdx,
-      total: totalSteps,
-      status: "proving",
-    });
+    args.onProgress?.({ step: stepIdx, total: totalSteps, status: "proving" });
 
+    const baseArgs = {
+      problemText: args.session.problem_text,
+      method: args.method,
+      steps: state.steps,
+      stepIndex: stepIdx,
+      theoremType: args.theoremType,
+      useMathlib: config.useMathlib,
+      domain: args.domain,
+      goalState: state.goalState,
+    };
+
+    let stepSolved = false;
     let buildLog: string | undefined;
     let classifiedErrors: ClassifiedError[] | undefined;
-    let stepSolved = false;
+    let failedCandidates: Array<{ gen: ProveStepOutput; result: LeanVerifyResult }> = [];
 
-    for (
-      let attempt = 0;
-      attempt < config.maxRetriesPerStep;
-      attempt++
-    ) {
-      totalAttempts++;
+    // ── 1. Sample k candidates and verify them in parallel ─────────────
+    let candidates: ProveStepOutput[] = [];
+    try {
+      const raw = await proveStepCandidates({ ...baseArgs, n: config.samplesPerStep });
+      const codes = new Set<string>();
+      candidates = raw.filter((c) => {
+        const key = c.lean_code.trim();
+        if (!key || codes.has(key)) return false;
+        codes.add(key);
+        return true;
+      });
+    } catch {
+      state.errorCount++;
+    }
+    totalAttempts += candidates.length;
 
-      try {
-        const gen = await proveOneStep({
-          problemText: args.session.problem_text,
-          method: args.method,
-          steps: state.steps,
-          stepIndex: stepIdx,
-          theoremType: args.theoremType,
-          buildLog,
-          classifiedErrors,
-          useMathlib: config.useMathlib,
-          domain: args.domain,
-          goalState: state.goalState,
-        });
+    if (candidates.length > 0) {
+      const verified = await Promise.all(
+        candidates.map(async (gen) => {
+          const newSteps = [...state.steps];
+          newSteps[stepIdx] = {
+            ...newSteps[stepIdx],
+            plain_explanation: gen.plain_explanation,
+            lean_code: gen.lean_code,
+            status: "pending",
+          };
+          return { gen, newSteps, result: await verifyPrefix(newSteps, stepIdx) };
+        }),
+      );
 
-        // Deduplicate
-        const hash = `${stepIdx}:${gen.lean_code}`;
-        if (seenCodes.has(hash)) {
-          // Same code as before — try with higher temperature
-          buildLog = buildLog
-            ? `${buildLog}\n[NOTE: previous attempt produced identical code, trying alternative]`
-            : "[NOTE: duplicate code detected, trying alternative approach]";
+      // Lean unavailable — cannot verify anything; accept the first candidate.
+      const unavailable = verified.find((v) => v.result.status === "unavailable");
+      if (unavailable) {
+        const steps = [...unavailable.newSteps];
+        steps[stepIdx] = { ...steps[stepIdx], status: "ok", build_log: unavailable.result.log };
+        pushChild(
+          { ...state, steps, currentStepIndex: stepIdx + 1, history: [...state.history, `step ${stepIdx}: unverified`], goalState: undefined },
+          unavailable.gen.lean_code,
+        );
+        args.onProgress?.({ step: stepIdx, total: totalSteps, status: "ok" });
+        continue;
+      }
+
+      for (const v of verified) {
+        if (!v.result.ok) {
+          failedCandidates.push({ gen: v.gen, result: v.result });
           continue;
         }
-        seenCodes.add(hash);
-
-        const newSteps = [...state.steps];
-        newSteps[stepIdx] = {
-          ...newSteps[stepIdx],
-          plain_explanation: gen.plain_explanation,
-          lean_code: gen.lean_code,
-          status: "pending",
-        };
-
-        // Verify
-        const source = assembleLeanSource({
-          theoremName: args.session.theorem_name ?? "problem",
-          theoremType: args.theoremType,
-          stepCodes: stepCodesUpTo(newSteps, stepIdx),
-          appendSorry: stepIdx < totalSteps - 1,
-          useMathlib: config.useMathlib,
-        });
-        const result = await verifyLeanSource(args.session.id, source, {
-          allowSorry: true,
-        });
-
-        if (result.status === "unavailable") {
-          // Lean not available — can't verify, accept the code
-          newSteps[stepIdx] = {
-            ...newSteps[stepIdx],
-            status: "ok",
-            build_log: result.log,
-          };
-          stepSolved = true;
-          break;
-        }
-
-        if (result.ok) {
-          newSteps[stepIdx] = {
-            ...newSteps[stepIdx],
-            status: "ok",
-            build_log: result.log,
-          };
-          // Advance to next step. The goal at the trailing `sorry` is the
-          // state the next step starts from.
-          const nextState: ProofState = {
+        const steps = [...v.newSteps];
+        steps[stepIdx] = { ...steps[stepIdx], status: "ok", build_log: v.result.log };
+        const pushed = pushChild(
+          {
             ...state,
-            steps: newSteps,
+            steps,
             currentStepIndex: stepIdx + 1,
             history: [...state.history, `step ${stepIdx}: ok`],
             // trailing sorry = last goal in source order
-            goalState: result.goals?.[result.goals.length - 1] || undefined,
-          };
-          nextState.score = scoreState(nextState, totalSteps);
-          queue.push(nextState);
-          stepSolved = true;
+            goalState: v.result.goals?.[v.result.goals.length - 1] || undefined,
+          },
+          v.gen.lean_code,
+        );
+        if (pushed) stepSolved = true;
+      }
+      if (stepSolved) {
+        args.onProgress?.({ step: stepIdx, total: totalSteps, status: "ok" });
+        continue;
+      }
+    }
 
-          args.onProgress?.({
-            step: stepIdx,
-            total: totalSteps,
-            status: "ok",
-          });
+    // ── 2. Sequential repair from the most promising failure ───────────
+    if (failedCandidates.length > 0) {
+      failedCandidates = failedCandidates.sort(
+        (a, b) => errorCount(a.result) - errorCount(b.result),
+      );
+      const best = failedCandidates[0];
+      state.steps = replaceStep(state.steps, stepIdx, best.gen);
+      buildLog = best.result.log;
+      classifiedErrors = classifyLeanErrors(best.result.log);
+      state.errorCount++;
+    }
+
+    const seenCodes = new Set(candidates.map((c) => c.lean_code.trim()));
+    for (let attempt = 0; attempt < config.maxRetriesPerStep && !stepSolved; attempt++) {
+      totalAttempts++;
+      try {
+        const gen = await proveOneStep({ ...baseArgs, steps: state.steps, buildLog, classifiedErrors });
+        if (seenCodes.has(gen.lean_code.trim())) {
+          buildLog = `${buildLog ?? ""}\n[NOTE: the previous attempt produced identical code; try a different tactic]`.trim();
+          continue;
+        }
+        seenCodes.add(gen.lean_code.trim());
+        const newSteps = replaceStep(state.steps, stepIdx, gen);
+        const result = await verifyPrefix(newSteps, stepIdx);
+
+        if (result.status === "unavailable") {
+          newSteps[stepIdx] = { ...newSteps[stepIdx], status: "ok", build_log: result.log };
+          pushChild(
+            { ...state, steps: newSteps, currentStepIndex: stepIdx + 1, history: [...state.history, `step ${stepIdx}: unverified`], goalState: undefined },
+            gen.lean_code,
+          );
+          stepSolved = true;
           break;
         }
-
-        // Failed — classify errors and retry
+        if (result.ok) {
+          newSteps[stepIdx] = { ...newSteps[stepIdx], status: "ok", build_log: result.log };
+          pushChild(
+            {
+              ...state,
+              steps: newSteps,
+              currentStepIndex: stepIdx + 1,
+              history: [...state.history, `step ${stepIdx}: ok (repair ${attempt + 1})`],
+              goalState: result.goals?.[result.goals.length - 1] || undefined,
+            },
+            gen.lean_code,
+          );
+          stepSolved = true;
+          args.onProgress?.({ step: stepIdx, total: totalSteps, status: "ok" });
+          break;
+        }
+        state.steps = newSteps;
         buildLog = result.log;
         classifiedErrors = classifyLeanErrors(result.log);
         state.errorCount++;
       } catch {
-        // LLM error — skip this attempt
-        state.errorCount++;
+        state.errorCount++; // LLM error — skip this attempt
       }
     }
+    if (stepSolved) continue;
 
-    // If LLM retries exhausted, try trivial single-tactic fallback for this step
-    if (!stepSolved) {
-      const priorCodes = state.steps
-        .filter((s) => s.index < stepIdx && s.lean_code && s.lean_code !== "sorry")
-        .sort((a, b) => a.index - b.index)
-        .map((s) => s.lean_code);
-      const fallback = await tryTrivialTactic(
-        args.session.id,
-        args.session.theorem_name ?? "problem",
-        args.theoremType,
-        priorCodes,
-        config.useMathlib,
+    // ── 3. Single-tactic fallback ──────────────────────────────────────
+    const priorCodes = state.steps
+      .filter((s) => s.index < stepIdx && s.lean_code && s.lean_code !== "sorry")
+      .sort((a, b) => a.index - b.index)
+      .map((s) => s.lean_code);
+    const fallback = await tryTrivialTactic(args.session.id, theoremName, args.theoremType, priorCodes, config.useMathlib);
+    if (fallback) {
+      const newSteps = [...state.steps];
+      newSteps[stepIdx] = {
+        ...newSteps[stepIdx],
+        lean_code: fallback.lean_code,
+        plain_explanation: `自动策略: ${fallback.tactic}`,
+        status: "ok",
+      };
+      pushChild(
+        { ...state, steps: newSteps, currentStepIndex: stepIdx + 1, history: [...state.history, `step ${stepIdx}: trivial (${fallback.tactic})`], goalState: undefined },
+        fallback.lean_code,
       );
-      if (fallback) {
-        const newSteps = [...state.steps];
-        newSteps[stepIdx] = {
-          ...newSteps[stepIdx],
-          lean_code: fallback.lean_code,
-          plain_explanation: `自动策略: ${fallback.tactic}`,
-          status: "ok",
-        };
-        const nextState: ProofState = {
-          ...state,
-          steps: newSteps,
-          currentStepIndex: stepIdx + 1,
-          history: [...state.history, `step ${stepIdx}: trivial (${fallback.tactic})`],
-          goalState: undefined,
-        };
-        nextState.score = scoreState(nextState, totalSteps);
-
-        if (queue.size < config.maxQueueSize) {
-          queue.push(nextState);
-        }
-        stepSolved = true;
-
-        args.onProgress?.({ step: stepIdx, total: totalSteps, status: "ok" });
-      }
+      args.onProgress?.({ step: stepIdx, total: totalSteps, status: "ok" });
+      continue;
     }
 
-    // If step couldn't be solved, degrade to sorry
-    if (!stepSolved && state.sorryCount < config.maxSorry) {
-      const sorrySteps = [...state.steps];
-      const step = sorrySteps[stepIdx];
+    // ── 4. Degrade to sorry within budget ──────────────────────────────
+    if (state.sorryCount < config.maxSorry) {
+      const step = state.steps[stepIdx];
       const sorryLbl = labelSorry(step, classifiedErrors);
+      const sorrySteps = [...state.steps];
       sorrySteps[stepIdx] = {
         ...step,
         lean_code: step.lean_code || "sorry",
         status: "sorry" as const,
         sorry_label: sorryLbl,
       };
-
-      const nextState: ProofState = {
-        ...state,
-        steps: sorrySteps,
-        currentStepIndex: stepIdx + 1,
-        sorryCount: state.sorryCount + 1,
-        history: [...state.history, `step ${stepIdx}: sorry (${sorryLbl.reason})`],
-        goalState: undefined,
-      };
-      nextState.score = scoreState(nextState, totalSteps);
-
-      args.onProgress?.({
-        step: stepIdx,
-        total: totalSteps,
-        status: "sorry",
-      });
-
-      if (queue.size < config.maxQueueSize) {
-        queue.push(nextState);
-      }
+      args.onProgress?.({ step: stepIdx, total: totalSteps, status: "sorry" });
+      pushChild(
+        {
+          ...state,
+          steps: sorrySteps,
+          currentStepIndex: stepIdx + 1,
+          sorryCount: state.sorryCount + 1,
+          history: [...state.history, `step ${stepIdx}: sorry (${sorryLbl.reason})`],
+          goalState: undefined,
+        },
+        `sorry:${sorryLbl.reason}`,
+      );
+    } else {
+      args.onProgress?.({ step: stepIdx, total: totalSteps, status: "fail" });
     }
   }
 
-  // Queue exhausted — try trivial tactic fallback for sorry-degraded steps
-  let finalSteps = [...bestState.steps];
-  let finalSorryLabels = finalSteps
-    .filter((s) => s.status === "sorry")
-    .map((s) => s.sorry_label!);
-  let finalFullyVerified = bestState.sorryCount === 0;
+  // ── Queue exhausted: best partial proof, single-tactic retry on sorries ─
+  const finalSteps = [...bestState.steps];
+  let finalSorryLabels = finalSteps.filter((s) => s.status === "sorry").map((s) => s.sorry_label!);
+  let finalFullyVerified = bestState.sorryCount === 0 && bestState.currentStepIndex >= totalSteps;
 
   if (finalSorryLabels.length > 0) {
-    const theoremName = args.session.theorem_name ?? "problem";
     for (let i = 0; i < finalSteps.length; i++) {
       if (finalSteps[i].status !== "sorry") continue;
-      const priorCodes = finalSteps
-        .slice(0, i)
-        .filter((s) => s.lean_code)
-        .map((s) => s.lean_code);
-      const fallback = await tryTrivialTactic(
-        args.session.id,
-        theoremName,
-        args.theoremType,
-        priorCodes,
-        config.useMathlib,
-      );
+      const priorCodes = finalSteps.slice(0, i).filter((s) => s.lean_code).map((s) => s.lean_code);
+      const fallback = await tryTrivialTactic(args.session.id, theoremName, args.theoremType, priorCodes, config.useMathlib);
       if (fallback) {
-        finalSteps[i] = {
-          ...finalSteps[i],
-          lean_code: fallback.lean_code,
-          status: "ok" as const,
-        };
-        finalSorryLabels = finalSteps
-          .filter((s) => s.status === "sorry")
-          .map((s) => s.sorry_label!);
-        finalFullyVerified = finalSorryLabels.length === 0;
+        finalSteps[i] = { ...finalSteps[i], lean_code: fallback.lean_code, status: "ok" as const };
+        finalSorryLabels = finalSteps.filter((s) => s.status === "sorry").map((s) => s.sorry_label!);
+        finalFullyVerified = finalSorryLabels.length === 0 && bestState.currentStepIndex >= totalSteps;
       }
     }
   }
@@ -380,5 +415,18 @@ export async function proofSearch(args: {
     fullyVerified: finalFullyVerified,
     totalAttempts,
     bestScore: bestState.score,
+    expansions,
   };
+}
+
+// ── helpers ───────────────────────────────────────────────────────────
+
+function errorCount(r: LeanVerifyResult): number {
+  return r.messages.filter((m) => m.severity === "error").length;
+}
+
+function replaceStep(steps: ProofStep[], idx: number, gen: ProveStepOutput): ProofStep[] {
+  const out = [...steps];
+  out[idx] = { ...out[idx], plain_explanation: gen.plain_explanation, lean_code: gen.lean_code, status: "pending" };
+  return out;
 }

@@ -45,6 +45,35 @@ Required in `.env.local`:
 
 Optional: `LEAN_SANDBOX_PATH`, `LEAN_BUILD_TIMEOUT_MS` (see `.env.example`).
 
+### Prover model (recommended)
+
+Every LLM call carries a role — `prover` (writes Lean), `planner` (formalize / plan / score)
+or `general`. Roles without their own model use the general chain, so the app works with a
+single `LLM_MODEL`; proof success rates improve a lot with a Lean-specialised open prover
+served through an OpenAI-compatible API (vLLM, SGLang, Ollama, OpenRouter):
+
+```bash
+LLM_PROVER_MODEL=Goedel-LM/Goedel-Prover-V2-8B
+LLM_PROVER_BASE_URL=http://localhost:8000/v1
+LLM_PROVER_API_KEY=...
+```
+
+### How a theorem gets proved
+
+1. Autoformalize and validate the statement (its `#check` signature is locked).
+2. Try single tactics (`rfl`, `simp`, `omega`, …).
+3. **Whole-proof loop**: sample `WHOLE_PROOF_SAMPLES` complete proofs from the prover, verify
+   them all through the REPL, then repair the most promising failure for `WHOLE_PROOF_ROUNDS`
+   rounds with Lean's positioned errors, open goals, `exact?`/`apply?`/`simp?` suggestions
+   and (optionally) Loogle hits for unknown lemma names.
+4. Otherwise the stepwise pipeline: enumerate methods (single enumerator, or the multi-agent
+   strategists + critic with `SOLVE_MULTI_AGENT=true` / `options.multi_agent`), plan steps,
+   best-first search that samples `PROOF_SEARCH_SAMPLES` candidates per step and branches on
+   distinct goal states, then a final verification.
+
+Every solve response and session carries `metrics`: LLM calls/tokens by role and model, an
+estimated cost (`LLM_PRICES`), Lean verifications by backend and wall time.
+
 ## Run
 
 ```bash
@@ -107,6 +136,7 @@ Automated tests cover schemas, log parsing, assembly, session store, and (when L
 | `npm run build` / `npm start` | Production build / server |
 | `npm test` | Same as `npx vitest run` |
 | `npm run lint` | ESLint |
+| `npm run bench -- [--stepwise] [--samples 4] [--rounds 2] [--only id,…]` | Prover benchmark over `bench/theorems.json` (needs an LLM key + built sandbox); writes `bench/results/*.json` |
 
 ## Docs
 

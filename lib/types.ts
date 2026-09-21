@@ -1,3 +1,4 @@
+import type { RunMetrics } from "./llm/usage-tracker";
 // ── Proof Method Taxonomy (8 categories) ──────────────────────────────
 export const TAXONOMY = [
   "rewrite",
@@ -231,6 +232,8 @@ export interface Session {
   computation_result?: ComputationResult;
   nl_solution?: NaturalLanguageSolution;
   lean_proof_attempt?: LeanProofAttempt;
+  /** What the last solve run consumed (LLM calls/tokens by role, Lean verifications, wall time). */
+  metrics?: RunMetrics;
   created_at: number;
   updated_at: number;
 }
@@ -312,6 +315,12 @@ export interface LeanProofAttempt {
   statement_locked?: boolean;
   /** Which backend produced the verdict. */
   verifier?: "repl" | "spawn" | "none";
+  /** How the proof was found: a one-tactic probe, the whole-proof loop, or stepwise search. */
+  strategy?: "trivial" | "whole_proof" | "stepwise";
+  /** Proof candidates generated (samples or step attempts). */
+  attempts?: number;
+  /** Whole-proof rounds run (sampling + repairs). */
+  rounds?: number;
 }
 
 // ── Generated Problem ────────────────────────────────────────────────
