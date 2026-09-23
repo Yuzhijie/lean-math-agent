@@ -45,3 +45,16 @@ describe("normalizeTheoremType", () => {
     expect(normalizeTheoremType("")).toBe(": ");
   });
 });
+
+describe("normalizeTheoremType (binder form)", () => {
+  it("leaves binder-form signatures alone", () => {
+    expect(normalizeTheoremType("(n : ℕ) : n + 0 = n")).toBe("(n : ℕ) : n + 0 = n");
+    expect(normalizeTheoremType("{α : Type} [Fintype α] (s : Finset α) : s.card ≤ Fintype.card α")).toBe(
+      "{α : Type} [Fintype α] (s : Finset α) : s.card ≤ Fintype.card α",
+    );
+  });
+
+  it("still prefixes a bare proposition that happens to start with a parenthesis", () => {
+    expect(normalizeTheoremType("(2 : ℝ) + 2 = 4")).toBe(": (2 : ℝ) + 2 = 4");
+  });
+});

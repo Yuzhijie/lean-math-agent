@@ -629,9 +629,11 @@ export default function Home() {
                               证明方式：
                               {leanProofAttempt.strategy === "whole_proof"
                                 ? `整体证明（${leanProofAttempt.attempts ?? "?"} 个候选 / ${leanProofAttempt.rounds ?? "?"} 轮）`
-                                : leanProofAttempt.strategy === "trivial"
-                                  ? "单策略"
-                                  : `分步搜索（${leanProofAttempt.attempts ?? "?"} 次尝试）`}
+                                : leanProofAttempt.strategy === "sketch"
+                                  ? `骨架分解（${leanProofAttempt.holes_solved ?? "?"}/${leanProofAttempt.holes ?? "?"} 个子目标）`
+                                  : leanProofAttempt.strategy === "trivial" || leanProofAttempt.strategy === "hammer"
+                                    ? "自动化策略"
+                                    : `分步搜索（${leanProofAttempt.attempts ?? "?"} 次尝试）`}
                             </span>
                           )}
                         </div>

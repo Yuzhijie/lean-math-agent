@@ -4,6 +4,7 @@ import { assembleLeanSource, stepCodesUpTo } from "../lean/assemble";
 import { verifyLeanSource } from "../lean/sandbox";
 import { classifyLeanErrors, formatErrorsForRepair } from "../lean/parse-log";
 import { suggestLemmasForProblem } from "../lean/lemma-cache";
+import { formatPremises, premisesEnabled, retrievePremises } from "../lean/premises";
 import { chatJson, extractJson, sampleText } from "./client";
 import { loadConfig, type ModelRole } from "./config";
 import { PROVE_STEP_SYSTEM, PROVE_STEP_MATHLIB_SYSTEM, REPAIR_STRATEGIES } from "./prompts";
@@ -62,16 +63,23 @@ export async function buildProveStepPrompt(args: ProveStepArgs): Promise<{ syste
     }
   }
 
-  // Inject relevant Mathlib lemma suggestions for the LLM
+  // Inject relevant Mathlib lemma suggestions for the LLM: retrieved for
+  // the current goal when it is known, else keyword matches on the problem.
   let lemmaContext = "";
   if (args.useMathlib) {
     try {
-      const lemmas = await suggestLemmasForProblem(args.problemText, args.domain, 8);
-      if (lemmas.length > 0) {
-        const lemmaList = lemmas
-          .map((l) => `${l.name} : ${l.type_signature}  -- ${l.description}`)
-          .join("\n");
-        lemmaContext = `\n\nRelevant Mathlib lemmas you can use directly (no need to reprove):\n${lemmaList}`;
+      if (args.goalState && premisesEnabled()) {
+        const block = formatPremises(await retrievePremises(args.goalState, { k: 8, context: args.theoremType }));
+        if (block) lemmaContext = `\n\n${block}`;
+      }
+      if (!lemmaContext) {
+        const lemmas = await suggestLemmasForProblem(args.problemText, args.domain, 8);
+        if (lemmas.length > 0) {
+          const lemmaList = lemmas
+            .map((l) => `${l.name} : ${l.type_signature}  -- ${l.description}`)
+            .join("\n");
+          lemmaContext = `\n\nRelevant Mathlib lemmas you can use directly (no need to reprove):\n${lemmaList}`;
+        }
       }
     } catch {
       // Lemma suggestion is best-effort; don't block proof generation

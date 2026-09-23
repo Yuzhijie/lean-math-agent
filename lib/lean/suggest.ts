@@ -42,6 +42,8 @@ export interface SuggestArgs {
   probes?: SearchProbe[];
   /** Overall time budget for the probes (default 60 s). */
   timeoutMs?: number;
+  /** Namespaces opened for the declaration. */
+  opens?: string[];
 }
 
 export interface SuggestResult {
@@ -75,6 +77,7 @@ export async function librarySearchSuggestions(args: SuggestArgs): Promise<Sugge
       theoremType: args.theoremType,
       stepCodes: [...args.prefixTactics, tactic],
       useMathlib: args.useMathlib ?? true,
+      opens: args.opens,
     });
     try {
       const res = await verifyLeanSource(args.sessionId, source, {

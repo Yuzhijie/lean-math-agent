@@ -27,6 +27,8 @@ export function assembleLeanSource(opts: {
   useMathlib?: boolean;
   /** Sorry annotations as comments before each sorry step. */
   sorryLabels?: SorryLabel[];
+  /** Namespaces to open for the declaration (`open A B in` right before `theorem`). */
+  opens?: string[];
 }): string {
   // Resolve imports: explicit > useMathlib default > none
   const resolvedImports =
@@ -65,7 +67,8 @@ export function assembleLeanSource(opts: {
   // Final verify must never silently succeed via empty/`sorry` body.
   // Use `fail` so lake rejects empty assemblies; repair path uses appendSorry.
   const tacticBody = body || (opts.appendSorry ? "sorry" : "fail");
-  return `${LEAN_HEADER}${importLines}theorem ${opts.theoremName} ${opts.theoremType} := by
+  const openLine = opts.opens && opts.opens.length > 0 ? `open ${opts.opens.join(" ")} in\n` : "";
+  return `${LEAN_HEADER}${importLines}${openLine}theorem ${opts.theoremName} ${opts.theoremType} := by
 ${indent(tacticBody)}
 `;
 }

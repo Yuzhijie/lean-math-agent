@@ -5,7 +5,7 @@
 AI-powered Lean 4 math theorem prover + problem solver. Single-page Next.js app.
 - User inputs a math problem in natural language (Chinese)
 - System classifies problem type → dispatches to appropriate solver pipeline
-- Theorem problems: autoformalize → trivial tactics → whole-proof prover loop (sample → verify → repair with Lean feedback) → enumerate methods → plan steps → best-first proof search → Lean 4 verify
+- Theorem problems: autoformalize (candidate voting + counterexample search) → premise retrieval + proof memory → hammer → whole-proof prover loop (sample → verify → repair with Lean feedback) → sketch-and-fill (holes closed by hammer / goal-level tactic search) → enumerate methods → plan steps → best-first proof search → Lean 4 verify
 - Computational problems: equation setup → SymPy solve → cross-validate → NL explanation
 - Also handles: optimization (deterministic search), find-all-values (systematic enumeration)
 
@@ -16,10 +16,10 @@ AI-powered Lean 4 math theorem prover + problem solver. Single-page Next.js app.
 | Frontend | Next.js 16, React 19, Tailwind v4, shadcn/ui (Radix), KaTeX, Lucide icons |
 | Backend | Next.js API Routes (TypeScript), Zod validation |
 | LLM | OpenAI-compatible API (configurable via env), role routing (general / prover / planner), sampling, fallback chain, LRU cache, per-run metrics |
-| Lean | Lean 4 + Mathlib v4.33.1 + Batteries + Aesop; verification via persistent `leanprover-community/repl` workers (env reuse, sorry goals, axiom + statement checks), `lake env lean` fallback |
+| Lean | Lean 4 + Mathlib v4.33.1 + Batteries + Aesop; verification via persistent `leanprover-community/repl` workers (env reuse, sorry goals, tactic mode, axiom + statement checks), `lake env lean` fallback |
 | Compute | Python SymPy HTTP microservice (9 endpoints) |
 | State | In-memory Map + JSON disk persistence |
-| Tests | Vitest (50 test files) |
+| Tests | Vitest (61 test files) |
 
 ## Project Structure
 
@@ -97,6 +97,9 @@ lib/
     theorem-pipeline.ts             # Theorem pipeline shared by /api/solve and /api/solve-stream
   prover/
     whole-proof.ts                  # Whole-proof loop: sample k proofs → verify → repair with feedback + suggestions
+    sketch.ts                       # Sketch-and-fill: skeleton with `have … := by sorry` holes → each hole closed by hammer/goal search → splice → strict verify
+    budget.ts                       # PROOF_BUDGET presets (low/normal/high) for whole-proof, sketch and goal search
+    context.ts                      # Prover context: retrieved premises + recalled proofs as one prompt block; rememberVerifiedProof
   llm/
     client.ts                       # Core LLM client (roles, sampling, retry, fallback, cache, Zod)
     config.ts                       # LLM config from env vars (role chains, prices)
@@ -105,7 +108,7 @@ lib/
     usage-tracker.ts                # Usage records + per-run scope (RunMetrics)
     prompts.ts                      # Prompts (enumerate/plan/prove-step/whole-proof, Lean 4 pitfalls)
     agent-prompt.ts                 # Agent system prompts (6 roles + 10 domains)
-    autoformalize.ts                # 5-layer autoformalization pipeline
+    autoformalize.ts                # Autoformalization: candidate voting (AUTOFORMALIZE_CANDIDATES) + 6 validation layers (elaborate, refute, non-trivial, back-translate, numeric, relevance)
     classify-problem.ts             # Problem type classifier
     enumerate.ts                    # Method enumeration
     equation-setup.ts               # Equation extraction from word problems
@@ -122,8 +125,14 @@ lib/
     assemble.ts                     # Assemble Lean source from steps
     lemma-cache.ts                  # Mathlib lemma index (20+ built-in)
     parse-log.ts                    # Lean error parser (8 error kinds)
-    sandbox.ts                      # verifyLeanSource: sanitize → REPL/spawn → verdict (sorry, axioms, statement lock)
-    repl.ts                         # leanprover-community/repl client: worker pool, header env reuse, timeouts
+    sandbox.ts                      # verifyLeanSource: sanitize → REPL/spawn → verdict (sorry, axioms, statement lock); autoImplicit off prelude
+    repl.ts                         # leanprover-community/repl client: worker pool, header env reuse, tactic mode, timeouts
+    proof-state.ts                  # ProofSession: pinned REPL worker, goal states as handles, apply tactic, replay on worker loss
+    hammer.ts                       # Automation cascade (rfl/decide/simp/omega/norm_num/linarith/nlinarith hints/positivity/aesop/exact?)
+    premises.ts                     # Premise retrieval: BM25 over Mathlib names/statements (built index + curated seed), similar-name hints
+    premise-seed.ts                 # ~700 curated Mathlib lemmas used when no index is built
+    proof-memory.ts                 # Verified proofs stored in .data/proof-memory.json; similar proofs recalled as worked examples
+    refute.ts                       # Counterexample search for statements: `decide` on the negation, Mathlib `plausible`
     sanitize.ts                     # Forbidden-command filter (#eval, elab, unsafe, axiom, …) + statement validation
     axioms.ts                       # `#print axioms` / `#check` parsing, standard-axiom allowlist
     trivial-proof.ts                # Single-tactic proof attempts (with full verification)
@@ -144,12 +153,18 @@ lib/
   search/
     priority-queue.ts               # Generic min-heap priority queue
     proof-search.ts                 # Best-first search: k candidates/step, parallel verify, goal dedupe, beam
+    goal-search.ts                  # Goal-level best-first search in REPL tactic mode (hammer first, k sampled tactics/node, dedupe, beam, per-goal premises)
+    bm25.ts                         # BM25 index + Mathlib-aware tokenizer (≤→le, *→mul, ^2→sq, ℕ→nat …)
 
 bench/
   theorems.json                     # Benchmark statements (easy/medium/hard) for `npm run bench`
+  minif2f-*.json                    # Downloaded by `npm run bench:fetch` (git-ignored)
 
 scripts/
-  bench.ts                          # Prover benchmark (pass rate, wall time, tokens, cost, Lean verifications)
+  bench.ts                          # Prover benchmark: cascade/whole_proof/sketch/stepwise, budgets, proved-by + failure taxonomy
+  fetch-benchmark.ts                # miniF2F (Lean 4) → bench file (`npm run bench:fetch`)
+  build-premise-index.ts            # Mathlib declaration dump → premise index (`npm run premises:build`)
+  lean/DumpDecls.lean               # `lake env lean --run` script exporting theorem statements as JSON lines
   compute-server.py                 # Python SymPy HTTP server (9 POST endpoints)
   compute-server-v2.py              # Extended server with algebra module
   requirements.txt                  # Python dependencies (sympy, flask)
@@ -177,7 +192,7 @@ docker-compose.yml                  # Service orchestration (web + compute + neo
 nginx.conf                          # Reverse proxy with rate limiting
 .dockerignore                       # Docker build exclusions
 
-tests/                              # 50 Vitest test files (unit + fake REPL + real-Lean integration)
+tests/                              # 61 Vitest test files (unit + fake REPL + real-Lean integration)
 components/ui/                      # 16 shadcn/ui primitives (+avatar, dropdown-menu, label)
 ```
 
@@ -186,6 +201,9 @@ components/ui/                      # 16 shadcn/ui primitives (+avatar, dropdown
 - **All LLM outputs validated by Zod** — one resample on invalid JSON, then throw
 - **Whole-proof first**: the prover role samples complete proofs (`sampleText`, temperature 0.8, no cache) which are verified in parallel; the best failure is repaired with positioned errors / open goals (`lib/lean/feedback.ts`) plus `exact?`/`apply?`/`simp?` suggestions (`lib/lean/suggest.ts`); the statement is always re-assembled from the validated declaration
 - **Repair loop**: generate Lean code → compile → classify error → feed back → retry (max 3); the prover is given the Lean goal state (from the verifier's sorry goals) for the step it is working on; the stepwise search samples k candidates per step, verifies them in parallel and branches on distinct goal states (beam-bounded)
+- **REPL tactic mode**: `ProofSession` opens `theorem … := by sorry` once and applies tactics to goal-state handles (milliseconds per step, replayed if the worker dies); the hammer, goal-level search and sketch-and-fill all run on it. Every result is still re-assembled as text and passed through `verifyLeanSource`
+- **Retrieval before generation**: `buildProverContext` (premises for the initial goal + verified proofs of similar theorems) feeds the whole-proof, sketch and goal-search prompts; goal search re-retrieves per node; unknown identifiers get "similar declarations" from the local index
+- **Formalization reliability**: several sampled statements vote by elaborated signature (α-normalised); the winner must survive `decide`/`plausible` counterexample search (layer 6) before any LLM validation layer or proof search is spent on it
 - **Roles + metrics**: `chatJson`/`sampleText` take `role: "prover" | "planner"`; endpoint chains come from `LLM_PROVER_*` / `LLM_PLANNER_*`; every solve runs in `withUsageScope`, and `verifyLeanSource` records itself, so responses/sessions carry `metrics` (calls, tokens, cost, verifications, wall time)
 - **Sorry degradation**: unprovable steps get `sorry` annotations, pipeline continues
 - **Trusted verification**: every source is sanitized (no `#eval`/`elab`/`unsafe`/`axiom`…); a complete proof counts only if Lean reports no errors, no `sorry` (textually AND via `#print axioms` — catches `admit`), only `propext`/`Classical.choice`/`Quot.sound`, and the proved statement's `#check` signature equals the one recorded when autoformalization was accepted (statement lock — the planner cannot change the theorem)
@@ -201,6 +219,9 @@ See `.env.example`:
 - `LLM_PROVER_*` (incl. `LLM_PROVER_STEPWISE`), `LLM_PLANNER_*`, `LLM_PRICES` — role endpoints and cost table
 - `LLM_REASONING_EFFORT`, `LLM_<ROLE>_REASONING_EFFORT`, `LLM_REASONING_TOKEN_BUDGET`, `LLM_SAMPLING_PARAMS`, `LLM_MAX_TOKENS_PARAM`, `LLM_REASONING_PARAM` — OpenAI reasoning-model dialect (GPT-5.x/GPT-6/o-series auto-detected: no temperature/top_p, `max_completion_tokens`, `reasoning_effort`; on openrouter.ai `max_tokens` + `reasoning: { effort }`)
 - `WHOLE_PROOF_*`, `LEAN_SUGGEST_TIMEOUT_MS`, `LOOGLE_URL` — whole-proof loop, library search
+- `PROOF_BUDGET`, `LEAN_TACTIC_TIMEOUT_MS`, `LEAN_HAMMER_BUDGET_MS`, `GOAL_SEARCH_*`, `SKETCH_*` — budgets, hammer, goal-level search, sketch-and-fill
+- `PREMISES_ENABLED`, `PREMISE_INDEX_PATH`, `PREMISES_TOP_K`, `PROOF_MEMORY_*` — premise retrieval and proof memory
+- `AUTOFORMALIZE_CANDIDATES`, `REFUTE_ENABLED`, `REFUTE_TIMEOUT_MS`, `REFUTE_TRIALS` — formalization voting and counterexample search
 - `PROOF_SEARCH_SAMPLES`, `PROOF_SEARCH_BEAM`, `PROOF_SEARCH_MAX_EXPANSIONS`, `SOLVE_MULTI_AGENT` — stepwise search
 - `LEAN_SANDBOX_PATH` — Path to lean-sandbox directory
 - `LEAN_BUILD_TIMEOUT_MS` — Per-verification timeout
@@ -216,6 +237,8 @@ python scripts/compute-server.py  # Start SymPy compute server (port 8765)
 npx vitest run                 # Run all test files
 npm run build                  # Production build
 npm run bench -- --samples 4   # Prover benchmark over bench/theorems.json (LLM key + Lean sandbox required)
+npm run bench:fetch            # Download miniF2F → bench/minif2f-test.json; then: npm run bench -- --file bench/minif2f-test.json --limit 20
+npm run premises:build         # Index the sandbox's Mathlib for premise retrieval (minutes; needs the built sandbox)
 ```
 
 ## Current Status & TODO
@@ -229,6 +252,7 @@ npm run bench -- --samples 4   # Prover benchmark over bench/theorems.json (LLM 
 - Lean REPL worker pool (env reuse, goal states, axiom + statement checks) with spawn fallback
 - LLM client with role routing, sampling, fallback chain, caching, structured output, per-run metrics
 - Whole-proof prover loop with Lean feedback + library-search suggestions; best-first stepwise search with sampled candidates
+- REPL tactic mode: hammer cascade, goal-level best-first search, sketch-and-fill; premise retrieval + proof memory; formalization voting + counterexample search; miniF2F bench with failure taxonomy
 - Problem generator (by grade/difficulty/domain)
 - Dark theme UI with KaTeX math rendering
 

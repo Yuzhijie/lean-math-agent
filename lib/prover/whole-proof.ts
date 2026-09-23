@@ -16,7 +16,8 @@
  */
 import { assembleLeanSource } from "../lean/assemble";
 import { compilingPrefix, formatVerificationFeedback, summarizeFailure, dedent } from "../lean/feedback";
-import { loogleHintsForUnknownIdentifiers } from "../lean/loogle";
+import { loogleHintsForUnknownIdentifiers, unknownIdentifiers } from "../lean/loogle";
+import { localHintsForUnknownIdentifiers } from "../lean/premises";
 import { verifyLeanSource, type LeanVerifyResult } from "../lean/sandbox";
 import { sanitizeLeanBody } from "../lean/sanitize";
 import { formatSuggestions, librarySearchSuggestions } from "../lean/suggest";
@@ -110,6 +111,10 @@ export interface WholeProofArgs {
   sketch?: string;
   /** Goal state at the initial `sorry`, when known. */
   initialGoal?: string;
+  /** Retrieved premises / remembered proofs (prompt block from lib/prover/context.ts). */
+  premises?: string;
+  /** Namespaces opened for the declaration (benchmarks: `open Real Nat in`). */
+  opens?: string[];
   config?: Partial<WholeProofConfig>;
   onProgress?: (p: WholeProofProgress) => void;
 }
@@ -131,6 +136,7 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
       theoremType: args.theoremType,
       stepCodes: [tactics],
       useMathlib: cfg.useMathlib,
+      opens: args.opens,
     });
 
   const done = (partial: Partial<WholeProofResult>): WholeProofResult => ({
@@ -155,6 +161,7 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
         goalState: args.initialGoal,
         problemText: args.problemText,
         sketch: args.sketch,
+        premises: args.premises,
       }),
     },
   ];
@@ -262,6 +269,7 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
           theoremType: args.theoremType,
           prefixTactics: prefix,
           useMathlib: cfg.useMathlib,
+          opens: args.opens,
           timeoutMs: Math.min(60_000, Math.max(5_000, timeLeft() / 2)),
         });
         if (found.suggestions.length > 0) {
@@ -271,8 +279,10 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
         }
       }
     }
-    const loogle = await loogleHintsForUnknownIdentifiers(best.verification.messages.map((m) => m.message));
-    if (loogle) suggestionBlock = suggestionBlock ? `${suggestionBlock}\n\n${loogle}` : loogle;
+    const errorTexts = best.verification.messages.map((m) => m.message);
+    let nameHints = await loogleHintsForUnknownIdentifiers(errorTexts);
+    if (!nameHints) nameHints = await localHintsForUnknownIdentifiers(unknownIdentifiers(errorTexts));
+    if (nameHints) suggestionBlock = suggestionBlock ? `${suggestionBlock}\n\n${nameHints}` : nameHints;
 
     // Keep the conversation short: system + original request + one repair
     // turn (replacing any previous repair turn), so context does not grow

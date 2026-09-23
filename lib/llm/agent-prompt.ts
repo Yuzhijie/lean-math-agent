@@ -12,6 +12,13 @@ Rules:
 - The theorem statement must be a valid Lean 4 proposition (no proof body needed — use "by sorry").
 - Preserve ALL constraints from the original problem (quantifiers, domains, boundaries).
 - Use standard Mathlib types: ℕ, ℤ, ℚ, ℝ for number domains.
+- Faithfulness pitfalls (the statement is later tested for counterexamples, so a mistranslation is caught but wastes time):
+  - ℕ subtraction truncates (\`2 - 3 = 0\`) and ℕ/ℤ division floors: use ℤ/ℚ/ℝ, or add the hypotheses that make them safe, when the problem means real subtraction or division.
+  - "positive integer" ⇒ \`(n : ℕ) (hn : 0 < n)\`; "distinct" ⇒ \`a ≠ b\`; "nonzero" ⇒ \`x ≠ 0\`; keep every such hypothesis, never drop one.
+  - "for all real x" ⇒ \`(x : ℝ)\`; "the answer is k" ⇒ an equation with the concrete value; "find all x such that P" ⇒ \`∀ x, P x ↔ x = … ∨ x = …\`.
+  - Sums/products over ranges: \`∑ i ∈ Finset.range n, f i\` (0 ≤ i < n) or \`Finset.Icc a b\`; check the bounds (off-by-one) against the problem.
+  - Prefer Mathlib predicates: \`Nat.Prime p\`, \`Even n\`, \`Odd n\`, \`a ∣ b\`, \`Nat.gcd\`, \`Nat.Coprime\`, \`x ∈ Set.Icc a b\`, \`Real.sqrt\`, \`Real.log\`, \`Real.exp\`.
+  - Do not weaken (adding hypotheses the problem does not state) or strengthen (dropping hypotheses, widening the domain) the claim.
 - theorem_name should be a descriptive Lean identifier.
 - theorem_type is the type signature after the theorem name (e.g. "(n : ℕ) : n + 0 = n").
 - Provide a natural language restatement that matches the formal statement.

@@ -12,6 +12,12 @@
 //   "#print axioms NAME"  → info line with axioms
 //   "#check @NAME"        → info line `NAME : ∀ (n : Nat), n + 0 = n`
 //   "PRETTY"              → response is emitted in many small chunks
+//   "by decide" + FALSE_STMT / TRUE_STMT → refutation probes: the negation
+//                           decides (no error) / "evaluates to false"; otherwise
+//                           "failed to synthesize Decidable"
+//   "plausible" + PLAUSIBLE_CE / PLAUSIBLE_OK → "Found a counter-example!" error
+//                           / silence; otherwise "Failed to create a `testable`…"
+//   "STDOUT_NOISE"        → a stray non-JSON line is printed before the response
 import { setTimeout as delay } from "node:timers/promises";
 
 let envCounter = 0;
@@ -60,18 +66,47 @@ async function handle(text) {
   if (/(^|\n)\s*import /.test(cmd) && req.env !== undefined) {
     messages.push({ severity: "error", pos: { line: 1, column: 0 }, data: "invalid 'import' command, it must be used in the beginning of the file" });
   }
+  // Positions are computed from the command text, like real Lean's.
+  const cmdLines = cmd.split("\n");
+  const lineOf = (re) => cmdLines.findIndex((l) => re.test(l)) + 1; // 1-based, 0 = not found
+  const theoremLine = lineOf(/^\s*(theorem|lemma|example)\b/) || 1;
   if (cmd.includes("error_here")) {
+    const line = lineOf(/error_here/) || 2;
+    const column = Math.max(0, cmdLines[line - 1].indexOf("error_here"));
     messages.push({
       severity: "error",
-      pos: { line: 2, column: 2 },
-      endPos: { line: 2, column: 12 },
+      pos: { line, column },
+      endPos: { line, column: column + 10 },
       data: "unsolved goals\nn : Nat\n⊢ n + 0 = n",
     });
   }
+  if (/by decide/.test(cmd)) {
+    const line = lineOf(/by decide/) || 1;
+    if (cmd.includes("TRUE_STMT")) {
+      messages.push({ severity: "error", pos: { line, column: 0 }, data: "tactic 'decide' proved that the proposition\n  ¬TRUE_STMT\nis false" });
+    } else if (!cmd.includes("FALSE_STMT")) {
+      messages.push({ severity: "error", pos: { line, column: 0 }, data: "failed to synthesize\n  Decidable (∀ (n : Nat), n - 1 + 1 = n)" });
+    }
+  }
+  if (/\bplausible\b/.test(cmd)) {
+    const line = lineOf(/plausible/) || 1;
+    if (cmd.includes("PLAUSIBLE_CE")) {
+      messages.push({ severity: "error", pos: { line, column: 2 }, data: "Found a counter-example!\nn := 0\nissue: 0 < 0 does not hold\n(0 shrinks)\n-------------------" });
+    } else if (!cmd.includes("PLAUSIBLE_OK")) {
+      messages.push({ severity: "error", pos: { line, column: 2 }, data: "Failed to create a `testable` instance for `∀ (x : ℝ), 0 ≤ x ^ 2`." });
+    }
+  }
   const usesSorry = /\b(sorry|admit)\b/.test(cmd);
   if (usesSorry) {
-    messages.push({ severity: "warning", pos: { line: 1, column: 8 }, endPos: { line: 1, column: 11 }, data: "declaration uses `sorry`" });
-    sorries.push({ proofState: 0, pos: { line: 2, column: 2 }, endPos: { line: 2, column: 7 }, goal: "n : Nat\n⊢ n + 0 = n" });
+    messages.push({ severity: "warning", pos: { line: theoremLine, column: 8 }, endPos: { line: theoremLine, column: 11 }, data: "declaration uses `sorry`" });
+    let proofState = 0;
+    cmdLines.forEach((l, i) => {
+      const re = /\b(sorry|admit)\b/g;
+      let m;
+      while ((m = re.exec(l)) !== null) {
+        sorries.push({ proofState: proofState++, pos: { line: i + 1, column: m.index }, endPos: { line: i + 1, column: m.index + m[0].length }, goal: "n : Nat\n⊢ n + 0 = n" });
+      }
+    });
   }
   const ax = cmd.match(/#print axioms (\S+)/);
   if (ax) {
@@ -98,6 +133,10 @@ async function handle(text) {
   const resp = { env };
   if (sorries.length) resp.sorries = sorries;
   if (messages.length) resp.messages = messages;
+  if (cmd.includes("STDOUT_NOISE")) {
+    process.stdout.write("Unable to find a counter-example\n" + JSON.stringify(resp, null, 1) + "\n\n");
+    return;
+  }
   if (cmd.includes("PRETTY")) {
     const out = JSON.stringify(resp, null, 1) + "\n\n";
     for (const piece of out.match(/.{1,7}/gs) ?? []) {

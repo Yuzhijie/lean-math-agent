@@ -14,7 +14,9 @@
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down",
     "typecheck": "tsc --noEmit",
-    "bench": "tsx scripts/bench.ts"
+    "bench": "tsx scripts/bench.ts",
+    "premises:build": "tsx scripts/build-premise-index.ts",
+    "bench:fetch": "tsx scripts/fetch-benchmark.ts"
   },
   "dependencies": {
     "@next-auth/prisma-adapter": "^1.0.7",

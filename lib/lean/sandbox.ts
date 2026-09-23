@@ -25,7 +25,7 @@ import path from "node:path";
 import type { BuildStatus } from "../types";
 import { recordVerification } from "../llm/usage-tracker";
 import { parseLeanLog } from "./parse-log";
-import { getReplPool, ReplError, replLauncherFromEnv, type ReplCommandResponse } from "./repl";
+import { getReplPool, ReplError, replLauncherFromEnv, type ReplCommandResponse, type ReplWorker } from "./repl";
 import { sanitizeLeanSource, splitHeader, stripCommentsAndStrings } from "./sanitize";
 import {
   classifyAxioms,
@@ -41,6 +41,16 @@ const LAKE_CONCURRENCY = Math.max(
   Math.min(4, Number(process.env.LEAN_LAKE_CONCURRENCY ?? 1)),
 );
 const VERIFY_LOG_FILE = "Verify.lean";
+
+/**
+ * Commands elaborated in front of every verified body. Lean's default
+ * `autoImplicit true` would silently turn a misspelled or undeclared
+ * variable in a statement into an implicit binder (`n = m` with no `m`
+ * becomes `∀ {m n}, n = m`), so a typo could change what is being proved
+ * without any error. Statements must declare everything they use.
+ */
+export const BODY_PRELUDE = "set_option autoImplicit false\n";
+const PRELUDE_LINES = 1;
 
 // Read per call so tests (and a running server whose .env changed) see the
 // current values.
@@ -109,6 +119,14 @@ export type VerifyLeanOpts = {
   wantSignature?: boolean;
   /** Fail unless the signature equals this (normalised) string. */
   expectedSignature?: string;
+  /**
+   * Internal: run on this already-leased REPL worker instead of taking one
+   * from the pool (a ProofSession verifying its own result must not wait
+   * for the worker it is holding).
+   */
+  worker?: ReplWorker;
+  /** Per-call timeout (default: LEAN_REPL_TIMEOUT_MS / LEAN_BUILD_TIMEOUT_MS). */
+  timeoutMs?: number;
 };
 
 // ── Verification result cache ─────────────────────────────────────────
@@ -287,7 +305,7 @@ async function verifyLeanSourceUncounted(
   let raw: RawVerification | undefined;
   if (serverMode() !== "spawn") {
     try {
-      raw = await verifyViaRepl(source, probes);
+      raw = await verifyViaRepl(source, probes, opts.worker, opts.timeoutMs);
     } catch (e) {
       if (e instanceof ReplError && (e.kind === "timeout" || e.kind === "lean")) {
         // A timeout / Lean-level error is a verdict about this source, not
@@ -306,7 +324,7 @@ async function verifyLeanSourceUncounted(
   }
   if (!raw) {
     try {
-      raw = await verifyViaSpawn(sessionId, source, probes);
+      raw = await verifyViaSpawn(sessionId, source, probes, opts.timeoutMs);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return base({ log: parseLeanLog(msg) || msg, status: "fail" });
@@ -359,13 +377,16 @@ interface RawVerification {
 
 // ── REPL path ─────────────────────────────────────────────────────────
 
-async function verifyViaRepl(source: string, probes: Probes): Promise<RawVerification> {
-  const { imports, body, headerLines } = splitHeader(source);
+async function verifyViaRepl(source: string, probes: Probes, leased?: ReplWorker, timeoutMs?: number): Promise<RawVerification> {
+  const { imports, body, headerLines: importLines } = splitHeader(source);
   const pool = getReplPool(sandboxRoot());
-  const resp: ReplCommandResponse = await pool.withWorker(async (worker) => {
+  const run = async (worker: ReplWorker) => {
     const env = await worker.headerEnv(imports);
-    return worker.command({ cmd: body + probes.text, env }, pool.config.commandTimeoutMs);
-  });
+    return worker.command({ cmd: BODY_PRELUDE + body + probes.text, env }, timeoutMs ?? pool.config.commandTimeoutMs);
+  };
+  const resp: ReplCommandResponse = leased ? await run(leased) : await pool.withWorker(run);
+  // Positions come back relative to the command; map them onto the source.
+  const headerLines = importLines - PRELUDE_LINES;
 
   const messages: LeanDiagnostic[] = [];
   const infos: string[] = [];
@@ -401,6 +422,7 @@ async function verifyViaSpawn(
   sessionId: string,
   source: string,
   probes: Probes,
+  timeoutMs?: number,
 ): Promise<RawVerification> {
   const root = sandboxRoot();
   const scratchDir = path.join(root, "Scratch");
@@ -409,11 +431,16 @@ async function verifyViaSpawn(
   // such as the autoformalizer's) must never overwrite each other.
   const safeId = path.basename(sessionId.replace(/\\/g, "/")).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 40);
   const filePath = path.join(scratchDir, `Verify_${safeId}_${randomUUID().slice(0, 8)}.lean`);
-  await fs.writeFile(filePath, source + probes.text, "utf8");
+  // The prelude goes right after the imports so positions shift by exactly
+  // PRELUDE_LINES for everything in the body (mapped back below).
+  const { imports, body } = splitHeader(source);
+  const preludeAt = imports.length ? source.length - body.length : 0;
+  await fs.writeFile(filePath, source.slice(0, preludeAt) + BODY_PRELUDE + source.slice(preludeAt) + probes.text, "utf8");
+  const bodyStartLine = source.slice(0, preludeAt).split("\n").length; // 1-based line of the prelude
   let output: string;
   let exitError: string | undefined;
   try {
-    output = await withLakeSlot(() => runCmd("lake", ["env", "lean", filePath], root, spawnTimeoutMs()));
+    output = await withLakeSlot(() => runCmd("lake", ["env", "lean", filePath], root, timeoutMs ?? spawnTimeoutMs()));
   } catch (e) {
     // Non-zero exit: the output is in the error message.
     exitError = e instanceof Error ? e.message : String(e);
@@ -433,9 +460,10 @@ async function verifyViaSpawn(
     const m = line.match(CLI_MESSAGE_RE);
     if (m) {
       const severity = m[4] as LeanDiagnostic["severity"];
+      const rawLine = parseInt(m[2], 10);
       current = {
         severity,
-        line: parseInt(m[2], 10),
+        line: rawLine >= bodyStartLine ? rawLine - PRELUDE_LINES : rawLine,
         column: parseInt(m[3], 10),
         message: m[5],
       };

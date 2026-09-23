@@ -59,5 +59,6 @@ lean-sandbox/.next/
 __pycache__/
 *.pyc
 
-# benchmark results
+# benchmark results and downloaded benchmark sets
 /bench/results/
+/bench/minif2f-*.json

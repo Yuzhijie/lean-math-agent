@@ -154,6 +154,8 @@ export function wholeProofUserMessage(args: {
   goalState?: string;
   problemText?: string;
   sketch?: string;
+  /** Retrieved premises / remembered proofs (prompt block). */
+  premises?: string;
 }): string {
   const parts: string[] = [];
   parts.push(`Prove the following theorem in Lean 4 with Mathlib.\n\n\`\`\`lean\ntheorem ${args.theoremName} ${args.theoremType} := by\n  sorry\n\`\`\``);
@@ -166,6 +168,7 @@ export function wholeProofUserMessage(args: {
   if (args.sketch) {
     parts.push(`Informal proof sketch (a hint; verify each step formally):\n${args.sketch}`);
   }
+  if (args.premises) parts.push(args.premises);
   parts.push("Return the complete theorem with its proof in one ```lean block.");
   return parts.join("\n\n");
 }
@@ -195,3 +198,83 @@ function indentBlock(s: string): string {
     .map((l) => (l.trim().length ? `  ${l}` : l))
     .join("\n");
 }
+
+// ── Goal-level tactic step (tactic mode search) ───────────────────────
+
+export const TACTIC_STEP_SYSTEM = `You are a Lean 4 + Mathlib tactic expert working goal by goal, like a person in the infoview.
+You are shown the current goal (hypotheses and ⊢), the tactics already applied, and tactics that already FAILED at this goal.
+Reply with exactly ONE tactic on ONE line — no explanation, no code fence, no leading \`by\`. It is applied to the first goal.
+Rules:
+- Prefer a finishing tactic when the goal looks closable: omega, norm_num, linarith, nlinarith [sq_nonneg (a - b), …], positivity, ring, simp, simp_all, decide, aesop, exact <lemma> ….
+- Otherwise make real structural progress: intro x hx / rcases h with ⟨x, hx⟩ / obtain ⟨x, hx⟩ := h / constructor / refine ⟨?_, ?_⟩ / induction n with | zero => … | succ k ih => … / cases h with | inl h => … | inr h => … / by_contra h / push_neg at h / rw [lemma] / rw [lemma] at h / have h2 : P := by <tactic> / calc … (on one line).
+- Several tactics may be combined on the line as (tac1; tac2) or tac1 <;> tac2.
+- Never repeat a tactic listed as failed; never use sorry, admit, native_decide or exact?.
+
+${LEAN4_PITFALLS}`;
+
+export function tacticStepUserMessage(args: {
+  theoremName: string;
+  theoremType: string;
+  goals: string[];
+  history: string[];
+  failed: string[];
+  problemText?: string;
+  premises?: string;
+}): string {
+  const parts: string[] = [];
+  parts.push(`Theorem:\n\`\`\`lean\ntheorem ${args.theoremName} ${args.theoremType}\n\`\`\``);
+  if (args.problemText) parts.push(`Informal statement: ${args.problemText}`);
+  if (args.history.length) parts.push(`Tactics applied so far:\n${args.history.map((t, i) => `${i + 1}. ${t}`).join("\n")}`);
+  parts.push(`Current goal (the tactic is applied to this one):\n\`\`\`\n${args.goals[0] ?? "(no goal)"}\n\`\`\``);
+  if (args.goals.length > 1) parts.push(`${args.goals.length - 1} more goal(s) are waiting after this one.`);
+  if (args.premises) parts.push(args.premises);
+  if (args.failed.length) parts.push(`Tactics that FAILED on this goal (do not repeat):\n${args.failed.map((t) => `- ${t}`).join("\n")}`);
+  parts.push("Next tactic:");
+  return parts.join("\n\n");
+}
+
+// ── Proof sketch with holes (subgoal decomposition) ───────────────────
+
+export const SKETCH_SYSTEM = `You are an expert Lean 4 + Mathlib prover writing a PROOF SKETCH: the complete structure of the proof where each nontrivial intermediate fact is stated as \`have name : <statement> := by sorry\` and the remaining steps use real tactics. Each \`sorry\` will be closed later by automation and search, so:
+- Make every hole a SMALL, self-contained fact that is true in context (a single inequality, equation, membership, bound, case), with all needed hypotheses already in scope. At most 6 holes.
+- Everything outside the holes must elaborate: introductions, case splits (rcases/obtain/induction … with), the final combination step (linarith/nlinarith [h1, h2]/omega/simp/exact/calc) — write those with real tactics, or use a final \`sorry\` only when the combination itself is hard.
+- Copy the statement verbatim. No imports, no \`open\`, no comments outside the block.
+
+Output exactly one block:
+\`\`\`lean
+theorem <name> <statement> := by
+  <tactics with sorry holes>
+\`\`\`
+
+${LEAN4_PITFALLS}
+
+Example:
+\`\`\`lean
+theorem ex (a b : ℝ) (ha : 0 < a) (hb : 0 < b) : 2 ≤ a / b + b / a := by
+  have hab : 0 < a * b := mul_pos ha hb
+  have key : 2 * (a * b) ≤ a ^ 2 + b ^ 2 := by sorry
+  have h : a / b + b / a = (a ^ 2 + b ^ 2) / (a * b) := by sorry
+  rw [h, le_div_iff₀ hab]
+  linarith
+\`\`\``;
+
+export function sketchUserMessage(args: {
+  theoremName: string;
+  theoremType: string;
+  goalState?: string;
+  problemText?: string;
+  sketchHint?: string;
+  previousErrors?: string;
+  premises?: string;
+}): string {
+  const parts: string[] = [];
+  parts.push(`Write a proof sketch with sorry holes for:\n\`\`\`lean\ntheorem ${args.theoremName} ${args.theoremType} := by\n  sorry\n\`\`\``);
+  if (args.goalState) parts.push(`Initial goal state:\n\`\`\`\n${args.goalState}\n\`\`\``);
+  if (args.problemText) parts.push(`Original problem: ${args.problemText}`);
+  if (args.sketchHint) parts.push(`Informal proof idea (a hint):\n${args.sketchHint}`);
+  if (args.premises) parts.push(args.premises);
+  if (args.previousErrors) parts.push(`Your previous sketch did not elaborate. Lean said:\n${args.previousErrors}\nFix the structure (statements of the holes, tactic names, syntax) and write the sketch again.`);
+  parts.push("Return the sketch in one ```lean block.");
+  return parts.join("\n\n");
+}
+

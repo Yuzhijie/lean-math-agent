@@ -37,6 +37,18 @@ vi.mock("@/lib/lean/trivial-proof", () => ({
   tryTrivialProof: vi.fn().mockResolvedValue(null),
   tryTrivialTactic: vi.fn().mockResolvedValue(null),
 }));
+// The REPL-backed stages (hammer, sketch-and-fill) have their own real-Lean tests.
+vi.mock("@/lib/lean/hammer", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/lean/hammer")>();
+  return { ...actual, hammerTheorem: vi.fn().mockResolvedValue(undefined) };
+});
+vi.mock("@/lib/prover/sketch", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/prover/sketch")>();
+  return {
+    ...actual,
+    proveBySketch: vi.fn().mockResolvedValue({ ok: false, unavailable: true, sketches: 0, holes: 0, holesSolved: 0, llmCalls: 0, log: "", durationMs: 0 }),
+  };
+});
 
 vi.mock("@/lib/llm/enumerate", () => ({
   enumerateMethods: vi.fn().mockResolvedValue({

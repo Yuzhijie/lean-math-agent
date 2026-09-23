@@ -316,11 +316,14 @@ export interface LeanProofAttempt {
   /** Which backend produced the verdict. */
   verifier?: "repl" | "spawn" | "none";
   /** How the proof was found: a one-tactic probe, the whole-proof loop, or stepwise search. */
-  strategy?: "trivial" | "whole_proof" | "stepwise";
+  strategy?: "trivial" | "hammer" | "whole_proof" | "sketch" | "stepwise";
   /** Proof candidates generated (samples or step attempts). */
   attempts?: number;
   /** Whole-proof rounds run (sampling + repairs). */
   rounds?: number;
+  /** Sketch stage: holes in the sketch and how many were closed. */
+  holes?: number;
+  holes_solved?: number;
 }
 
 // ── Generated Problem ────────────────────────────────────────────────

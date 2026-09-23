@@ -21,7 +21,11 @@ import { autoformalize, normalizeTheoremType } from "../llm/autoformalize";
 import { enumerateMethods } from "../llm/enumerate";
 import { generateNLSolution, generateNLTheoremSolution } from "../llm/nl-solution";
 import { planSteps } from "../llm/plan";
+import { budgetPreset } from "../prover/budget";
+import { buildProverContext, rememberVerifiedProof } from "../prover/context";
+import { proveBySketch, sketchEnabled } from "../prover/sketch";
 import { proveWholeTheorem, wholeProofEnabled } from "../prover/whole-proof";
+import { hammerTheorem } from "../lean/hammer";
 import { proofSearch } from "../search/proof-search";
 import { updateSession } from "../session-store";
 import type {
@@ -55,6 +59,10 @@ export interface TheoremPipelineOptions {
   multi_agent?: boolean;
   /** Candidates sampled per step in the stepwise search (default PROOF_SEARCH_SAMPLES). */
   step_samples?: number;
+  /** Run the sketch-and-fill stage (default: SKETCH_ENABLED, true). */
+  sketch?: boolean;
+  /** Search budget preset: low | normal | high (default PROOF_BUDGET, normal). */
+  budget?: string;
 }
 
 export interface TheoremPipelineArgs {
@@ -134,6 +142,11 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
       };
     }
     emit("autoformalizing", `✅ 形式化验证通过 (domain: ${formalResult.domain})`);
+    if (formalResult.vote) {
+      emit("autoformalizing", `候选投票：${formalResult.vote.candidates} 个候选，${formalResult.vote.agreeing} 个一致`);
+    }
+    if (formalResult.refutation?.verdict === "no_counterexample") emit("autoformalizing", "反例检测：随机测试未找到反例");
+    else if (formalResult.refutation?.verdict === "confirmed") emit("autoformalizing", "反例检测：陈述可判定为真");
   } else {
     theoremName = session.theorem_name ?? "problem";
     theoremType = session.theorem_type ?? "";
@@ -150,13 +163,32 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
     theorem_type: theoremType,
   };
 
-  // ── 3. Trivial one-liners (rfl / simp / omega / …) ───────────────────
+  const { budget, preset } = budgetPreset(opts.budget);
+  emit("budget", `搜索预算：${budget}`);
+
+  // ── 3. Automation first: the hammer on the root goal (REPL tactic mode),
+  //       then the single-tactic probes that also work in spawn mode ──────
   try {
-    const trivial = await tryTrivialProof(session.id, theoremName, theoremType, useMathlib, {
+    let trivial: { tactic: string; source: string; log: string; verification: Awaited<ReturnType<typeof verifyLeanSource>> } | null = null;
+    let strategy: "trivial" | "hammer" = "trivial";
+    if (process.env.LEAN_SERVER_MODE !== "spawn") {
+      const rootSource = assembleLeanSource({ theoremName, theoremType, stepCodes: ["sorry"], useMathlib });
+      const hit = await hammerTheorem(rootSource, { useMathlib });
+      if (hit) {
+        const source = assembleLeanSource({ theoremName, theoremType, stepCodes: [hit.tactic], useMathlib });
+        const verification = await verifyLeanSource(session.id, source, { theoremName, expectedSignature: frozenSignature });
+        if (verification.ok) {
+          trivial = { tactic: hit.tactic, source, log: verification.log, verification };
+          strategy = "hammer";
+        }
+      }
+    }
+    trivial ??= await tryTrivialProof(session.id, theoremName, theoremType, useMathlib, {
       expectedSignature: frozenSignature,
     });
     if (trivial) {
-      emit("trivial_proof", `✅ 简单证明成功 (${trivial.tactic})`);
+      emit("trivial_proof", `✅ 自动化策略直接证明 (${trivial.tactic})`);
+      void rememberVerifiedProof({ theoremName, theoremType, tactics: trivial.tactic, strategy, problemText: session.problem_text });
       const leanProofAttempt: LeanProofAttempt = {
         attempted: true,
         success: true,
@@ -165,7 +197,7 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
         axioms: trivial.verification.axioms?.axioms,
         statement_locked: frozenSignature !== undefined && trivial.verification.signatureMatch === true,
         verifier: trivial.verification.backend,
-        strategy: "trivial",
+        strategy,
         attempts: 1,
       };
       updateSession(session.id, {
@@ -174,14 +206,14 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
         pipeline_stage: "complete",
         lean_proof_attempt: leanProofAttempt,
       });
-      emit("complete", "✅ 完全形式化验证通过（简单证明）");
+      emit("complete", "✅ 完全形式化验证通过（自动化策略）");
       return {
         status: 200,
         body: {
           ...baseBody,
           nl_solution: nlSolution,
           lean_proof_attempt: leanProofAttempt,
-          method: { id: "trivial", title: `简单证明 (${trivial.tactic})`, category: "other" },
+          method: { id: strategy, title: `自动化策略 (${trivial.tactic})`, category: "other" },
           steps: [],
           sorry_labels: [],
           fully_verified: true,
@@ -210,6 +242,13 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
   }
   const initialGoal = preflight.goals?.[0];
 
+  // Premises for the initial goal + verified proofs of similar theorems,
+  // shared by the whole-proof, sketch and goal-search prompts.
+  const proverContext = await buildProverContext({ theoremType, initialGoal, problemText: session.problem_text, useMathlib });
+  if (proverContext.premises.length || proverContext.recalled.length) {
+    emit("retrieval", `检索到 ${proverContext.premises.length} 条相关引理、${proverContext.recalled.length} 个相似的已验证证明`);
+  }
+
   // ── 4. Whole-proof prover loop ───────────────────────────────────────
   const wholeProofOn = opts.whole_proof ?? wholeProofEnabled();
   let wholeProofSummary: string | undefined;
@@ -225,15 +264,18 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
         problemText: session.problem_text,
         sketch: nlSolution ? sketchFromNL(nlSolution) : undefined,
         initialGoal,
+        premises: proverContext.block || undefined,
         config: {
+          ...preset.wholeProof,
           useMathlib,
-          samples: opts.whole_proof_samples,
-          rounds: opts.whole_proof_rounds,
+          ...(opts.whole_proof_samples !== undefined ? { samples: opts.whole_proof_samples } : {}),
+          ...(opts.whole_proof_rounds !== undefined ? { rounds: opts.whole_proof_rounds } : {}),
         },
         onProgress: (p) => emit("whole_proof", `[第 ${p.round + 1} 轮] ${p.detail}`),
       });
       wholeProofSummary = `${whole.samples} 个候选 / ${whole.rounds} 轮`;
       if (whole.ok && whole.verification && whole.source) {
+        void rememberVerifiedProof({ theoremName, theoremType, tactics: whole.tactics ?? "", strategy: "whole_proof", problemText: session.problem_text });
         const leanProofAttempt: LeanProofAttempt = {
           attempted: true,
           success: true,
@@ -291,6 +333,86 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
       );
     } catch (e) {
       emit("whole_proof", `⚠️ 整体证明出错: ${e instanceof Error ? e.message : "未知错误"}`);
+    }
+  }
+
+  // ── 4b. Sketch-and-fill: proof skeleton with holes, each hole closed by
+  //        the hammer or goal-level tactic search ────────────────────────
+  const sketchOn = opts.sketch ?? sketchEnabled();
+  let sketchSummary: string | undefined;
+  if (sketchOn && preflight.status !== "unavailable" && process.env.LEAN_SERVER_MODE !== "spawn") {
+    updateSession(session.id, { pipeline_stage: "solving" });
+    emit("sketch", "骨架分解：生成带 sorry 的证明骨架，逐个子目标求解...");
+    try {
+      const sk = await proveBySketch({
+        sessionId: session.id,
+        theoremName,
+        theoremType,
+        expectedSignature: frozenSignature,
+        problemText: session.problem_text,
+        sketchHint: nlSolution ? sketchFromNL(nlSolution) : undefined,
+        initialGoal,
+        premises: proverContext.block || undefined,
+        config: { ...preset.sketch, useMathlib, goalSearch: { ...preset.goalSearch, useMathlib } },
+        onProgress: (p) => emit("sketch", p.detail),
+      });
+      sketchSummary = `${sk.sketches} 个骨架 / ${sk.holesSolved}/${sk.holes} 个子目标`;
+      if (sk.ok && sk.verification && sk.source) {
+        void rememberVerifiedProof({ theoremName, theoremType, tactics: sk.tactics ?? "", strategy: "sketch", problemText: session.problem_text });
+        const leanProofAttempt: LeanProofAttempt = {
+          attempted: true,
+          success: true,
+          formal_statement: sk.source,
+          proof_code: sk.source,
+          axioms: sk.verification.axioms?.axioms,
+          statement_locked: frozenSignature !== undefined && sk.verification.signatureMatch === true,
+          verifier: sk.verification.backend,
+          strategy: "sketch",
+          attempts: sk.sketches,
+          holes: sk.holes,
+          holes_solved: sk.holesSolved,
+        };
+        const step: ProofStep = {
+          index: 0,
+          plain_goal: "骨架分解证明",
+          lean_goal: theoremType,
+          plain_explanation: `骨架分解（${sketchSummary}）`,
+          lean_code: sk.tactics ?? "",
+          status: "ok",
+          build_log: sk.verification.log,
+        };
+        updateSession(session.id, {
+          steps: [step],
+          sorry_labels: [],
+          assembled_lean: sk.source,
+          build_status: "ok",
+          pipeline_stage: "complete",
+          lean_proof_attempt: leanProofAttempt,
+        });
+        emit("complete", `✅ 完全形式化验证通过（骨架分解，${sketchSummary}）`);
+        return {
+          status: 200,
+          body: {
+            ...baseBody,
+            nl_solution: nlSolution,
+            lean_proof_attempt: leanProofAttempt,
+            method: { id: "sketch", title: `骨架分解 (${sketchSummary})`, category: "other" },
+            steps: [step],
+            sorry_labels: [],
+            fully_verified: true,
+            build_status: "ok",
+            total_attempts: sk.sketches,
+            sorry_report: { fully_verified: true, summary: "✅ 完全形式化验证通过", details: [] },
+            assembled_lean: sk.source,
+            build_log: sk.verification.log,
+            whole_proof: wholeProofSummary ? { summary: wholeProofSummary, ok: false } : undefined,
+            sketch: { sketches: sk.sketches, holes: sk.holes, holes_solved: sk.holesSolved },
+          },
+        };
+      }
+      emit("sketch", sk.unavailable ? "⚠️ Lean 不可用，跳过骨架分解" : `骨架分解未通过（${sketchSummary}），转入分步证明`);
+    } catch (e) {
+      emit("sketch", `⚠️ 骨架分解出错: ${e instanceof Error ? e.message : "未知错误"}`);
     }
   }
 
@@ -420,6 +542,15 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
     expectedSignature: frozenSignature,
   });
   const report = sorryReport(searchResult.sorryLabels);
+  if (finalResult.ok && searchResult.fullyVerified) {
+    void rememberVerifiedProof({
+      theoremName,
+      theoremType,
+      tactics: searchResult.steps.map((s) => s.lean_code).filter(Boolean).join("\n"),
+      strategy: "stepwise",
+      problemText: session.problem_text,
+    });
+  }
 
   const leanProofAttempt: LeanProofAttempt = {
     attempted: true,
@@ -479,6 +610,7 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
       assembled_lean: finalSource,
       build_log: finalResult.log,
       whole_proof: wholeProofSummary ? { summary: wholeProofSummary, ok: false } : undefined,
+      sketch: sketchSummary ? { summary: sketchSummary, ok: false } : undefined,
     },
   };
 }

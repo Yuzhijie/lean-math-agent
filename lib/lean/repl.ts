@@ -50,6 +50,26 @@ export interface ReplCommandResponse {
   sorries: ReplSorry[];
 }
 
+/**
+ * Response to `{"tactic": …, "proofState": n}` (tactic mode). A tactic that
+ * fails to elaborate is reported as `ok: false` with Lean's message — that
+ * is a verdict about the tactic, not a worker failure.
+ */
+export type ReplTacticResponse =
+  | {
+      ok: true;
+      /** New proof state id (worker-local). */
+      proofState: number;
+      /** Remaining goals, pretty-printed; empty when the branch is closed. */
+      goals: string[];
+      /** "Completed" | "Incomplete: open goals remain" | "Incomplete: contains sorry" … */
+      proofStatus: string;
+      /** True when no goals remain and nothing was admitted with `sorry`. */
+      solved: boolean;
+      messages: ReplMessage[];
+    }
+  | { ok: false; error: string; messages: ReplMessage[] };
+
 export type ReplFailureKind = "unavailable" | "timeout" | "crashed" | "protocol" | "lean";
 
 export class ReplError extends Error {
@@ -127,9 +147,11 @@ export function loadReplConfig(sandboxRoot: string): ReplConfig {
 // ── Worker ────────────────────────────────────────────────────────────
 
 interface Pending {
-  resolve: (r: ReplCommandResponse) => void;
+  resolve: (r: unknown) => void;
   reject: (e: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  /** `cmd` responses carry `env`; `tactic` responses carry `proofState`. */
+  kind: "cmd" | "tactic";
 }
 
 export class ReplWorker {
@@ -228,18 +250,58 @@ export class ReplWorker {
     try {
       json = JSON.parse(text);
     } catch {
-      // Not JSON: could be a lake/toolchain notice printed to stdout before
-      // the real response. Keep waiting unless it looks like a Lean panic.
-      if (/PANIC|error:|uncaught exception/i.test(text)) {
-        this.pending = null;
-        clearTimeout(p.timer);
-        p.reject(new ReplError("protocol", `Lean REPL returned non-JSON output: ${text.slice(0, 500)}`));
+      // Not JSON: a notice printed to stdout (lake/toolchain, or a tactic's
+      // `IO.println`) may precede the real response inside the same frame —
+      // parse from the first line that starts the JSON object. Otherwise
+      // keep waiting unless it looks like a Lean panic.
+      const at = text.search(/^\s*\{/m);
+      let salvaged: unknown;
+      if (at > 0) {
+        try {
+          salvaged = JSON.parse(text.slice(at));
+        } catch {
+          salvaged = undefined;
+        }
       }
-      return;
+      if (salvaged === undefined) {
+        if (/PANIC|error:|uncaught exception/i.test(text)) {
+          this.pending = null;
+          clearTimeout(p.timer);
+          p.reject(new ReplError("protocol", `Lean REPL returned non-JSON output: ${text.slice(0, 500)}`));
+        }
+        return;
+      }
+      json = salvaged;
     }
     this.pending = null;
     clearTimeout(p.timer);
     const obj = json as Record<string, unknown>;
+    const messages = Array.isArray(obj.messages) ? (obj.messages as ReplMessage[]) : [];
+    if (p.kind === "tactic") {
+      if (typeof obj.message === "string" && obj.proofState === undefined) {
+        // In tactic mode `{"message": "Lean error: …"}` is how a failing
+        // tactic is reported. "Unknown proof state." means the id is stale
+        // (worker recycled) — the caller replays from the root.
+        if (/unknown proof state/i.test(obj.message)) {
+          p.reject(new ReplError("protocol", `Lean REPL: ${obj.message}`));
+          return;
+        }
+        const error = obj.message.replace(/^Lean error:\s*/, "");
+        p.resolve({ ok: false, error, messages } satisfies ReplTacticResponse);
+        return;
+      }
+      const goals = Array.isArray(obj.goals) ? (obj.goals as string[]) : [];
+      const proofStatus = typeof obj.proofStatus === "string" ? obj.proofStatus : goals.length ? "Incomplete: open goals remain" : "Completed";
+      p.resolve({
+        ok: true,
+        proofState: typeof obj.proofState === "number" ? obj.proofState : -1,
+        goals,
+        proofStatus,
+        solved: goals.length === 0 && /^Completed/i.test(proofStatus) && !/sorry/i.test(proofStatus),
+        messages,
+      } satisfies ReplTacticResponse);
+      return;
+    }
     if (typeof obj.message === "string" && obj.env === undefined) {
       // `{"message": ...}` is the REPL's own error (unparsable command,
       // unknown environment, ...) — an infrastructure problem, never a
@@ -250,21 +312,34 @@ export class ReplWorker {
     }
     p.resolve({
       env: typeof obj.env === "number" ? obj.env : -1,
-      messages: Array.isArray(obj.messages) ? (obj.messages as ReplMessage[]) : [],
+      messages,
       sorries: Array.isArray(obj.sorries) ? (obj.sorries as ReplSorry[]) : [],
-    });
+    } satisfies ReplCommandResponse);
   }
 
   /** Send one JSON command; commands on a worker are strictly serialised. */
   command(cmd: Record<string, unknown>, timeoutMs: number): Promise<ReplCommandResponse> {
-    const run = () => this.sendNow(cmd, timeoutMs);
+    return this.enqueue(cmd, timeoutMs, "cmd") as Promise<ReplCommandResponse>;
+  }
+
+  /**
+   * Tactic mode: run `tactic` on proof state `proofState` (an id from a
+   * `cmd` response's `sorries`, or from an earlier tactic response) and get
+   * the resulting state. Elaboration failures come back as `ok: false`.
+   */
+  tactic(tactic: string, proofState: number, timeoutMs: number): Promise<ReplTacticResponse> {
+    return this.enqueue({ tactic, proofState }, timeoutMs, "tactic") as Promise<ReplTacticResponse>;
+  }
+
+  private enqueue(cmd: Record<string, unknown>, timeoutMs: number, kind: Pending["kind"]): Promise<unknown> {
+    const run = () => this.sendNow(cmd, timeoutMs, kind);
     const next = this.chain.then(run, run);
     this.chain = next.catch(() => undefined);
     return next;
   }
 
-  private sendNow(cmd: Record<string, unknown>, timeoutMs: number): Promise<ReplCommandResponse> {
-    return new Promise<ReplCommandResponse>((resolve, reject) => {
+  private sendNow(cmd: Record<string, unknown>, timeoutMs: number, kind: Pending["kind"]): Promise<unknown> {
+    return new Promise<unknown>((resolve, reject) => {
       if (!this.proc || this.dead || !this.proc.stdin?.writable) {
         reject(new ReplError("crashed", `Lean REPL worker #${this.id} is not running (${this.exitInfo})`));
         return;
@@ -279,7 +354,7 @@ export class ReplWorker {
           ),
         );
       }, timeoutMs);
-      this.pending = { resolve, reject, timer };
+      this.pending = { resolve, reject, timer, kind };
       this.uses += 1;
       const line = JSON.stringify(cmd) + "\n\n";
       this.proc.stdin.write(line, (err) => {
@@ -346,6 +421,23 @@ export class ReplPool {
     } finally {
       this.release(worker);
     }
+  }
+
+  /**
+   * Hold a worker across several commands (proof states are worker-local,
+   * so a tactic-mode session must stay on one process). Always `release()`.
+   */
+  async lease(): Promise<{ worker: ReplWorker; release: () => void }> {
+    const worker = await this.acquire();
+    let released = false;
+    return {
+      worker,
+      release: () => {
+        if (released) return;
+        released = true;
+        this.release(worker);
+      },
+    };
   }
 
   private async acquire(): Promise<ReplWorker> {

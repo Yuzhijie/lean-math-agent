@@ -80,19 +80,40 @@ LLM_PROVER_API_KEY=...
 
 ### How a theorem gets proved
 
-1. Autoformalize and validate the statement (its `#check` signature is locked).
-2. Try single tactics (`rfl`, `simp`, `omega`, …).
-3. **Whole-proof loop**: sample `WHOLE_PROOF_SAMPLES` complete proofs from the prover, verify
+1. **Autoformalize and validate** the statement (its `#check` signature is locked). With
+   `AUTOFORMALIZE_CANDIDATES>1` several formalizations are sampled and the statement most of
+   them agree on (by elaborated signature) wins; the chosen statement is then attacked with
+   `decide` (on its negation) and Mathlib's `plausible` random tester — a counterexample
+   rejects the translation and is fed back into the next attempt.
+2. **Premises and memory**: lemmas relevant to the initial goal are retrieved (BM25 over
+   Mathlib names/statements — a curated seed is built in, `npm run premises:build` indexes the
+   sandbox's Mathlib) and verified proofs of similar theorems are recalled from
+   `.data/proof-memory.json`; both go into every prover prompt.
+3. **Hammer**: `rfl`/`decide`/`simp`/`omega`/`norm_num`/`linarith`/`nlinarith [hints]`/
+   `positivity`/`aesop`/`exact?` on the root goal in REPL tactic mode (milliseconds).
+4. **Whole-proof loop**: sample `WHOLE_PROOF_SAMPLES` complete proofs from the prover, verify
    them all through the REPL, then repair the most promising failure for `WHOLE_PROOF_ROUNDS`
    rounds with Lean's positioned errors, open goals, `exact?`/`apply?`/`simp?` suggestions
-   and (optionally) Loogle hits for unknown lemma names.
-4. Otherwise the stepwise pipeline: enumerate methods (single enumerator, or the multi-agent
+   and similar-name hints for unknown lemma names (local index, or Loogle).
+5. **Sketch-and-fill**: the prover writes a proof skeleton whose intermediate facts are
+   `have … := by sorry` holes; the skeleton is elaborated once and every hole becomes a proof
+   state closed independently by the hammer or a **goal-level best-first search** (k sampled
+   tactics per node applied incrementally, goal dedupe, beam, per-goal premise retrieval).
+   Closing scripts are spliced back and the whole proof is verified strictly.
+6. Otherwise the stepwise pipeline: enumerate methods (single enumerator, or the multi-agent
    strategists + critic with `SOLVE_MULTI_AGENT=true` / `options.multi_agent`), plan steps,
    best-first search that samples `PROOF_SEARCH_SAMPLES` candidates per step and branches on
    distinct goal states, then a final verification.
 
-Every solve response and session carries `metrics`: LLM calls/tokens by role and model, an
-estimated cost (`LLM_PRICES`), Lean verifications by backend and wall time.
+`PROOF_BUDGET=low|normal|high` (or `options.budget`) scales the sampling, repair and search
+limits of stages 4–5 together. Every accepted proof is stored in proof memory. Every solve
+response and session carries `metrics`: LLM calls/tokens by role and model, an estimated cost
+(`LLM_PRICES`), Lean verifications by backend and wall time.
+
+Trust does not change with any of this: a proof counts only when Lean reports no errors, no
+`sorry` (textually and via `#print axioms`), only the standard axioms, and the proved
+statement's signature equals the locked one; every body is checked with
+`set_option autoImplicit false`.
 
 ## Run
 
@@ -156,7 +177,9 @@ Automated tests cover schemas, log parsing, assembly, session store, and (when L
 | `npm run build` / `npm start` | Production build / server |
 | `npm test` | Same as `npx vitest run` |
 | `npm run lint` | ESLint |
-| `npm run bench -- [--stepwise] [--samples 4] [--rounds 2] [--only id,…]` | Prover benchmark over `bench/theorems.json` (needs an LLM key + built sandbox); writes `bench/results/*.json` |
+| `npm run bench -- [--file bench/minif2f-test.json] [--strategy cascade\|whole_proof\|sketch\|stepwise] [--budget low\|normal\|high] [--limit n]` | Prover benchmark (needs an LLM key + built sandbox): pass rate by difficulty, which stage proved what, tokens/cost, Lean verifications and a failure taxonomy; writes `bench/results/*.json` |
+| `npm run bench:fetch -- [--split test\|valid] [--limit n]` | Download miniF2F (Lean 4 port) into `bench/minif2f-<split>.json` for the bench |
+| `npm run premises:build -- [--all] [--prefix Mathlib.NumberTheory …] [--defs]` | Dump theorem statements from the sandbox's Mathlib (`scripts/lean/DumpDecls.lean`) into the premise index (`PREMISE_INDEX_PATH`) |
 
 ## Docs
 

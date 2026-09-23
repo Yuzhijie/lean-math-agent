@@ -1,8 +1,10 @@
 import type { MathDomain, ValidationResult } from "../types";
 import { formalizeResponseSchema, backTranslationSchema } from "../schemas";
-import { chatJson, chatText, LlmError } from "./client";
+import { chatJson, chatText, extractJson, sampleText, LlmError } from "./client";
 import { FORMALIZER_SYSTEM, BACK_TRANSLATE_SYSTEM, EQUIVALENCE_CHECK_SYSTEM } from "./agent-prompt";
 import { verifyLeanSource } from "../lean/sandbox";
+import { normalizeSignature } from "../lean/axioms";
+import { refuteEnabled, refuteStatement } from "../lean/refute";
 import { validateTheoremStatement } from "../lean/sanitize";
 import { z } from "zod";
 
@@ -17,6 +19,10 @@ export interface AutoformalizeResult {
   formal_signature?: string;
   validation_results: ValidationResult[];
   accepted: boolean;
+  /** Candidate voting summary (when AUTOFORMALIZE_CANDIDATES > 1). */
+  vote?: { candidates: number; elaborated: number; agreeing: number };
+  /** Counterexample search verdict for the chosen statement. */
+  refutation?: { verdict: string; counterexample?: string };
 }
 
 interface FormalizeResponse {
@@ -44,10 +50,21 @@ interface BackTranslation {
  */
 export function normalizeTheoremType(raw: string): string {
   const trimmed = raw.trim();
-  if (!trimmed.startsWith(":")) {
-    return `: ${trimmed}`;
+  if (trimmed.startsWith(":")) return trimmed;
+  // Binder form `(n : ℕ) (h : 0 < n) : goal` already has its own top-level colon.
+  if (/^[({[⦃]/.test(trimmed) && hasTopLevelColon(trimmed)) return trimmed;
+  return `: ${trimmed}`;
+}
+
+function hasTopLevelColon(t: string): boolean {
+  let depth = 0;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if ("([{⦃⟨".includes(c)) depth++;
+    else if (")]}⦄⟩".includes(c)) depth = Math.max(0, depth - 1);
+    else if (c === ":" && depth === 0 && t[i + 1] !== "=") return true;
   }
-  return trimmed;
+  return false;
 }
 
 // ── Main entry point ──────────────────────────────────────────────────
@@ -60,9 +77,15 @@ export async function autoformalize(args: {
   problemText: string;
   maxRetries?: number;
   equivalenceThreshold?: number; // default 0.8
+  /** Formalizations sampled per attempt; the statement most candidates agree on wins (AUTOFORMALIZE_CANDIDATES, default 1). */
+  candidates?: number;
+  /** Search for counterexamples with `decide` / `plausible` (REFUTE_ENABLED, default true). */
+  refute?: boolean;
 }): Promise<AutoformalizeResult> {
   const maxRetries = args.maxRetries ?? 3;
   const threshold = args.equivalenceThreshold ?? 0.8;
+  const nCandidates = Math.max(1, Math.floor(args.candidates ?? envInt("AUTOFORMALIZE_CANDIDATES", 1)));
+  const refuteOn = args.refute ?? refuteEnabled();
   let lastResult: AutoformalizeResult | undefined;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -74,28 +97,34 @@ export async function autoformalize(args: {
             .join("\n")}\n\nPlease fix these issues.`
         : "";
 
-    // Step 1: Generate formalization via LLM
-    const formal = await chatJson<FormalizeResponse>({
-      system: FORMALIZER_SYSTEM,
-      user: `Formalize the following math problem as a Lean 4 theorem statement:\n\n${args.problemText}${retryContext}`,
-      schema: formalizeResponseSchema,
-      schemaName: "formalizeResponse",
-      role: "planner",
-    });
-
-    // Normalize theorem_type to always start with ':'
-    formal.theorem_type = normalizeTheoremType(formal.theorem_type);
+    // Step 1: Generate formalization(s) via LLM. With several candidates the
+    // statement most of them agree on (by elaborated signature) is chosen —
+    // independent samples rarely make the same translation mistake.
+    const userPrompt = `Formalize the following math problem as a Lean 4 theorem statement:\n\n${args.problemText}${retryContext}`;
+    const candidates = await sampleFormalizations(userPrompt, nCandidates);
+    let vote: AutoformalizeResult["vote"] | undefined;
+    let formal: FormalizeResponse;
+    let l1: { result: ValidationResult; signature?: string };
+    if (candidates.length > 1) {
+      const chosen = await voteCandidates(candidates);
+      formal = chosen.formal;
+      l1 = chosen.l1;
+      vote = chosen.vote;
+    } else {
+      formal = candidates[0];
+      l1 = await layerElaborability(formal.theorem_name, formal.theorem_type);
+    }
 
     // Build the sorry-wrapped theorem source
     let formalStatement = `theorem ${formal.theorem_name} ${formal.theorem_type} := by sorry`;
 
-    // Step 2: Run 5-layer validation
+    // Step 2: Run the validation layers
     const results: ValidationResult[] = [];
 
     // Layer 1: Elaborability — can Lean compile this with sorry?
     // Also records the pretty-printed signature (`#check @name`) that the
     // final verification must reproduce (statement lock).
-    let l1 = await layerElaborability(formal.theorem_name, formal.theorem_type);
+    if (vote) l1.result.detail += `（候选投票：${vote.candidates} 个候选，${vote.elaborated} 个可编译，${vote.agreeing} 个与所选陈述一致）`;
     results.push(l1.result);
     if (!l1.result.pass) {
       // ── Targeted repair: feed Lean error back to LLM to fix just the type ──
@@ -120,11 +149,35 @@ export async function autoformalize(args: {
           formal_statement: formalStatement,
           validation_results: results,
           accepted: false,
+          vote,
         };
         continue;
       }
     }
     const formalSignature = l1.signature;
+
+    // Layer 6: Counterexample search — a false statement is a wrong
+    // translation; the counterexample tells the next attempt what to fix.
+    let refutation: AutoformalizeResult["refutation"] | undefined;
+    if (refuteOn) {
+      const l6 = await layerRefutation(formal);
+      results.push(l6.result);
+      refutation = l6.refutation;
+      if (!l6.result.pass) {
+        lastResult = {
+          theorem_name: formal.theorem_name,
+          theorem_type: formal.theorem_type,
+          domain: formal.domain,
+          formal_statement: formalStatement,
+          formal_signature: formalSignature,
+          validation_results: sortLayers(results),
+          accepted: false,
+          vote,
+          refutation,
+        };
+        continue;
+      }
+    }
 
     // Layer 2: Non-triviality — is it a tautology or vacuous?
     const l2 = await layerNonTriviality(formal);
@@ -136,8 +189,10 @@ export async function autoformalize(args: {
         domain: formal.domain,
         formal_statement: formalStatement,
         formal_signature: formalSignature,
-        validation_results: results,
+        validation_results: sortLayers(results),
         accepted: false,
+        vote,
+        refutation,
       };
       continue;
     }
@@ -156,8 +211,10 @@ export async function autoformalize(args: {
         domain: formal.domain,
         formal_statement: formalStatement,
         formal_signature: formalSignature,
-        validation_results: results,
+        validation_results: sortLayers(results),
         accepted: false,
+        vote,
+        refutation,
       };
       continue;
     }
@@ -177,8 +234,10 @@ export async function autoformalize(args: {
       domain: formal.domain,
       formal_statement: formalStatement,
       formal_signature: formalSignature,
-      validation_results: results,
+      validation_results: sortLayers(results),
       accepted,
+      vote,
+      refutation,
     };
 
     if (accepted) return result;
@@ -187,6 +246,150 @@ export async function autoformalize(args: {
 
   // All retries exhausted
   return lastResult!;
+}
+
+function envInt(name: string, dflt: number): number {
+  const v = Number(process.env[name]);
+  return Number.isFinite(v) && v > 0 ? Math.floor(v) : dflt;
+}
+
+/** Display order: 1 (elaborate), 6 (refute), 2–5 (LLM checks) → by layer number. */
+function sortLayers(results: ValidationResult[]): ValidationResult[] {
+  return [...results].sort((a, b) => a.layer - b.layer);
+}
+
+/**
+ * One formalization via `chatJson` (validated JSON), plus `n - 1` sampled
+ * ones parsed with the same schema (invalid samples are dropped).
+ */
+async function sampleFormalizations(userPrompt: string, n: number): Promise<FormalizeResponse[]> {
+  const first = await chatJson<FormalizeResponse>({
+    system: FORMALIZER_SYSTEM,
+    user: userPrompt,
+    schema: formalizeResponseSchema,
+    schemaName: "formalizeResponse",
+    role: "planner",
+  });
+  first.theorem_type = normalizeTheoremType(first.theorem_type);
+  const out: FormalizeResponse[] = [first];
+  if (n <= 1) return out;
+  try {
+    const samples = await sampleText({
+      messages: [
+        { role: "system", content: FORMALIZER_SYSTEM },
+        { role: "user", content: userPrompt },
+      ],
+      n: n - 1,
+      role: "planner",
+      temperature: 0.7,
+      jsonMode: true,
+      maxTokens: 2048,
+    });
+    for (const text of samples) {
+      try {
+        const parsed = formalizeResponseSchema.safeParse(extractJson(text));
+        if (!parsed.success) continue;
+        const c = parsed.data as FormalizeResponse;
+        c.theorem_type = normalizeTheoremType(c.theorem_type);
+        out.push(c);
+      } catch {
+        // unparsable sample — skip
+      }
+    }
+  } catch {
+    // sampling failed — vote with what we have
+  }
+  return out;
+}
+
+/**
+ * Rename bound variables positionally so `∀ (n : ℕ), …` and `∀ (m : ℕ), …`
+ * compare equal when voting on elaborated signatures.
+ */
+export function canonicalSignature(sig: string): string {
+  const s = normalizeSignature(sig);
+  const names: string[] = [];
+  const seen = new Set<string>();
+  const addNames = (list: string) => {
+    for (const n of list.trim().split(/\s+/)) {
+      if (n && /^[A-Za-z_][A-Za-z0-9_'₀-₉]*$/.test(n) && !seen.has(n)) {
+        seen.add(n);
+        names.push(n);
+      }
+    }
+  };
+  for (const m of s.matchAll(/[({⦃]\s*([^:(){}⦃⦄[\]]+?)\s*:/g)) addNames(m[1]);
+  for (const m of s.matchAll(/[∀∃∑∏λ]\s*([^,(){}⦃⦄[\]∈:]+?)(?:\s*[∈:,])/g)) addNames(m[1]);
+  for (const m of s.matchAll(/\bfun\s+([^=]+?)\s*=>/g)) addNames(m[1]);
+  let out = s;
+  names.forEach((n, i) => {
+    const escaped = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    out = out.replace(new RegExp(`(?<![A-Za-z0-9_'.₀-₉])${escaped}(?![A-Za-z0-9_'₀-₉]|\\.[A-Za-z])`, "g"), `_v${i}`);
+  });
+  return out;
+}
+
+/**
+ * Elaborate every candidate and pick the statement the most candidates
+ * agree on (by canonical signature). Ties go to the earliest candidate;
+ * candidates that do not elaborate cannot win unless none does.
+ */
+async function voteCandidates(candidates: FormalizeResponse[]): Promise<{
+  formal: FormalizeResponse;
+  l1: { result: ValidationResult; signature?: string };
+  vote: NonNullable<AutoformalizeResult["vote"]>;
+}> {
+  const scored = await Promise.all(
+    candidates.map(async (formal) => ({ formal, l1: await layerElaborability(formal.theorem_name, formal.theorem_type) })),
+  );
+  const elaborated = scored.filter((s) => s.l1.result.pass && !s.l1.result.skipped);
+  const pool = elaborated.length ? elaborated : scored.filter((s) => s.l1.result.pass);
+  if (pool.length === 0) {
+    return { formal: scored[0].formal, l1: scored[0].l1, vote: { candidates: scored.length, elaborated: 0, agreeing: 0 } };
+  }
+  const groups = new Map<string, typeof pool>();
+  for (const s of pool) {
+    const key = s.l1.signature ? canonicalSignature(s.l1.signature) : canonicalSignature(s.formal.theorem_type);
+    const g = groups.get(key) ?? [];
+    g.push(s);
+    groups.set(key, g);
+  }
+  let best: typeof pool | undefined;
+  for (const g of groups.values()) if (!best || g.length > best.length) best = g;
+  const winner = best![0];
+  return {
+    formal: winner.formal,
+    l1: winner.l1,
+    vote: { candidates: scored.length, elaborated: elaborated.length, agreeing: best!.length },
+  };
+}
+
+// ── Layer 6: Counterexample search ────────────────────────────────────
+
+async function layerRefutation(
+  formal: FormalizeResponse,
+): Promise<{ result: ValidationResult; refutation?: AutoformalizeResult["refutation"] }> {
+  const r = await refuteStatement(formal.theorem_name, formal.theorem_type, { useMathlib: true, sessionId: "autoformalize-l6" });
+  const refutation = { verdict: r.verdict, counterexample: r.counterexample };
+  switch (r.verdict) {
+    case "refuted":
+      return {
+        result: {
+          layer: 6,
+          pass: false,
+          detail: `陈述为假：${r.detail}。请检查是否遗漏了前提（正整数、非零、范围）、ℕ 上的截断减法/整除，或量词范围。`,
+        },
+        refutation,
+      };
+    case "confirmed":
+      return { result: { layer: 6, pass: true, detail: r.detail }, refutation };
+    case "no_counterexample":
+      return { result: { layer: 6, pass: true, detail: r.detail }, refutation };
+    case "unavailable":
+      return { result: { layer: 6, pass: true, skipped: true, detail: "Lean 不可用，跳过反例检测" }, refutation };
+    default:
+      return { result: { layer: 6, pass: true, skipped: true, detail: `反例检测无法判定（${r.detail}）` }, refutation };
+  }
 }
 
 // ── Layer 1: Elaborability ────────────────────────────────────────────
