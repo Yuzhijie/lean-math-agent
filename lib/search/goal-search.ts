@@ -14,10 +14,13 @@
  * proof counts.
  */
 import { hammer, type HammerOutcome } from "../lean/hammer";
+import { modernizeLeanSyntax } from "../lean/modernize";
 import { formatPremises, premisesEnabled, retrievePremises } from "../lean/premises";
 import type { ProofSession } from "../lean/proof-state";
 import { sampleText } from "../llm/client";
+import type { ReasoningEffort } from "../llm/config";
 import { TACTIC_STEP_SYSTEM, tacticStepUserMessage } from "../llm/prompts";
+import { expectedLatencyMs } from "../llm/usage-tracker";
 import { PriorityQueue } from "./priority-queue";
 
 export interface GoalSearchConfig {
@@ -38,6 +41,12 @@ export interface GoalSearchConfig {
   temperature: number;
   /** Retrieve premises for the current goal at every node (GOAL_SEARCH_RETRIEVE, default true). */
   retrieve: boolean;
+  /**
+   * Reasoning effort for tactic-step calls on reasoning models
+   * (GOAL_SEARCH_REASONING_EFFORT, default "low": one tactic needs far less
+   * thinking than a whole proof, and the search wants many cheap steps).
+   */
+  reasoningEffort?: ReasoningEffort;
 }
 
 export function loadGoalSearchConfig(overrides: Partial<GoalSearchConfig> = {}): GoalSearchConfig {
@@ -56,7 +65,15 @@ export function loadGoalSearchConfig(overrides: Partial<GoalSearchConfig> = {}):
     useMathlib: overrides.useMathlib ?? true,
     temperature: overrides.temperature ?? num("GOAL_SEARCH_TEMPERATURE", 0.8),
     retrieve: overrides.retrieve ?? (process.env.GOAL_SEARCH_RETRIEVE !== "false" && premisesEnabled()),
+    reasoningEffort: overrides.reasoningEffort ?? parseEffortEnv(process.env.GOAL_SEARCH_REASONING_EFFORT, "low"),
   };
+}
+
+function parseEffortEnv(raw: string | undefined, dflt: ReasoningEffort | undefined): ReasoningEffort | undefined {
+  const v = raw?.trim().toLowerCase();
+  if (v === "" || v === "default" || v === "inherit") return undefined;
+  if (v === "none" || v === "minimal" || v === "low" || v === "medium" || v === "high") return v;
+  return dflt;
 }
 
 export interface GoalSearchProgress {
@@ -137,6 +154,7 @@ export function extractTactic(text: string): string | undefined {
     tactic = `(${lines.map((l) => l.replace(/^`+|`+$/g, "").replace(/^by\s+/, "")).join("; ")})`;
   }
   if (/\b(sorry|admit)\b/.test(tactic)) return undefined;
+  tactic = modernizeLeanSyntax(tactic);
   return tactic || undefined;
 }
 
@@ -216,6 +234,13 @@ export async function goalSearch(args: GoalSearchArgs): Promise<GoalSearchResult
       node.failed.push(...h.attempts.filter((a) => !a.ok).map((a) => a.tactic).slice(0, 6));
     }
     if (timeLeft() <= 0) continue;
+    // Do not start a call that cannot finish in the remaining budget: an
+    // aborted call still bills its tokens and returns nothing.
+    const expected = expectedLatencyMs("prover");
+    if (timeLeft() < expected * 0.8) {
+      log.push(`stop: ${Math.round(timeLeft() / 1000)}s left, prover calls take ~${Math.round(expected / 1000)}s`);
+      break;
+    }
 
     // 2. Ask the prover for k tactics (with premises retrieved for this goal).
     let premises = args.premises;
@@ -249,7 +274,8 @@ export async function goalSearch(args: GoalSearchArgs): Promise<GoalSearchResult
         role: "prover",
         temperature: cfg.temperature,
         maxTokens: 512,
-        timeoutMs: Math.max(20_000, Math.min(timeLeft(), 120_000)),
+        timeoutMs: Math.max(30_000, Math.min(timeLeft(), 180_000)),
+        reasoningEffort: cfg.reasoningEffort,
       });
       llmCalls += cfg.samplesPerNode;
     } catch (e) {

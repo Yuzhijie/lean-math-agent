@@ -65,8 +65,36 @@ const records: UsageRecord[] = [];
  */
 export function recordUsage(record: UsageRecord): void {
   records.push(record);
+  if (record.latencyMs > 0) recordLatency(record.role, record.latencyMs);
   const scope = scopeStorage.getStore();
   if (scope) scope.llm.push(record);
+}
+
+// ── Latency estimate per role ─────────────────────────────────────────
+//
+// Reasoning models answer in tens of seconds to minutes. Search stages use
+// this estimate to skip calls that cannot finish inside their remaining
+// budget (an aborted call still bills the tokens it generated) and to size
+// per-call timeouts. Exponential moving average of observed latencies; a
+// timeout counts as "at least the timeout".
+
+const latencyEma = new Map<ModelRole, number>();
+const DEFAULT_LATENCY_MS = 30_000;
+
+export function recordLatency(role: ModelRole, ms: number): void {
+  if (!Number.isFinite(ms) || ms <= 0) return;
+  const prev = latencyEma.get(role);
+  latencyEma.set(role, prev === undefined ? ms : 0.6 * prev + 0.4 * ms);
+}
+
+/** Expected latency of one call for `role` (ms); `dflt` until something was observed. */
+export function expectedLatencyMs(role: ModelRole, dflt = DEFAULT_LATENCY_MS): number {
+  return latencyEma.get(role) ?? dflt;
+}
+
+/** Forget observed latencies (tests). */
+export function resetLatencyEstimates(): void {
+  latencyEma.clear();
 }
 
 /**

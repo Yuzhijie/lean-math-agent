@@ -20,17 +20,17 @@ export interface BudgetPreset {
 const PRESETS: Record<ProofBudget, BudgetPreset> = {
   low: {
     wholeProof: { samples: 2, rounds: 1, timeBudgetMs: 90_000 },
-    sketch: { samples: 1, repairs: 0, holeBudgetMs: 30_000, timeBudgetMs: 150_000 },
+    sketch: { samples: 1, repairs: 0, holeBudgetMs: 30_000, timeBudgetMs: 150_000, maxLlmHoles: 2 },
     goalSearch: { samplesPerNode: 3, maxNodes: 20, beam: 8 },
   },
   normal: {
     wholeProof: { samples: 4, rounds: 2, timeBudgetMs: 180_000 },
-    sketch: { samples: 2, repairs: 1, holeBudgetMs: 60_000, timeBudgetMs: 300_000 },
+    sketch: { samples: 2, repairs: 1, holeBudgetMs: 60_000, timeBudgetMs: 300_000, maxLlmHoles: 4 },
     goalSearch: { samplesPerNode: 4, maxNodes: 60, beam: 16 },
   },
   high: {
     wholeProof: { samples: 8, rounds: 3, timeBudgetMs: 360_000 },
-    sketch: { samples: 3, repairs: 2, holeBudgetMs: 120_000, timeBudgetMs: 600_000 },
+    sketch: { samples: 3, repairs: 2, holeBudgetMs: 120_000, timeBudgetMs: 600_000, maxLlmHoles: 6 },
     goalSearch: { samplesPerNode: 6, maxNodes: 150, beam: 24 },
   },
 };

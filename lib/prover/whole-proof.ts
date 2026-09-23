@@ -17,12 +17,14 @@
 import { assembleLeanSource } from "../lean/assemble";
 import { compilingPrefix, formatVerificationFeedback, summarizeFailure, dedent } from "../lean/feedback";
 import { loogleHintsForUnknownIdentifiers, unknownIdentifiers } from "../lean/loogle";
+import { modernizeLeanSyntax } from "../lean/modernize";
 import { localHintsForUnknownIdentifiers } from "../lean/premises";
 import { verifyLeanSource, type LeanVerifyResult } from "../lean/sandbox";
 import { sanitizeLeanBody } from "../lean/sanitize";
 import { formatSuggestions, librarySearchSuggestions } from "../lean/suggest";
 import { LlmError, sampleText, type ChatMessage } from "../llm/client";
 import { WHOLE_PROOF_SYSTEM, wholeProofRepairMessage, wholeProofUserMessage } from "../llm/prompts";
+import { expectedLatencyMs } from "../llm/usage-tracker";
 
 // ── Configuration ─────────────────────────────────────────────────────
 
@@ -171,8 +173,10 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
   const seenTactics = new Set<string>();
 
   for (let round = 0; round <= cfg.rounds; round++) {
-    if (round > 0 && timeLeft() <= 0) {
-      log.push(`round ${round}: time budget exhausted`);
+    if (round > 0 && timeLeft() < expectedLatencyMs("prover") * 0.8) {
+      // A repair round that cannot finish is wasted tokens (aborted calls
+      // still bill what they generated).
+      log.push(`round ${round}: ${Math.round(Math.max(0, timeLeft()) / 1000)}s left is not enough for another prover round (~${Math.round(expectedLatencyMs("prover") / 1000)}s per call)`);
       break;
     }
     roundsRun = round + 1;
@@ -187,7 +191,7 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
         role: "prover",
         temperature: cfg.temperature,
         maxTokens: cfg.maxTokens,
-        timeoutMs: round === 0 ? undefined : Math.max(30_000, Math.min(timeLeft(), 120_000)),
+        timeoutMs: round === 0 ? undefined : Math.max(30_000, Math.min(timeLeft(), 180_000)),
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -423,8 +427,7 @@ export function extractTactics(text: string): string | undefined {
   const stop = tactics.search(/^\s*(theorem|lemma|example|def|#check|#eval|#print)\b/m);
   if (stop > 0) tactics = tactics.slice(0, stop);
 
-  const cleaned = dedent(tactics.split("\n"))
-    .join("\n")
+  const cleaned = modernizeLeanSyntax(dedent(tactics.split("\n")).join("\n"))
     .replace(/\n{3,}/g, "\n\n")
     .trim();
   if (!cleaned) return undefined;

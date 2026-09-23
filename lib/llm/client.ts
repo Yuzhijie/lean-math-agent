@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { isOpenAiReasoningModel, loadConfig, LlmConfigError, type LlmConfig, type ModelEndpoint, type ModelRole } from "./config";
+import { isOpenAiReasoningModel, loadConfig, LlmConfigError, type LlmConfig, type ModelEndpoint, type ModelRole, type ReasoningEffort } from "./config";
 import { buildCacheKey, getGlobalCache } from "./cache";
-import { parseAndRecordUsage, setPriceTable, type RawUsage } from "./usage-tracker";
+import { parseAndRecordUsage, recordLatency, setPriceTable, type RawUsage } from "./usage-tracker";
 import { logLlm, logDebug, type LlmLogEntry } from "./logger";
 
 export class LlmError extends Error {}
@@ -21,6 +21,8 @@ export interface CallOptions {
   jsonMode?: boolean;
   /** Bypass the response cache (sampling at temperature > 0 must not be served from it). */
   noCache?: boolean;
+  /** Reasoning effort for this call (reasoning models only; overrides LLM_*_REASONING_EFFORT). */
+  reasoningEffort?: ReasoningEffort;
 }
 
 // ── Message types for multi-turn conversations ────────────────────────
@@ -222,7 +224,11 @@ export function buildRequestBody(
   options: CallOptions,
 ): Record<string, unknown> {
   const byName = isOpenAiReasoningModel(endpoint.model);
-  const effort = config.roleReasoningEffort[role] ?? config.reasoningEffort;
+  const configuredEffort = config.roleReasoningEffort[role] ?? config.reasoningEffort;
+  // A per-call effort only overrides where reasoning is in play (a
+  // reasoning model, or an effort configured for it); other models would
+  // reject the parameter.
+  const effort = options.reasoningEffort !== undefined && (byName || configuredEffort !== undefined) ? options.reasoningEffort : configuredEffort;
   const reasoningOn = effort !== undefined ? effort !== "none" : byName;
 
   const sendSampling =
@@ -457,6 +463,8 @@ async function rawChatMessages(
         // worst-case wait with low odds of success. Fail over to the next
         // endpoint immediately instead.
         if (isTimeoutError(networkError, lastError)) {
+          // The model needed longer than the window it was given.
+          recordLatency(role, Math.min(remaining, requestTimeout) * 1.5);
           retriesUsed = attempt;
           break;
         }

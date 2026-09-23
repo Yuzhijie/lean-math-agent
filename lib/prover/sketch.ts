@@ -21,6 +21,7 @@ import type { LeanVerifyResult } from "../lean/sandbox";
 import { splitHeader } from "../lean/sanitize";
 import { LlmError, sampleText } from "../llm/client";
 import { SKETCH_SYSTEM, sketchUserMessage } from "../llm/prompts";
+import { expectedLatencyMs } from "../llm/usage-tracker";
 import { goalSearch, type GoalSearchConfig } from "../search/goal-search";
 import { extractTactics } from "./whole-proof";
 
@@ -35,6 +36,13 @@ export interface SketchConfig {
   timeBudgetMs: number;
   /** Per-hole search budget (SKETCH_HOLE_BUDGET_MS, default 60 s). */
   holeBudgetMs: number;
+  /**
+   * Max holes the hammer leaves open before a sketch is abandoned without
+   * LLM search (SKETCH_MAX_LLM_HOLES, default 4): a skeleton whose facts
+   * are all hard is the wrong decomposition, and searching each of them
+   * would burn the whole stage budget.
+   */
+  maxLlmHoles: number;
   useMathlib: boolean;
   goalSearch: Partial<GoalSearchConfig>;
 }
@@ -51,6 +59,7 @@ export function loadSketchConfig(overrides: Partial<SketchConfig> = {}): SketchC
     maxHoles: Math.max(1, Math.floor(overrides.maxHoles ?? num("SKETCH_MAX_HOLES", 8))),
     timeBudgetMs: overrides.timeBudgetMs ?? num("SKETCH_BUDGET_MS", 300_000),
     holeBudgetMs: overrides.holeBudgetMs ?? num("SKETCH_HOLE_BUDGET_MS", 60_000),
+    maxLlmHoles: Math.max(0, Math.floor(overrides.maxLlmHoles ?? num("SKETCH_MAX_LLM_HOLES", 4))),
     useMathlib: overrides.useMathlib ?? true,
     goalSearch: overrides.goalSearch ?? {},
   };
@@ -123,7 +132,10 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
   const seen = new Set<string>();
 
   for (let round = 0; round <= cfg.repairs; round++) {
-    if (timeLeft() <= 0) break;
+    if (timeLeft() < expectedLatencyMs("prover") * 0.8) {
+      log.push(`round ${round}: not enough time left for another sketch round`);
+      break;
+    }
     progress({ stage: "sampling", detail: `采样 ${cfg.samples} 个证明骨架…` });
     let samples: string[];
     try {
@@ -147,7 +159,7 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
         role: "prover",
         temperature: 0.7,
         maxTokens: 4096,
-        timeoutMs: Math.max(30_000, Math.min(timeLeft(), 180_000)),
+        timeoutMs: Math.max(30_000, Math.min(timeLeft(), 300_000)),
       });
       llmCalls += cfg.samples;
     } catch (e) {
@@ -192,28 +204,63 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
           continue;
         }
         holesTotal += holes.length;
-        log.push(`sketch with ${holes.length} hole(s)`);
-        const scripts: string[][] = [];
-        let failed = false;
+        const scripts: (string[] | undefined)[] = holes.map(() => undefined);
+
+        // Pass 1: the hammer on every hole (milliseconds each). This also
+        // tells us whether the decomposition is any good before the LLM
+        // search is paid for.
         for (let i = 0; i < holes.length; i++) {
+          if (timeLeft() <= 0) break;
+          progress({ stage: "hole", detail: `自动化尝试子目标 ${i + 1}/${holes.length}: ${lastLine(holes[i].goal)}` });
+          const h = await hammer(session, holes[i].state, { useMathlib: cfg.useMathlib, budgetMs: Math.min(20_000, Math.max(1_000, timeLeft())) });
+          if (h.solved && h.tactic) {
+            scripts[i] = [h.tactic];
+            holesSolved++;
+          }
+        }
+        const open = holes.map((_, i) => i).filter((i) => !scripts[i]);
+        log.push(`sketch with ${holes.length} hole(s): hammer closed ${holes.length - open.length}`);
+        if (open.length > cfg.maxLlmHoles) {
+          log.push(`  skipped: ${open.length} holes need search (limit ${cfg.maxLlmHoles})`);
+          continue;
+        }
+
+        // Pass 2: goal-level search on what is left, sharing the remaining time.
+        let failed = false;
+        for (let k = 0; k < open.length; k++) {
+          const i = open[k];
           const hole = holes[i];
-          progress({ stage: "hole", detail: `求解子目标 ${i + 1}/${holes.length}: ${lastLine(hole.goal)}` });
-          const script = await closeHole(session, hole, args, cfg, Math.min(cfg.holeBudgetMs, timeLeft()));
-          if (!script) {
+          const budget = Math.min(cfg.holeBudgetMs, Math.floor(timeLeft() / (open.length - k)));
+          if (budget < expectedLatencyMs("prover") * 0.8) {
+            failed = true;
+            log.push(`  hole ${i + 1}: ${Math.round(Math.max(0, budget) / 1000)}s left is not enough for a search`);
+            break;
+          }
+          progress({ stage: "hole", detail: `搜索子目标 ${i + 1}/${holes.length}: ${lastLine(hole.goal)}` });
+          const r = await goalSearch({
+            session,
+            rootState: hole.state,
+            theoremName: args.theoremName,
+            theoremType: args.theoremType,
+            problemText: args.problemText,
+            premises: args.premises,
+            config: { ...cfg.goalSearch, useMathlib: cfg.useMathlib, timeBudgetMs: budget },
+          });
+          llmCalls += r.llmCalls;
+          if (!r.ok || !r.tactics) {
             failed = true;
             log.push(`  hole ${i + 1} unsolved: ${lastLine(hole.goal)}`);
             break;
           }
+          scripts[i] = r.tactics;
           holesSolved++;
-          llmCalls += script.llmCalls;
-          scripts.push(script.tactics);
-          log.push(`  hole ${i + 1} closed: ${script.tactics.join(" ; ")}`);
+          log.push(`  hole ${i + 1} closed: ${r.tactics.join(" ; ")}`);
         }
         if (failed) continue;
 
         // Splice the closing scripts back into the sketch and verify strictly.
         const { header } = splitHeader(source);
-        const body = spliceHoles(session.body, holes, scripts);
+        const body = spliceHoles(session.body, holes, scripts as string[][]);
         if (!body) {
           log.push("  could not splice scripts into the sketch");
           continue;
@@ -241,29 +288,6 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
   }
   progress({ stage: "fail", detail: "骨架分解未能完成证明" });
   return done({});
-}
-
-/** Hammer first, then goal-level search, on one hole. */
-async function closeHole(
-  session: ProofSession,
-  hole: ProofHole,
-  args: SketchArgs,
-  cfg: SketchConfig,
-  budgetMs: number,
-): Promise<{ tactics: string[]; llmCalls: number } | undefined> {
-  if (budgetMs <= 0) return undefined;
-  const h = await hammer(session, hole.state, { useMathlib: cfg.useMathlib, budgetMs: Math.min(20_000, budgetMs) });
-  if (h.solved && h.tactic) return { tactics: [h.tactic], llmCalls: 0 };
-  const r = await goalSearch({
-    session,
-    rootState: hole.state,
-    theoremName: args.theoremName,
-    theoremType: args.theoremType,
-    problemText: args.problemText,
-    premises: args.premises,
-    config: { ...cfg.goalSearch, useMathlib: cfg.useMathlib, timeBudgetMs: Math.max(1_000, budgetMs - h.durationMs) },
-  });
-  return r.ok && r.tactics ? { tactics: r.tactics, llmCalls: r.llmCalls } : undefined;
 }
 
 /**

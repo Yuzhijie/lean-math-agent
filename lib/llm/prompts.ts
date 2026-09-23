@@ -40,7 +40,8 @@ Do NOT plan steps that reprove standard library results. Instead, reference the 
 export const LEAN4_PITFALLS = `Lean 4 + current Mathlib syntax ONLY (not Lean 3):
 - Tactic blocks: \`by\` followed by one tactic per line, indented 2 spaces. No \`begin … end\`, no commas between tactics, no \`assume\`, no \`{ }\` blocks with commas.
 - Names are dotted: \`Nat.succ_le_iff\`, \`Finset.sum_comm\`, \`mul_comm\`, \`add_pos\`. Lean 3 names with underscores such as \`nat.succ_le_iff\` do not exist.
-- Case analysis: \`rcases h with ⟨x, hx⟩ | h'\`, \`obtain ⟨x, hx⟩ := h\`, \`cases h with\` + \`| inl h => …\` / \`| inr h => …\`. Induction: \`induction n with\` + \`| zero => …\` + \`| succ k ih => …\`.
+- Case analysis: \`rcases h with ⟨x, hx⟩ | h'\`, \`obtain ⟨x, hx⟩ := h\`, \`cases h with\` + \`| inl h => …\` / \`| inr h => …\` (Lean 3's \`cases h with x hx\` on one line is \`cases' h with x hx\`). Induction: \`induction n with\` + \`| zero => …\` + \`| succ k ih => …\`.
+- Big operators: \`∑ i ∈ Finset.range n, f i\` and \`∏ i ∈ s, f i\` — the old \`∑ i in s, f i\` no longer parses. Lambdas are \`fun x => e\`, never \`λ x, e\`.
 - Focus sub-goals with \`·\` (or \`case … =>\`); \`constructor\` splits ∧/↔; \`refine ⟨_, ?_⟩\` leaves holes named \`?_\`.
 - Arithmetic automation: \`omega\` (linear ℕ/ℤ), \`norm_num\` (numerals), \`ring\` / \`ring_nf\` (commutative ring identities), \`linarith\` / \`nlinarith\` (linear / polynomial inequalities over ordered fields, ℕ works after \`push_cast\`), \`positivity\`, \`gcongr\`, \`field_simp\`, \`decide\` (small decidable goals), \`simp\` / \`simp only [..]\`, \`aesop\`.
 - Naturals subtract truncated (\`a - b = 0\` when \`a ≤ b\`) and divide with floor: cast to ℤ/ℚ (\`push_cast\`, \`zify\`, \`qify\`) before \`ring\`/\`linarith\` when subtraction or division is involved.

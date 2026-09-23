@@ -19,7 +19,7 @@ AI-powered Lean 4 math theorem prover + problem solver. Single-page Next.js app.
 | Lean | Lean 4 + Mathlib v4.33.1 + Batteries + Aesop; verification via persistent `leanprover-community/repl` workers (env reuse, sorry goals, tactic mode, axiom + statement checks), `lake env lean` fallback |
 | Compute | Python SymPy HTTP microservice (9 endpoints) |
 | State | In-memory Map + JSON disk persistence |
-| Tests | Vitest (61 test files) |
+| Tests | Vitest (63 test files) |
 
 ## Project Structure
 
@@ -136,6 +136,7 @@ lib/
     sanitize.ts                     # Forbidden-command filter (#eval, elab, unsafe, axiom, …) + statement validation
     axioms.ts                       # `#print axioms` / `#check` parsing, standard-axiom allowlist
     trivial-proof.ts                # Single-tactic proof attempts (with full verification)
+    modernize.ts                    # Rewrites removed/Lean 3 syntax in model output (∑ x in s → ∑ x ∈ s, cases … with x → cases', λ x, e)
     feedback.ts                     # Verification result → proof-relative feedback for the model
     suggest.ts                      # exact?/apply?/simp? probes at the failing goal ("Try this" parsing)
     loogle.ts                       # Optional Loogle client (LOOGLE_URL) for unknown identifiers
@@ -192,7 +193,7 @@ docker-compose.yml                  # Service orchestration (web + compute + neo
 nginx.conf                          # Reverse proxy with rate limiting
 .dockerignore                       # Docker build exclusions
 
-tests/                              # 61 Vitest test files (unit + fake REPL + real-Lean integration)
+tests/                              # 63 Vitest test files (unit + fake REPL + real-Lean integration)
 components/ui/                      # 16 shadcn/ui primitives (+avatar, dropdown-menu, label)
 ```
 
@@ -202,6 +203,7 @@ components/ui/                      # 16 shadcn/ui primitives (+avatar, dropdown
 - **Whole-proof first**: the prover role samples complete proofs (`sampleText`, temperature 0.8, no cache) which are verified in parallel; the best failure is repaired with positioned errors / open goals (`lib/lean/feedback.ts`) plus `exact?`/`apply?`/`simp?` suggestions (`lib/lean/suggest.ts`); the statement is always re-assembled from the validated declaration
 - **Repair loop**: generate Lean code → compile → classify error → feed back → retry (max 3); the prover is given the Lean goal state (from the verifier's sorry goals) for the step it is working on; the stepwise search samples k candidates per step, verifies them in parallel and branches on distinct goal states (beam-bounded)
 - **REPL tactic mode**: `ProofSession` opens `theorem … := by sorry` once and applies tactics to goal-state handles (milliseconds per step, replayed if the worker dies); the hammer, goal-level search and sketch-and-fill all run on it. Every result is still re-assembled as text and passed through `verifyLeanSource`
+- **Budget-aware LLM calls**: `expectedLatencyMs(role)` (EMA of observed call latencies, timeouts included) gates every repair round, goal-search expansion and sketch round — a call that cannot finish in the remaining budget is skipped rather than aborted (aborted calls still bill their tokens); tactic-step calls use `reasoningEffort: "low"` on reasoning models
 - **Retrieval before generation**: `buildProverContext` (premises for the initial goal + verified proofs of similar theorems) feeds the whole-proof, sketch and goal-search prompts; goal search re-retrieves per node; unknown identifiers get "similar declarations" from the local index
 - **Formalization reliability**: several sampled statements vote by elaborated signature (α-normalised); the winner must survive `decide`/`plausible` counterexample search (layer 6) before any LLM validation layer or proof search is spent on it
 - **Roles + metrics**: `chatJson`/`sampleText` take `role: "prover" | "planner"`; endpoint chains come from `LLM_PROVER_*` / `LLM_PLANNER_*`; every solve runs in `withUsageScope`, and `verifyLeanSource` records itself, so responses/sessions carry `metrics` (calls, tokens, cost, verifications, wall time)
