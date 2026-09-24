@@ -184,3 +184,4 @@ Automated tests cover schemas, log parsing, assembly, session store, and (when L
 ## Docs
 
 See `docs/` for product and design notes.
+# lean-math-agent
