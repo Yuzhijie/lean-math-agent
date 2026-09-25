@@ -41,6 +41,7 @@ import {
   FileCode,
   History,
   Columns3,
+  Pencil,
 } from "lucide-react";
 
 export default function Home() {
@@ -95,6 +96,12 @@ export default function Home() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [showComparison, setShowComparison] = useState(false);
   const [stepsExpanded, setStepsExpanded] = useState(false);
+  // After "使用此题" the raw input box is hidden and only the rendered problem is shown.
+  const [inputHidden, setInputHidden] = useState(false);
+  const useProblemFromGenerator = (text: string) => {
+    useGeneratedProblem(text);
+    setInputHidden(true);
+  };
 
   // Auto-select tab when session data changes (e.g., after loading history)
   const prevSessionId = useRef(state.sessionId);
@@ -199,8 +206,8 @@ export default function Home() {
           {showGenerator && (
             <div className="animate-slide-down">
               <ProblemGenerator
-                onUseProblem={useGeneratedProblem}
-                onFormalize={useGeneratedProblem}
+                onUseProblem={useProblemFromGenerator}
+                onFormalize={useProblemFromGenerator}
                 disabled={!!busy}
               />
             </div>
@@ -223,6 +230,7 @@ export default function Home() {
               </div>
             </CardHeader>
             <CardContent className="space-y-3">
+              {!inputHidden && (
               <Textarea
                 value={problemText}
                 onChange={(e) =>
@@ -233,13 +241,28 @@ export default function Home() {
                 placeholder="输入数学问题，支持 LaTeX 公式（如 $x^2 + y^2 = z^2$）..."
                 className="min-h-[80px] text-base leading-relaxed"
               />
+              )}
 
               {/* Math preview */}
-              {containsMath(problemText) && (
+              {(inputHidden || containsMath(problemText)) && (
                 <div className="rounded-md border border-border/60 bg-muted/30 p-3 animate-fade-in">
-                  <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                    预览
-                  </span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                      问题
+                    </span>
+                    {inputHidden && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 gap-1 px-2 text-xs"
+                        disabled={!!busy}
+                        onClick={() => setInputHidden(false)}
+                      >
+                        <Pencil className="h-3 w-3" />
+                        编辑
+                      </Button>
+                    )}
+                  </div>
                   <div className="mt-1.5 text-sm">
                     <MathText text={problemText} />
                   </div>
