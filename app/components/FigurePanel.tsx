@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import { CheckCircle2, ImageIcon, Loader2, RefreshCw, TriangleAlert } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -25,6 +25,7 @@ export function FigurePanel({
   problemText,
   initialFigure,
   fallbackSvg,
+  onFigure,
 }: {
   /** Figure for a session (cached on it, step highlights from its solution) … */
   sessionId?: string;
@@ -33,12 +34,19 @@ export function FigurePanel({
   initialFigure?: SolvedFigure | null;
   /** Model-drawn SVG shown (marked unchecked) when no computed figure is available. */
   fallbackSvg?: string;
+  /** Called with the computed figure once it has loaded (e.g. to carry it over when a problem is used). */
+  onFigure?: (figure: SolvedFigure) => void;
 }) {
   const [state, setState] = useState<State>(initialFigure ? { kind: "ready", figure: initialFigure } : { kind: "loading" });
   const [step, setStep] = useState<number | null>(null);
   const [showChecks, setShowChecks] = useState(false);
   const [nonce, setNonce] = useState(0);
   const [force, setForce] = useState(false);
+  // Keep the latest callback without making it an effect dependency.
+  const onFigureRef = useRef(onFigure);
+  useEffect(() => {
+    onFigureRef.current = onFigure;
+  }, [onFigure]);
 
   useEffect(() => {
     if (initialFigure && nonce === 0) return;
@@ -53,7 +61,10 @@ export function FigurePanel({
         const data = (await res.json()) as { figure?: SolvedFigure | null; reason?: string; error?: string };
         if (cancelled) return;
         if (!res.ok) setState({ kind: "error", message: data.error ?? `请求失败 (${res.status})` });
-        else if (data.figure) setState({ kind: "ready", figure: data.figure });
+        else if (data.figure) {
+          setState({ kind: "ready", figure: data.figure });
+          onFigureRef.current?.(data.figure);
+        }
         else if (data.reason === "not_needed") setState({ kind: "none" });
         else setState({ kind: "error", message: data.reason ?? "无法作图" });
       })

@@ -9,7 +9,7 @@ import { MethodDetail } from "./components/MethodDetail";
 import { MethodList } from "./components/MethodList";
 import { MethodComparison } from "./components/MethodComparison";
 import { PipelineProgress } from "./components/PipelineProgress";
-import { ProblemGenerator } from "./components/ProblemGenerator";
+import { ProblemGenerator, type UsedProblemFigure } from "./components/ProblemGenerator";
 import { SessionHistory } from "./components/SessionHistory";
 import { StepCard } from "./components/StepCard";
 import { StepPane } from "./components/StepPane";
@@ -23,6 +23,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import { FigurePanel } from "./components/FigurePanel";
+import { DiagramSvg } from "./components/DiagramSvg";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import {
   Calculator,
@@ -98,9 +99,12 @@ export default function Home() {
   const [stepsExpanded, setStepsExpanded] = useState(false);
   // After "使用此题" the raw input box is hidden and only the rendered problem is shown.
   const [inputHidden, setInputHidden] = useState(false);
-  const useProblemFromGenerator = (text: string) => {
+  // Figure carried over from the generator; shown under the problem while its text is unchanged.
+  const [usedFigure, setUsedFigure] = useState<(UsedProblemFigure & { text: string }) | null>(null);
+  const useProblemFromGenerator = (text: string, figure?: UsedProblemFigure) => {
     useGeneratedProblem(text);
     setInputHidden(true);
+    setUsedFigure(figure ? { ...figure, text } : null);
   };
 
   // Auto-select tab when session data changes (e.g., after loading history)
@@ -266,6 +270,15 @@ export default function Home() {
                   <div className="mt-1.5 text-sm">
                     <MathText text={problemText} />
                   </div>
+                  {usedFigure && usedFigure.text === problemText && (
+                    <div className="mt-3">
+                      {usedFigure.figure ? (
+                        <FigurePanel problemText={problemText} initialFigure={usedFigure.figure} />
+                      ) : usedFigure.fallbackSvg ? (
+                        <DiagramSvg svg={usedFigure.fallbackSvg} />
+                      ) : null}
+                    </div>
+                  )}
                 </div>
               )}
 

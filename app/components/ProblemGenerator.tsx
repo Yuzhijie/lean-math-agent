@@ -10,6 +10,7 @@ import type {
 import { GRADE_LEVELS, DIFFICULTY_LEVELS, COMPETITION_DOMAINS } from "@/lib/types";
 import { MathText } from "./MathText";
 import { FigurePanel } from "./FigurePanel";
+import type { SolvedFigure } from "@/lib/figure/spec";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -40,8 +41,14 @@ import {
   FileCode,
 } from "lucide-react";
 
+/** What a generated problem carries over when it is used: its computed figure, or the model's SVG. */
+export interface UsedProblemFigure {
+  figure?: SolvedFigure;
+  fallbackSvg?: string;
+}
+
 type Props = {
-  onUseProblem: (problemText: string) => void;
+  onUseProblem: (problemText: string, figure?: UsedProblemFigure) => void;
   onFormalize: (problemText: string) => void;
   disabled?: boolean;
 };
@@ -253,7 +260,7 @@ export function ProblemGenerator({ onUseProblem, onFormalize, disabled }: Props)
               <ProblemCard
                 key={problem.id}
                 problem={problem}
-                onUse={() => onUseProblem(problem.statement)}
+                onUse={(figure) => onUseProblem(problem.statement, figure)}
                 onFormalize={() => onFormalize(problem.statement)}
                 disabled={disabled}
               />
@@ -274,12 +281,13 @@ function ProblemCard({
   disabled,
 }: {
   problem: GeneratedProblem;
-  onUse: () => void;
+  onUse: (figure?: UsedProblemFigure) => void;
   onFormalize: () => void;
   disabled?: boolean;
 }) {
   const [showAnswer, setShowAnswer] = useState(false);
   const [showHints, setShowHints] = useState(false);
+  const [figure, setFigure] = useState<SolvedFigure | undefined>(undefined);
 
   return (
     <Card className="border-border/60 hover:border-border transition-colors duration-200">
@@ -303,7 +311,7 @@ function ProblemCard({
 
         {/* Diagram */}
         {/* Computed + checked figure; the model's own SVG is only a fallback. */}
-        <FigurePanel key={problem.id} problemText={problem.statement} fallbackSvg={problem.diagram_svg} />
+        <FigurePanel key={problem.id} problemText={problem.statement} fallbackSvg={problem.diagram_svg} onFigure={setFigure} />
 
         {/* Meta */}
         <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
@@ -330,7 +338,12 @@ function ProblemCard({
 
         {/* Actions */}
         <div className="flex flex-wrap items-center gap-2 pt-1">
-          <Button size="sm" onClick={onUse} disabled={disabled} className="gap-1.5">
+          <Button
+            size="sm"
+            onClick={() => onUse(figure || problem.diagram_svg ? { figure, fallbackSvg: problem.diagram_svg } : undefined)}
+            disabled={disabled}
+            className="gap-1.5"
+          >
             <CheckCircle2 className="h-3.5 w-3.5" />
             使用此题
           </Button>
