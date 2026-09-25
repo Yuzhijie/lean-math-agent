@@ -102,6 +102,8 @@ lib/
     render.ts                       # Deterministic SVG (geometry, axes, function curves, angle/equal marks, highlights); runs in the browser
     expr.ts                         # Safe expression compiler for function plots (no eval)
     generate.ts                     # LLM → FigureSpec → solve/check → one repair round; keyword pre-filter
+    logic.ts                        # Logic-puzzle diagrams: grid (matching), Venn (2–3 sets), ordering (row/circle), tree — exhaustive solve, uniqueness + answer checks
+    logic-render.ts                 # SVG for logic diagrams (✓/✗ grid, Venn regions, seats, tree + leaf list)
   pipeline/
     theorem-pipeline.ts             # Theorem pipeline shared by /api/solve and /api/solve-stream
   prover/
@@ -214,7 +216,7 @@ components/ui/                      # 16 shadcn/ui primitives (+avatar, dropdown
 - **REPL tactic mode**: `ProofSession` opens `theorem … := by sorry` once and applies tactics to goal-state handles (milliseconds per step, replayed if the worker dies); the hammer, goal-level search and sketch-and-fill all run on it. Every result is still re-assembled as text and passed through `verifyLeanSource`
 - **Budget-aware LLM calls**: `expectedLatencyMs(role)` (EMA of observed call latencies, timeouts included) gates every repair round, goal-search expansion and sketch round — a call that cannot finish in the remaining budget is skipped rather than aborted (aborted calls still bill their tokens); tactic-step calls use `reasoningEffort: "low"` on reasoning models
 - **Retrieval before generation**: `buildProverContext` (premises for the initial goal + verified proofs of similar theorems) feeds the whole-proof, sketch and goal-search prompts; goal search re-retrieves per node; unknown identifiers get "similar declarations" from the local index
-- **Figures are computed, not drawn by the model**: the model writes a `FigureSpec` (what to construct and which conditions hold); `lib/figure` computes coordinates, checks every condition numerically and renders SVG. A figure whose conditions fail is shown as a sketch ("示意图"), never as accurate; figure checks are separate from Lean verification
+- **Figures are computed, not drawn by the model**: the model writes a `FigureSpec` (what to construct and which conditions hold); `lib/figure` computes coordinates, checks every condition numerically and renders SVG. A figure whose conditions fail is shown as a sketch ("示意图"), never as accurate; figure checks are separate from Lean verification. Logic puzzles use `FigureSpec.logic` (grid/venn/ordering/tree): the program solves the puzzle exhaustively and checks uniqueness and the stated answer
 - **Formalization reliability**: several sampled statements vote by elaborated signature (α-normalised); the winner must survive `decide`/`plausible` counterexample search (layer 6) before any LLM validation layer or proof search is spent on it
 - **Roles + metrics**: `chatJson`/`sampleText` take `role: "prover" | "planner"`; endpoint chains come from `LLM_PROVER_*` / `LLM_PLANNER_*`; every solve runs in `withUsageScope`, and `verifyLeanSource` records itself, so responses/sessions carry `metrics` (calls, tokens, cost, verifications, wall time)
 - **Sorry degradation**: unprovable steps get `sorry` annotations, pipeline continues

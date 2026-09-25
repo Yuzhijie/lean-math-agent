@@ -8,6 +8,7 @@
  * verifies the claimed conditions numerically.
  */
 import { z } from "zod";
+import { logicSchema, type LogicSolved } from "./logic";
 
 const id = z.string().min(1).max(16).regex(/^[A-Za-z][A-Za-z0-9_'′₀-₉]*$/, "id must be a short identifier like A, B1, O, l1");
 const pair = z.tuple([id, id]);
@@ -103,8 +104,10 @@ export const figureSpecSchema = z.object({
   functions: z.array(functionSchema).max(6).default([]),
   /** Points that are constructed but not drawn / labelled. */
   hidden_points: z.array(id).default([]),
+  /** Logic-puzzle diagram (matching grid, Venn diagram, line-up / seating, tree diagram). */
+  logic: logicSchema.optional(),
   /** Element ids (points, segment/angle ids, circle ids, fn ids) each solution step refers to; step is 1-based. */
-  step_highlights: z.array(z.object({ step: z.number().int().min(1), ids: z.array(id) })).default([]),
+  step_highlights: z.array(z.object({ step: z.number().int().min(1), ids: z.array(z.string().min(1).max(16)) })).default([]),
 });
 
 export type Construction = z.infer<typeof constructionSchema>;
@@ -124,7 +127,8 @@ export interface SolvedCircle {
 }
 
 export interface ClaimResult {
-  claim: Claim;
+  /** The geometric claim checked (absent for logic-diagram checks). */
+  claim?: Claim;
   ok: boolean;
   /** Human-readable measurement, e.g. "∠ABC = 89.9°（应为 90°）". */
   detail: string;
@@ -140,4 +144,6 @@ export interface SolvedFigure {
   verified: boolean;
   /** Construction problems that were worked around (defaults used, etc.). */
   warnings: string[];
+  /** Solved logic diagram, when the spec has one. */
+  logic?: LogicSolved;
 }

@@ -9,6 +9,7 @@
  * angle marks, equal-length ticks and labels.
  */
 import { compileExpr } from "./expr";
+import { renderLogicSvg } from "./logic-render";
 import type { Point2, SolvedFigure } from "./spec";
 
 export interface RenderOptions {
@@ -41,6 +42,8 @@ function niceStep(range: number): number {
 }
 
 export function renderFigureSvg(fig: SolvedFigure, opts: RenderOptions = {}): string {
+  // Logic-puzzle diagrams (grid / Venn / line-up / tree) have their own renderer.
+  if (fig.spec.logic && fig.logic) return renderLogicSvg(fig.spec.logic, fig.logic, opts.highlight ?? []);
   const W = opts.width ?? 480;
   const maxH = opts.maxHeight ?? 380;
   const hi = new Set(opts.highlight ?? []);

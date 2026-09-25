@@ -14,7 +14,7 @@ import { figureSpecSchema, type FigureSpec, type SolvedFigure } from "./spec";
 export const FIGURE_SYSTEM = `你为中小学数学题配图。你不画图、不写坐标计算，只输出一份 JSON「图形描述」，由程序计算坐标并校验题目条件。
 
 输出 JSON 字段：
-- needed: 是否需要配图。纯代数、数论、计数且无几何/函数背景时为 false，其余字段可省略。
+- needed: 是否需要配图。纯代数、数论且无几何/函数背景、也不是逻辑推理/集合/排队/搭配计数题时为 false，其余字段可省略。
 - title: 图的简短标题（可选）。
 - constructions: 按作图顺序构造点和圆（后面的构造只能引用前面已定义的点）。op 取值：
   - {"op":"triangle","ids":["A","B","C"],"sides":{"AB":5,"BC":6},"angles":{"A":90},"isosceles_at":"A","equilateral":false} —— 给出题目中的边长（以两顶点命名）和角度（度，以顶点命名），缺省的由程序补成示意图。
@@ -38,6 +38,13 @@ export const FIGURE_SYSTEM = `你为中小学数学题配图。你不画图、�
 - hidden_points: 构造用但不显示的点。
 - step_highlights: 解答第几步（从 1 开始）要突出哪些元素：[{"step":2,"ids":["AD","D","angB"]}]；元素用点名、线段名（两端点名相连，如 "AD"）、draw 项的 id、圆 id、函数 id。
 
+- logic: 逻辑题图示（逻辑推理、集合计数、排队座位、搭配计数题用它；此时 constructions/draw/claims 留空数组，不要 axes）。程序会穷举求解、检查答案是否唯一且正确，再画图。四种之一：
+  - 对应推理（甲乙丙分别是…）→ 表格法：{"type":"grid","categories":[{"name":"人","items":["甲","乙","丙"]},{"name":"职业","items":["医生","教师","律师"]}],"constraints":[{"type":"is_not","a":"甲","b":"医生"},{"type":"is","a":"乙","b":"律师"},{"type":"one_of","a":"丙","options":["医生","教师"]}],"answer":{"甲":["教师"],"乙":["律师"],"丙":["医生"]}}。第一类是行（通常是人），每类项数相同；约束可跨任意两类（如 {"type":"is","a":"医生","b":"北京"}）。无法用 is/is_not/one_of 表达的条件（如"比…年龄大"、说真话假话）写进 "unencoded":["原文条件"]，不要硬编。
+  - 集合计数（喜欢…的有…人，两样都…）→ 韦恩图：{"type":"venn","sets":[{"id":"A","label":"语文","total":25},{"id":"B","label":"数学","total":30}],"intersections":[{"sets":["A","B"],"count":12}],"universe":50,"ask":"neither","answer":7,"universe_label":"全班"}。total/count 都是"包含"的人数（喜欢语文的 25 人含两样都喜欢的）；neither=都不…的人数，union=至少一样的人数；ask 取 "A∩B"、"A∪B"、"A"、"only A"、"neither"、"exactly one"、"exactly two" 等。
+  - 排队、座位（排成一排、围坐一圈、相邻、左边）→ {"type":"ordering","layout":"row","items":["A","B","C","D"],"constraints":[{"type":"position","a":"A","pos":1},{"type":"adjacent","a":"B","b":"C"},{"type":"left_of","a":"C","b":"D"}],"answer":["A","B","C","D"],"ends":["左","右"]}。约束：position/not_position(pos 从 1 起，row 从左数)、left_of、immediately_left_of、adjacent、not_adjacent、between{a,b,c}(a 在 b、c 之间)、at_end、not_at_end、opposite(圆桌正对)。layout:"circle" 时 answer 按顺时针。问"有多少种排法"时不写 answer，写 "count":种数。
+  - 搭配、有多少种（树状图）→ {"type":"tree","levels":[{"label":"上衣","options":["红","蓝"]},{"label":"裤子","options":["黑","白","灰"]}],"answer":6}；从同一组里选且不能重复时 levels 各层写同一组并加 "distinct":true；禁止的组合写 "exclude":[["红","白"]]。
+  逻辑题中项名须唯一（2–12 字），step_highlights 的 ids 用项名（如 "甲"、"医生"），韦恩图用区域名 "A"、"B"、"AB"、"none"。
+
 要求：
 1. 忠实于题目：题目给出的长度、角度、垂直、平行、中点、相切等条件都要体现在 constructions 或 claims 里。
 2. 求证/求解的结论不要作为已知条件写进 constructions（可以写进 claims，程序会检查图是否符合）。
@@ -48,14 +55,17 @@ export const FIGURE_SYSTEM = `你为中小学数学题配图。你不画图、�
 {"needed":true,"title":"等腰三角形 ABC","constructions":[{"op":"triangle","ids":["A","B","C"],"sides":{"AB":5,"AC":5,"BC":6},"isosceles_at":"A"},{"op":"foot","id":"D","from":"A","line":["B","C"]}],"draw":[{"type":"segment","a":"A","b":"D","id":"AD","dashed":true},{"type":"angle","vertex":"D","from":"A","to":"C","right":true},{"type":"equal_marks","segments":[["A","B"],["A","C"]]}],"claims":[{"type":"perpendicular","lines":[["A","D"],["B","C"]]},{"type":"length","segment":["A","B"],"value":5}],"step_highlights":[{"step":1,"ids":["AD","D"]}]}
 
 示例（二次函数 y=x²-2x-3 与 x 轴交于 A、B，顶点 P）：
-{"needed":true,"axes":{"x":[-3,5],"y":[-5,6],"grid":true},"functions":[{"id":"f","expr":"x^2-2x-3","label":"y=x²-2x-3"}],"constructions":[{"op":"function_point","id":"A","fn":"f","x":-1},{"op":"function_point","id":"B","fn":"f","x":3},{"op":"function_point","id":"P","fn":"f","x":1}],"claims":[{"type":"function_passes","fn":"f","x":-1,"y":0},{"type":"function_passes","fn":"f","x":3,"y":0}],"step_highlights":[{"step":2,"ids":["P"]}]}`;
+{"needed":true,"axes":{"x":[-3,5],"y":[-5,6],"grid":true},"functions":[{"id":"f","expr":"x^2-2x-3","label":"y=x²-2x-3"}],"constructions":[{"op":"function_point","id":"A","fn":"f","x":-1},{"op":"function_point","id":"B","fn":"f","x":3},{"op":"function_point","id":"P","fn":"f","x":1}],"claims":[{"type":"function_passes","fn":"f","x":-1,"y":0},{"type":"function_passes","fn":"f","x":3,"y":0}],"step_highlights":[{"step":2,"ids":["P"]}]}
+
+示例（甲、乙、丙三人分别是医生、教师、律师。甲不是医生，乙是律师。）：
+{"needed":true,"title":"推理表","constructions":[],"draw":[],"claims":[],"logic":{"type":"grid","categories":[{"name":"人","items":["甲","乙","丙"]},{"name":"职业","items":["医生","教师","律师"]}],"constraints":[{"type":"is_not","a":"甲","b":"医生"},{"type":"is","a":"乙","b":"律师"}],"answer":{"甲":["教师"],"乙":["律师"],"丙":["医生"]}},"step_highlights":[{"step":1,"ids":["乙","律师"]},{"step":2,"ids":["甲","医生"]}]}`;
 
 /**
  * Cheap pre-filter: skip the LLM call for problems with no geometric or
  * graphical content. Errs on the side of trying.
  */
 export function mightNeedFigure(problemText: string): boolean {
-  return /三角形|四边形|多边形|平行四边形|矩形|长方形|正方形|菱形|梯形|圆|弧|弦|切线|半径|直径|角|垂直|垂足|平行|中点|中线|高线|平分线|线段|射线|直线|对称|旋转|翻折|折叠|坐标|函数|图像|图象|抛物线|双曲线|椭圆|x\s*轴|y\s*轴|数轴|面积|周长|体积|棱|正方体|长方体|圆柱|圆锥|球|向量|△|∠|⊥|∥|⊙|内心|外心|重心|垂心|内切|外接|\\(?:angle|triangle|odot|perp|parallel|overline|widehat|sqrt\{[^}]*\}\s*x)|triangle|circle|angle|graph|parabola|perpendicular|parallel/i.test(
+  return /三角形|四边形|多边形|平行四边形|矩形|长方形|正方形|菱形|梯形|圆|弧|弦|切线|半径|直径|角|垂直|垂足|平行|中点|中线|高线|平分线|线段|射线|直线|对称|旋转|翻折|折叠|坐标|函数|图像|图象|抛物线|双曲线|椭圆|x\s*轴|y\s*轴|数轴|面积|周长|体积|棱|正方体|长方体|圆柱|圆锥|球|向量|△|∠|⊥|∥|⊙|内心|外心|重心|垂心|内切|外接|分别是|分别为|说谎|说真话|说假话|真话|假话|排成一[排行列]|排队|站成|座位|围坐|圆桌|相邻|挨着|左边|右边|喜欢|参加|都不|两[样项种]都|既.{1,8}又|有多少种|多少种不同|搭配|树状图|推理|职业|甲.{0,6}乙.{0,6}丙|\\(?:angle|triangle|odot|perp|parallel|overline|widehat|sqrt\{[^}]*\}\s*x)|triangle|circle|angle|graph|parabola|perpendicular|parallel/i.test(
     problemText,
   );
 }

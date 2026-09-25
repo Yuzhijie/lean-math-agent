@@ -5,7 +5,8 @@
  * fit together is caught here). A figure with a failing claim is still
  * shown, but labelled as a sketch ("示意图") rather than an accurate figure.
  */
-import { dist, solveFigure, type SolveResult } from "./solve";
+import { LogicError, solveLogic } from "./logic";
+import { dist, FigureError, solveFigure, type SolveResult } from "./solve";
 import type { Claim, ClaimResult, FigureSpec, Point2, SolvedFigure } from "./spec";
 
 const DEG = 180 / Math.PI;
@@ -119,7 +120,18 @@ export function implicitClaims(spec: FigureSpec): Claim[] {
 /** Solve + check. Throws FigureError when the figure cannot be constructed. */
 export function buildFigure(spec: FigureSpec): SolvedFigure {
   const solved = solveFigure(spec);
-  const claims = [...implicitClaims(spec), ...spec.claims].map((c) => checkClaim(c, solved));
+  const claims: ClaimResult[] = [...implicitClaims(spec), ...spec.claims].map((c) => checkClaim(c, solved));
+  let logic: SolvedFigure["logic"];
+  if (spec.logic) {
+    try {
+      const r = solveLogic(spec.logic);
+      logic = r.solved;
+      claims.push(...r.checks);
+    } catch (e) {
+      // Same contract as geometry: a description that cannot be built is a FigureError (→ repair round).
+      throw new FigureError(e instanceof LogicError ? e.message : String(e));
+    }
+  }
   return {
     spec,
     points: solved.points,
@@ -127,5 +139,6 @@ export function buildFigure(spec: FigureSpec): SolvedFigure {
     claims,
     verified: claims.every((c) => c.ok),
     warnings: solved.warnings,
+    logic,
   };
 }

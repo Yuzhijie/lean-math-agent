@@ -118,6 +118,14 @@ rotations …, plus the problem's conditions and which elements each solution st
 computes the coordinates, checks every condition numerically and the page renders SVG with per-step
 highlighting. Failed conditions mark the figure as a sketch. `POST /api/figure { session_id }`.
 
+Logic puzzles get a diagram the same way (`lib/figure/logic.ts`): the model describes the puzzle —
+a matching grid (甲乙丙分别是…), a 2–3 set Venn diagram (喜欢…的有…人), a line-up or round-table
+seating (排成一排、围坐、相邻), or a tree diagram (搭配、有多少种) — and the program solves it
+exhaustively. The grid's ✓/✗ come from all solutions of the stated conditions, every Venn region is
+solved from the counts, seatings are checked for uniqueness (rotations/mirror images counted once)
+and trees are counted; the model's answer is checked against the result, and conditions it could
+not encode are listed, so such a diagram is never shown as verified.
+
 Trust does not change with any of this: a proof counts only when Lean reports no errors, no
 `sorry` (textually and via `#print axioms`), only the standard axioms, and the proved
 statement's signature equals the locked one; every body is checked with
