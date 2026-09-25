@@ -20,7 +20,20 @@ type State =
  * step buttons re-highlight instantly. Renders nothing when the problem
  * does not need a figure.
  */
-export function FigurePanel({ sessionId, initialFigure }: { sessionId: string; initialFigure?: SolvedFigure | null }) {
+export function FigurePanel({
+  sessionId,
+  problemText,
+  initialFigure,
+  fallbackSvg,
+}: {
+  /** Figure for a session (cached on it, step highlights from its solution) … */
+  sessionId?: string;
+  /** … or for a bare problem statement (problem generator). */
+  problemText?: string;
+  initialFigure?: SolvedFigure | null;
+  /** Model-drawn SVG shown (marked unchecked) when no computed figure is available. */
+  fallbackSvg?: string;
+}) {
   const [state, setState] = useState<State>(initialFigure ? { kind: "ready", figure: initialFigure } : { kind: "loading" });
   const [step, setStep] = useState<number | null>(null);
   const [showChecks, setShowChecks] = useState(false);
@@ -29,11 +42,12 @@ export function FigurePanel({ sessionId, initialFigure }: { sessionId: string; i
 
   useEffect(() => {
     if (initialFigure && nonce === 0) return;
+    if (!sessionId && !problemText) return;
     let cancelled = false;
     fetch("/api/figure", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId, refresh: nonce > 0, force }),
+      body: JSON.stringify(sessionId ? { session_id: sessionId, refresh: nonce > 0, force } : { problem_text: problemText, force }),
     })
       .then(async (res) => {
         const data = (await res.json()) as { figure?: SolvedFigure | null; reason?: string; error?: string };
@@ -49,13 +63,17 @@ export function FigurePanel({ sessionId, initialFigure }: { sessionId: string; i
     return () => {
       cancelled = true;
     };
-  }, [sessionId, nonce, initialFigure, force]);
+  }, [sessionId, problemText, nonce, initialFigure, force]);
 
   const figure = state.kind === "ready" ? state.figure : undefined;
   const steps = useMemo(
     () => (figure ? [...new Set(figure.spec.step_highlights.map((h) => h.step))].sort((a, b) => a - b) : []),
     [figure],
   );
+  const fallback = useMemo(() => {
+    if (!fallbackSvg || typeof window === "undefined" || !DOMPurify.isSupported) return "";
+    return DOMPurify.sanitize(fallbackSvg, { USE_PROFILES: { svg: true, svgFilters: true }, FORBID_TAGS: ["foreignObject", "script", "style"] });
+  }, [fallbackSvg]);
   const svg = useMemo(() => {
     if (!figure || typeof window === "undefined" || !DOMPurify.isSupported) return "";
     const highlight = step === null ? [] : figure.spec.step_highlights.filter((h) => h.step === step).flatMap((h) => h.ids);
@@ -68,6 +86,19 @@ export function FigurePanel({ sessionId, initialFigure }: { sessionId: string; i
     return DOMPurify.sanitize(raw, { USE_PROFILES: { svg: true }, FORBID_TAGS: ["foreignObject", "script", "style"] });
   }, [figure, step]);
 
+  if ((state.kind === "none" || state.kind === "error") && fallback) {
+    return (
+      <div className="rounded-lg border border-border/60 bg-white/[0.02] p-3">
+        <div className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
+          <span className="flex items-center gap-2">
+            <ImageIcon className="h-4 w-4" />
+            模型绘制的示意图（未经校验）
+          </span>
+        </div>
+        <div className="flex justify-center [&_svg]:h-auto [&_svg]:max-h-[320px] [&_svg]:max-w-full" dangerouslySetInnerHTML={{ __html: fallback }} />
+      </div>
+    );
+  }
   if (state.kind === "none") {
     // The problem looked like it needs no figure; let the user ask for one anyway.
     return (

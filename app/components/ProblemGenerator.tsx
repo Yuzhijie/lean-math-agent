@@ -9,7 +9,7 @@ import type {
 } from "@/lib/types";
 import { GRADE_LEVELS, DIFFICULTY_LEVELS, COMPETITION_DOMAINS } from "@/lib/types";
 import { MathText } from "./MathText";
-import { DiagramSvg } from "./DiagramSvg";
+import { FigurePanel } from "./FigurePanel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -302,7 +302,8 @@ function ProblemCard({
         </div>
 
         {/* Diagram */}
-        {problem.diagram_svg && <DiagramSvg svg={problem.diagram_svg} />}
+        {/* Computed + checked figure; the model's own SVG is only a fallback. */}
+        <FigurePanel key={problem.id} problemText={problem.statement} fallbackSvg={problem.diagram_svg} />
 
         {/* Meta */}
         <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
