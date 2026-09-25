@@ -55,7 +55,7 @@ export const FIGURE_SYSTEM = `你为中小学数学题配图。你不画图、�
  * graphical content. Errs on the side of trying.
  */
 export function mightNeedFigure(problemText: string): boolean {
-  return /三角形|四边形|多边形|平行四边形|矩形|长方形|正方形|菱形|梯形|圆|弧|弦|切线|半径|直径|角|垂直|垂足|平行|中点|中线|高线|平分线|线段|射线|直线|对称|旋转|翻折|折叠|坐标|函数|图像|图象|抛物线|双曲线|椭圆|x\s*轴|y\s*轴|数轴|面积|周长|体积|棱|正方体|长方体|圆柱|圆锥|球|向量|△|∠|⊥|∥|⊙|triangle|circle|angle|graph|parabola|perpendicular|parallel/i.test(
+  return /三角形|四边形|多边形|平行四边形|矩形|长方形|正方形|菱形|梯形|圆|弧|弦|切线|半径|直径|角|垂直|垂足|平行|中点|中线|高线|平分线|线段|射线|直线|对称|旋转|翻折|折叠|坐标|函数|图像|图象|抛物线|双曲线|椭圆|x\s*轴|y\s*轴|数轴|面积|周长|体积|棱|正方体|长方体|圆柱|圆锥|球|向量|△|∠|⊥|∥|⊙|内心|外心|重心|垂心|内切|外接|\\(?:angle|triangle|odot|perp|parallel|overline|widehat|sqrt\{[^}]*\}\s*x)|triangle|circle|angle|graph|parabola|perpendicular|parallel/i.test(
     problemText,
   );
 }

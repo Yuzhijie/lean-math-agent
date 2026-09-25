@@ -25,6 +25,7 @@ export function FigurePanel({ sessionId, initialFigure }: { sessionId: string; i
   const [step, setStep] = useState<number | null>(null);
   const [showChecks, setShowChecks] = useState(false);
   const [nonce, setNonce] = useState(0);
+  const [force, setForce] = useState(false);
 
   useEffect(() => {
     if (initialFigure && nonce === 0) return;
@@ -32,7 +33,7 @@ export function FigurePanel({ sessionId, initialFigure }: { sessionId: string; i
     fetch("/api/figure", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId, refresh: nonce > 0 }),
+      body: JSON.stringify({ session_id: sessionId, refresh: nonce > 0, force }),
     })
       .then(async (res) => {
         const data = (await res.json()) as { figure?: SolvedFigure | null; reason?: string; error?: string };
@@ -48,7 +49,7 @@ export function FigurePanel({ sessionId, initialFigure }: { sessionId: string; i
     return () => {
       cancelled = true;
     };
-  }, [sessionId, nonce, initialFigure]);
+  }, [sessionId, nonce, initialFigure, force]);
 
   const figure = state.kind === "ready" ? state.figure : undefined;
   const steps = useMemo(
@@ -67,7 +68,29 @@ export function FigurePanel({ sessionId, initialFigure }: { sessionId: string; i
     return DOMPurify.sanitize(raw, { USE_PROFILES: { svg: true }, FORBID_TAGS: ["foreignObject", "script", "style"] });
   }, [figure, step]);
 
-  if (state.kind === "none") return null;
+  if (state.kind === "none") {
+    // The problem looked like it needs no figure; let the user ask for one anyway.
+    return (
+      <div className="flex items-center justify-between rounded-lg border border-dashed border-border/60 p-2 text-xs text-muted-foreground">
+        <span className="flex items-center gap-2">
+          <ImageIcon className="h-4 w-4" />
+          本题未自动配图
+        </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 text-xs"
+          onClick={() => {
+            setState({ kind: "loading" });
+            setForce(true);
+            setNonce((n) => n + 1);
+          }}
+        >
+          生成配图
+        </Button>
+      </div>
+    );
+  }
   if (state.kind === "loading") {
     return (
       <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/10 p-4 text-sm text-muted-foreground">

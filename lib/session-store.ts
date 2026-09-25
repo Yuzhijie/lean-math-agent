@@ -106,12 +106,30 @@ export async function saveSessionToDisk(id: string): Promise<void> {
     if (session) await sqliteStore.save(session);
     return;
   }
-  const session = store.get(id);
-  if (!session) return;
-  await fs.mkdir(getSessionsDir(), { recursive: true });
-  const filePath = path.join(getSessionsDir(), `${id}.json`);
-  await fs.writeFile(filePath, JSON.stringify(session, null, 2), "utf8");
+  // Serialize writes per session and write atomically (temp file + rename):
+  // updates fire in quick succession, and overlapping writeFile calls on the
+  // same path used to leave files with two interleaved JSON documents.
+  const prev = diskWrites.get(id) ?? Promise.resolve();
+  const next = prev
+    .catch(() => undefined)
+    .then(async () => {
+      const session = store.get(id);
+      if (!session) return;
+      await fs.mkdir(getSessionsDir(), { recursive: true });
+      const filePath = path.join(getSessionsDir(), `${id}.json`);
+      const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+      await fs.writeFile(tmp, JSON.stringify(session, null, 2), "utf8");
+      await fs.rename(tmp, filePath);
+    });
+  diskWrites.set(id, next);
+  try {
+    await next;
+  } finally {
+    if (diskWrites.get(id) === next) diskWrites.delete(id);
+  }
 }
+
+const diskWrites = new Map<string, Promise<void>>();
 
 /** Load a session from disk into memory. */
 export async function loadSessionFromDisk(id: string): Promise<Session | undefined> {

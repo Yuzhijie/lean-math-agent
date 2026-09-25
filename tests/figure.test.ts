@@ -162,6 +162,37 @@ describe("solveFigure + checks", () => {
   });
 });
 
+describe("regression: right triangle with the incentres of ABD and ACD", () => {
+  const text = "在直角三角形 $ABC$ 中，$\\angle A=90^\\circ$，$AB=6$，$AC=8$。从点 $A$ 向斜边 $BC$ 作垂线，垂足为 $D$。设 $I_1$、$I_2$ 分别为三角形 $ABD$、$ACD$ 的内心，求 $I_1I_2^2$。";
+
+  it("passes the pre-filter, also with LaTeX-only wording", () => {
+    expect(mightNeedFigure(text)).toBe(true);
+    expect(mightNeedFigure("设 $\\triangle PQR$ 满足 $PQ=QR$")).toBe(true);
+    expect(mightNeedFigure("$\\angle ABC = 30^\\circ$，求 $\\sin$ 值")).toBe(true);
+  });
+
+  it("builds a checked figure with I1I2² = 8", () => {
+    const fig = buildFigure(
+      spec({
+        constructions: [
+          { op: "triangle", ids: ["A", "B", "C"], sides: { AB: 6, AC: 8 }, angles: { A: 90 } },
+          { op: "foot", id: "D", from: "A", line: ["B", "C"] },
+          { op: "incircle", id: "w1", of: ["A", "B", "D"], center_id: "I1" },
+          { op: "incircle", id: "w2", of: ["A", "C", "D"], center_id: "I2" },
+        ],
+        claims: [
+          { type: "perpendicular", lines: [["A", "D"], ["B", "C"]] },
+          { type: "length", segment: ["I1", "I2"], value: Math.sqrt(8) },
+        ],
+      }),
+    );
+    expect(fig.verified).toBe(true);
+    close(dist(fig.points.I1, fig.points.I2) ** 2, 8);
+    close(fig.circles.w1.r, 1.2);
+    close(fig.circles.w2.r, 1.6);
+  });
+});
+
 describe("renderFigureSvg", () => {
   const fig = buildFigure(
     spec({
