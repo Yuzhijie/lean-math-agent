@@ -110,6 +110,14 @@ limits of stages 4–5 together. Every accepted proof is stored in proof memory.
 response and session carries `metrics`: LLM calls/tokens by role and model, an estimated cost
 (`LLM_PRICES`), Lean verifications by backend and wall time.
 
+### Figures (图文并茂)
+
+Solutions to geometry and function problems come with a figure. The model only describes the figure
+(`lib/figure/spec.ts`: points built from triangles/squares/circles, midpoints, feet, intersections,
+rotations …, plus the problem's conditions and which elements each solution step uses); the server
+computes the coordinates, checks every condition numerically and the page renders SVG with per-step
+highlighting. Failed conditions mark the figure as a sketch. `POST /api/figure { session_id }`.
+
 Trust does not change with any of this: a proof counts only when Lean reports no errors, no
 `sorry` (textually and via `#print axioms`), only the standard axioms, and the proved
 statement's signature equals the locked one; every body is checked with

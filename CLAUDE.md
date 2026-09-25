@@ -19,7 +19,7 @@ AI-powered Lean 4 math theorem prover + problem solver. Single-page Next.js app.
 | Lean | Lean 4 + Mathlib v4.33.1 + Batteries + Aesop; verification via persistent `leanprover-community/repl` workers (env reuse, sorry goals, tactic mode, axiom + statement checks), `lake env lean` fallback |
 | Compute | Python SymPy HTTP microservice (9 endpoints) |
 | State | In-memory Map + JSON disk persistence |
-| Tests | Vitest (63 test files) |
+| Tests | Vitest (65 test files) |
 
 ## Project Structure
 
@@ -35,7 +35,8 @@ app/
   components/
     AuthButton.tsx                  # Login/logout dropdown with avatar
     BuildLog.tsx                    # Collapsible Lean build log
-    DiagramSvg.tsx                  # SVG geometry diagrams
+    DiagramSvg.tsx                  # Sanitized LLM SVG (problem generator)
+    FigurePanel.tsx                 # Solution figure: fetches /api/figure, renders client-side, per-step highlights, check badge
     GeometryDiagram.tsx             # Interactive SVG geometry visualization
     Header.tsx                      # Navigation header (auth, locale, links)
     KnowledgeGraph.tsx              # Interactive Neo4j knowledge graph SVG
@@ -58,6 +59,7 @@ app/
     auth/[...nextauth]/route.ts     # NextAuth handler
     autoformalize/route.ts          # NL → Lean theorem (5-layer validation)
     enumerate/route.ts              # Enumerate proof methods
+    figure/route.ts                 # Figure for a session's problem (generate → solve coordinates → check claims; cached on the session)
     evaluate/route.ts               # Multi-agent method scoring
     generate-problem/route.ts       # Problem generation by params
     intuition/route.ts              # Post-proof learning review
@@ -93,6 +95,13 @@ lib/
     neo4j-client.ts                 # Neo4j driver + query functions
   geometry/
     clingo-solver.ts                # Clingo ASP geometry solver
+  figure/
+    spec.ts                         # FigureSpec Zod schema: constructions (triangle/square/midpoint/foot/intersection/circles/…), draw items, claims, axes, functions, step highlights
+    solve.ts                        # Coordinates from constructions (triangle solver SSS/SAS/ASA/SSA + defaults, shape placement)
+    check.ts                        # Numeric verification of claims + construction data → verified / sketch
+    render.ts                       # Deterministic SVG (geometry, axes, function curves, angle/equal marks, highlights); runs in the browser
+    expr.ts                         # Safe expression compiler for function plots (no eval)
+    generate.ts                     # LLM → FigureSpec → solve/check → one repair round; keyword pre-filter
   pipeline/
     theorem-pipeline.ts             # Theorem pipeline shared by /api/solve and /api/solve-stream
   prover/
@@ -193,7 +202,7 @@ docker-compose.yml                  # Service orchestration (web + compute + neo
 nginx.conf                          # Reverse proxy with rate limiting
 .dockerignore                       # Docker build exclusions
 
-tests/                              # 63 Vitest test files (unit + fake REPL + real-Lean integration)
+tests/                              # 65 Vitest test files (unit + fake REPL + real-Lean integration)
 components/ui/                      # 16 shadcn/ui primitives (+avatar, dropdown-menu, label)
 ```
 
@@ -205,6 +214,7 @@ components/ui/                      # 16 shadcn/ui primitives (+avatar, dropdown
 - **REPL tactic mode**: `ProofSession` opens `theorem … := by sorry` once and applies tactics to goal-state handles (milliseconds per step, replayed if the worker dies); the hammer, goal-level search and sketch-and-fill all run on it. Every result is still re-assembled as text and passed through `verifyLeanSource`
 - **Budget-aware LLM calls**: `expectedLatencyMs(role)` (EMA of observed call latencies, timeouts included) gates every repair round, goal-search expansion and sketch round — a call that cannot finish in the remaining budget is skipped rather than aborted (aborted calls still bill their tokens); tactic-step calls use `reasoningEffort: "low"` on reasoning models
 - **Retrieval before generation**: `buildProverContext` (premises for the initial goal + verified proofs of similar theorems) feeds the whole-proof, sketch and goal-search prompts; goal search re-retrieves per node; unknown identifiers get "similar declarations" from the local index
+- **Figures are computed, not drawn by the model**: the model writes a `FigureSpec` (what to construct and which conditions hold); `lib/figure` computes coordinates, checks every condition numerically and renders SVG. A figure whose conditions fail is shown as a sketch ("示意图"), never as accurate; figure checks are separate from Lean verification
 - **Formalization reliability**: several sampled statements vote by elaborated signature (α-normalised); the winner must survive `decide`/`plausible` counterexample search (layer 6) before any LLM validation layer or proof search is spent on it
 - **Roles + metrics**: `chatJson`/`sampleText` take `role: "prover" | "planner"`; endpoint chains come from `LLM_PROVER_*` / `LLM_PLANNER_*`; every solve runs in `withUsageScope`, and `verifyLeanSource` records itself, so responses/sessions carry `metrics` (calls, tokens, cost, verifications, wall time)
 - **Sorry degradation**: unprovable steps get `sorry` annotations, pipeline continues

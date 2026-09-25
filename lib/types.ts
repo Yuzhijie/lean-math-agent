@@ -231,6 +231,8 @@ export interface Session {
   sorry_labels: SorryLabel[];
   computation_result?: ComputationResult;
   nl_solution?: NaturalLanguageSolution;
+  /** Figure for the problem (computed coordinates + checked conditions), see lib/figure. */
+  figure?: import("./figure/spec").SolvedFigure;
   lean_proof_attempt?: LeanProofAttempt;
   /** What the last solve run consumed (LLM calls/tokens by role, Lean verifications, wall time). */
   metrics?: RunMetrics;

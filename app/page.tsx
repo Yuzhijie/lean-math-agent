@@ -22,6 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
+import { FigurePanel } from "./components/FigurePanel";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import {
   Calculator,
@@ -364,6 +365,9 @@ export default function Home() {
                       </div>
                     </CardHeader>
                     <CardContent className="space-y-5">
+                      {/* Figure (geometry / function graphs), computed and checked server-side */}
+                      {state.sessionId && <FigurePanel key={state.sessionId} sessionId={state.sessionId} />}
+
                       {/* Summary */}
                       <div className="rounded-lg bg-primary/5 border border-primary/10 p-4">
                         <MathText text={nlSolution.summary} className="text-sm leading-relaxed" />
