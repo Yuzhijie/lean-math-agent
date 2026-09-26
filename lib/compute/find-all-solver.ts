@@ -1,5 +1,6 @@
 import { ComputeEngine, isPerfectSquareBigInt } from "./engine";
 import { chatJson } from "../llm/client";
+import { lt } from "../llm/output-locale";
 import { z } from "zod";
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -172,8 +173,8 @@ async function verifyCandidateWithComputation(
       value: candidateValue,
       satisfies,
       details: satisfies
-        ? `确定性验证通过: ${details.join("; ")}`
-        : `确定性验证失败: ${details.join("; ")}`,
+        ? lt(`确定性验证通过: ${details.join("; ")}`, `Deterministic check passed: ${details.join("; ")}`)
+        : lt(`确定性验证失败: ${details.join("; ")}`, `Deterministic check failed: ${details.join("; ")}`),
       terms_computed: result.terms.length,
       terms_verified: failureIndex !== null ? failureIndex : result.terms.length,
     };
@@ -334,7 +335,7 @@ ${analysis.verification_method ? `Suggested verification method: ${analysis.veri
       candidates.push({
         value: candidate,
         satisfies: false,
-        details: "验证过程出错",
+        details: lt("验证过程出错", "Verification raised an error"),
       });
     }
   }
@@ -367,25 +368,25 @@ Provide a completeness argument explaining why these are the ONLY solutions.`,
     });
   } catch {
     completenessResult = {
-      completeness_argument: "在搜索范围 [" + searchMin + ", " + searchMax + "] 内已穷举验证所有候选值。",
-      key_insight: "通过系统搜索和逐一验证确定所有解。",
-      bounding_argument: "搜索范围由必要条件限定。",
+      completeness_argument: lt("在搜索范围 [" + searchMin + ", " + searchMax + "] 内已穷举验证所有候选值。", `All candidates in the search range [${searchMin}, ${searchMax}] were checked exhaustively.`),
+      key_insight: lt("通过系统搜索和逐一验证确定所有解。", "All solutions were found by systematic search and case-by-case verification."),
+      bounding_argument: lt("搜索范围由必要条件限定。", "The search range is bounded by the necessary conditions."),
     };
   }
 
   // Step 5: Build solution steps
   const solutionSteps: string[] = [
-    `**分析问题**：${analysis.analysis}`,
-    `**必要条件**：\n${analysis.necessary_conditions.map((c, i) => `${i + 1}. ${c}`).join("\n")}`,
-    `**搜索范围**：${args.hints?.parameter ?? "m"} ∈ [${searchMin}, ${searchMax}]`,
-    `**候选值**：共检查 ${sortedCandidates.length} 个候选值`,
-    `**验证结果**：满足条件的值为 ${validValues.join(", ")}`,
-    `**完备性论证**：${completenessResult.completeness_argument}`,
+    lt(`**分析问题**：${analysis.analysis}`, `**Analysis**: ${analysis.analysis}`),
+    lt(`**必要条件**：\n${analysis.necessary_conditions.map((c, i) => `${i + 1}. ${c}`).join("\n")}`, `**Necessary conditions**:\n${analysis.necessary_conditions.map((c, i) => `${i + 1}. ${c}`).join("\n")}`),
+    lt(`**搜索范围**：${args.hints?.parameter ?? "m"} ∈ [${searchMin}, ${searchMax}]`, `**Search range**: ${args.hints?.parameter ?? "m"} ∈ [${searchMin}, ${searchMax}]`),
+    lt(`**候选值**：共检查 ${sortedCandidates.length} 个候选值`, `**Candidates**: ${sortedCandidates.length} values checked`),
+    lt(`**验证结果**：满足条件的值为 ${validValues.join(", ")}`, `**Verification**: the values satisfying the condition are ${validValues.join(", ")}`),
+    lt(`**完备性论证**：${completenessResult.completeness_argument}`, `**Completeness argument**: ${completenessResult.completeness_argument}`),
   ];
 
   const answerStr = validValues.length > 0
     ? validValues.map((v) => `${args.hints?.parameter ?? "m"} = ${v}`).join(", ")
-    : "无解";
+    : lt("无解", "No solution");
 
   return {
     answer: answerStr,

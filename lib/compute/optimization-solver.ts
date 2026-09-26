@@ -6,6 +6,8 @@
 //
 // Deterministic search — no LLM guesswork.
 
+import { lt } from "../llm/output-locale";
+
 // ── Types ─────────────────────────────────────────────────────────────
 
 export interface OptimizationCategory {
@@ -266,7 +268,7 @@ export function solveOptimization(
     exampleSets[cat.count_variable] = set;
     const setSum = set.reduce((a, b) => a + b, 0);
     reasoningParts.push(
-      `${k} 个${typeLabel(cat.integer_type)}，最小和 = ${minSum(cat.integer_type, k)}，实际和 = ${setSum}`,
+      lt(`${k} 个${typeLabel(cat.integer_type)}，最小和 = ${minSum(cat.integer_type, k)}，实际和 = ${setSum}`, `${k} ${typeLabel(cat.integer_type)}: minimum sum = ${minSum(cat.integer_type, k)}, actual sum = ${setSum}`),
     );
   }
 
@@ -283,11 +285,11 @@ export function solveOptimization(
     assignments: bestAssignments,
     is_feasible: true,
     reasoning: [
-      `目标：${isMaximize ? "最大化" : "最小化"} ${coeffStr}`,
-      `约束：所有数的总和 = ${target_sum}`,
-      `最优分配：${assignStr}`,
+      lt(`目标：${isMaximize ? "最大化" : "最小化"} ${coeffStr}`, `Objective: ${isMaximize ? "maximize" : "minimize"} ${coeffStr}`),
+      lt(`约束：所有数的总和 = ${target_sum}`, `Constraint: sum of all numbers = ${target_sum}`),
+      lt(`最优分配：${assignStr}`, `Optimal assignment: ${assignStr}`),
       ...reasoningParts,
-      `最优值 = ${bestValue}`,
+      lt(`最优值 = ${bestValue}`, `Optimal value = ${bestValue}`),
     ].join("\n"),
     example_sets: exampleSets,
   };
@@ -320,7 +322,7 @@ function solveSingleCategory(
     optimal_value: value,
     assignments: { [cat.count_variable]: k },
     is_feasible: true,
-    reasoning: `${k} 个${typeLabel(cat.integer_type)}，总和 = ${structure.target_sum}`,
+    reasoning: lt(`${k} 个${typeLabel(cat.integer_type)}，总和 = ${structure.target_sum}`, `${k} ${typeLabel(cat.integer_type)}, sum = ${structure.target_sum}`),
     example_sets: {
       [cat.count_variable]: constructSingleSet(cat.integer_type, k, remainder),
     },
@@ -388,10 +390,10 @@ function constructSingleSet(
 function typeLabel(type: "even" | "odd" | "integer"): string {
   switch (type) {
     case "even":
-      return "正偶数";
+      return lt("正偶数", "positive even numbers");
     case "odd":
-      return "正奇数";
+      return lt("正奇数", "positive odd numbers");
     case "integer":
-      return "正整数";
+      return lt("正整数", "positive integers");
   }
 }

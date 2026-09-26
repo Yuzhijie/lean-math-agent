@@ -6,6 +6,7 @@
  * of the two attempts is kept.
  */
 import { chatJson } from "../llm/client";
+import { lt } from "../llm/output-locale";
 import type { NaturalLanguageSolution } from "../types";
 import { buildFigure } from "./check";
 import { FigureError } from "./solve";
@@ -134,5 +135,5 @@ export async function generateFigure(args: {
   const score = (f?: SolvedFigure) => (f ? f.claims.filter((c) => c.ok).length - 10 * f.claims.filter((c) => !c.ok).length : -Infinity);
   const best = score(b?.figure) > score(a.figure) ? b?.figure : a.figure;
   if (best) return { figure: best, attempts: 2 };
-  return { reason: b?.error ?? a.error ?? "无法作图", attempts: 2 };
+  return { reason: b?.error ?? a.error ?? lt("无法作图", "Could not draw a figure"), attempts: 2 };
 }

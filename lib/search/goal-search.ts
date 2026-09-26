@@ -21,6 +21,7 @@ import { sampleText } from "../llm/client";
 import type { ReasoningEffort } from "../llm/config";
 import { TACTIC_STEP_SYSTEM, tacticStepUserMessage } from "../llm/prompts";
 import { expectedLatencyMs } from "../llm/usage-tracker";
+import { lt } from "../llm/output-locale";
 import { PriorityQueue } from "./priority-queue";
 
 export interface GoalSearchConfig {
@@ -213,7 +214,16 @@ export async function goalSearch(args: GoalSearchArgs): Promise<GoalSearchResult
     const node = queue.pop()!;
     expansions++;
     log.push(`expand #${expansions} depth ${node.depth}, ${node.goals.length} goal(s): ${node.goals[0]?.split("\n").pop()?.slice(0, 80)}`);
-    args.onProgress?.({ expansions, frontier: queue.size, depth: node.depth, goals: node.goals.length, detail: `搜索节点 ${expansions}（深度 ${node.depth}，剩余 ${node.goals.length} 个 goal）` });
+    args.onProgress?.({
+      expansions,
+      frontier: queue.size,
+      depth: node.depth,
+      goals: node.goals.length,
+      detail: lt(
+        `搜索节点 ${expansions}（深度 ${node.depth}，剩余 ${node.goals.length} 个 goal）`,
+        `Search node ${expansions} (depth ${node.depth}, ${node.goals.length} goal(s) left)`,
+      ),
+    });
 
     // 1. Automation first.
     if (cfg.useHammer) {

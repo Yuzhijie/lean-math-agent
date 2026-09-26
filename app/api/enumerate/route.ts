@@ -2,8 +2,9 @@ import { NextResponse } from "next/server";
 import { enumerateMethods } from "@/lib/llm/enumerate";
 import { createSession, updateSession } from "@/lib/session-store";
 import { LlmError } from "@/lib/llm/client";
+import { withRequestLocale } from "@/lib/llm/output-locale";
 
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   const body = (await req.json()) as { problem_text?: string };
   if (!body.problem_text?.trim()) {
     return NextResponse.json({ error: "problem_text required" }, { status: 400 });
@@ -27,3 +28,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: msg, session_id: session.id }, { status: 502 });
   }
 }
+
+// Server messages and model output follow the UI language (lib/llm/output-locale.ts).
+export const POST = withRequestLocale(handlePOST);

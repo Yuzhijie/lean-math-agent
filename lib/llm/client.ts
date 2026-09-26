@@ -3,6 +3,7 @@ import { isOpenAiReasoningModel, loadConfig, LlmConfigError, type LlmConfig, typ
 import { buildCacheKey, getGlobalCache } from "./cache";
 import { parseAndRecordUsage, recordLatency, setPriceTable, type RawUsage } from "./usage-tracker";
 import { logLlm, logDebug, type LlmLogEntry } from "./logger";
+import { localizeMessages, outputLocale } from "./output-locale";
 
 export class LlmError extends Error {}
 
@@ -277,9 +278,11 @@ export function buildRequestBody(
 // ══════════════════════════════════════════════════════════════════════
 
 async function rawChatMessages(
-  messages: ChatMessage[],
+  inputMessages: ChatMessage[],
   options: CallOptions = {},
 ): Promise<string> {
+  // Write user-facing text in the UI language (see output-locale.ts).
+  const messages = localizeMessages(inputMessages, await outputLocale(), { minimal: options.role === "prover" });
   let config: LlmConfig;
   try {
     config = loadConfig();

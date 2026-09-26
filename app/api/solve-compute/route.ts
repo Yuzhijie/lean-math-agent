@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { solveComputational } from "@/lib/compute/solver";
 import { LlmError } from "@/lib/llm/client";
+import { withRequestLocale } from "@/lib/llm/output-locale";
 
 interface SolveComputeRequest {
   problem_text: string;
@@ -11,7 +12,7 @@ interface SolveComputeRequest {
   };
 }
 
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   let body: SolveComputeRequest;
   try {
     body = (await req.json()) as SolveComputeRequest;
@@ -42,3 +43,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: msg }, { status: 502 });
   }
 }
+
+// Server messages and model output follow the UI language (lib/llm/output-locale.ts).
+export const POST = withRequestLocale(handlePOST);

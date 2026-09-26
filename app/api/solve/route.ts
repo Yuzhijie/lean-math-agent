@@ -21,6 +21,7 @@ import type {
   NaturalLanguageSolution,
   Session,
 } from "@/lib/types";
+import { lt, withRequestLocale } from "@/lib/llm/output-locale";
 
 interface SolveRequest {
   problem_text?: string;
@@ -33,7 +34,7 @@ interface SolveRequest {
   };
 }
 
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   const body = (await req.json()) as SolveRequest;
 
   // Get or create session
@@ -67,7 +68,7 @@ export async function POST(req: Request) {
 
       events.push({
         stage: "classifying",
-        detail: `问题类型: ${problemType}`,
+        detail: lt(`问题类型: ${problemType}`, `Problem type: ${problemType}`),
       });
 
       let response: Response;
@@ -109,7 +110,7 @@ async function handleComputationalProblem(
 ) {
   // Step 1: Compute the answer
   updateSession(session.id, { pipeline_stage: "computing" });
-  events.push({ stage: "computing", detail: "开始计算求解..." });
+  events.push({ stage: "computing", detail: lt("开始计算求解...", "Starting computation...") });
 
   const computeResult = await solveComputational({
     problemText: session.problem_text,
@@ -132,7 +133,7 @@ async function handleComputationalProblem(
 
   events.push({
     stage: "computing",
-    detail: `答案: ${computeResult.answer} (≈${computeResult.answer_decimal}) [${computeResult.cross_validated ? "交叉验证通过" : "单一方法"}]`,
+    detail: lt(`答案: ${computeResult.answer} (≈${computeResult.answer_decimal}) [${computeResult.cross_validated ? "交叉验证通过" : "单一方法"}]`, `Answer: ${computeResult.answer} (≈${computeResult.answer_decimal}) [${computeResult.cross_validated ? "cross-validated" : "single method"}]`),
   });
 
   // Step 2: Generate natural language solution (NL first)
@@ -140,7 +141,7 @@ async function handleComputationalProblem(
 
   if (!opts.skip_nl_solution) {
     updateSession(session.id, { pipeline_stage: "nl_solving" });
-    events.push({ stage: "nl_solving", detail: "生成自然语言解答..." });
+    events.push({ stage: "nl_solving", detail: lt("生成自然语言解答...", "Generating the natural-language solution...") });
 
     try {
       nlSolution = await generateNLSolution({
@@ -156,12 +157,12 @@ async function handleComputationalProblem(
       updateSession(session.id, { nl_solution: nlSolution });
       events.push({
         stage: "nl_solving",
-        detail: `✅ 自然语言解答完成 (${nlSolution.steps.length} 步)`,
+        detail: lt(`✅ 自然语言解答完成 (${nlSolution.steps.length} 步)`, `✅ Natural-language solution ready (${nlSolution.steps.length} steps)`),
       });
     } catch (e) {
       events.push({
         stage: "nl_solving",
-        detail: `⚠️ 自然语言解答失败: ${e instanceof Error ? e.message : "未知错误"}`,
+        detail: lt(`⚠️ 自然语言解答失败: ${e instanceof Error ? e.message : "未知错误"}`, `⚠️ Natural-language solution failed: ${e instanceof Error ? e.message : "unknown error"}`),
       });
     }
   }
@@ -173,11 +174,11 @@ async function handleComputationalProblem(
     leanProofAttempt = {
       attempted: false,
       success: false,
-      failure_reason: "用户选择跳过 Lean 形式化尝试",
+      failure_reason: lt("用户选择跳过 Lean 形式化尝试", "Lean formalization skipped at the user's request"),
     };
   } else {
     updateSession(session.id, { pipeline_stage: "lean_attempting" });
-    events.push({ stage: "lean_attempting", detail: "尝试 Lean 4 形式化证明..." });
+    events.push({ stage: "lean_attempting", detail: lt("尝试 Lean 4 形式化证明...", "Attempting a Lean 4 formal proof...") });
 
     leanProofAttempt = await attemptLeanFormalization(
       session.problem_text,
@@ -189,8 +190,8 @@ async function handleComputationalProblem(
     events.push({
       stage: "lean_attempting",
       detail: leanProofAttempt.success
-        ? "✅ Lean 4 形式化证明成功"
-        : `ℹ️ Lean 4 形式化未能完成: ${leanProofAttempt.failure_reason ?? "未知原因"}`,
+        ? lt("✅ Lean 4 形式化证明成功", "✅ Lean 4 formal proof succeeded")
+        : lt(`ℹ️ Lean 4 形式化未能完成: ${leanProofAttempt.failure_reason ?? "未知原因"}`, `ℹ️ Lean 4 formalization not completed: ${leanProofAttempt.failure_reason ?? "unknown reason"}`),
     });
   }
 
@@ -198,7 +199,7 @@ async function handleComputationalProblem(
 
   events.push({
     stage: "complete",
-    detail: `求解完成 — 答案: ${computeResult.answer}`,
+    detail: lt(`求解完成 — 答案: ${computeResult.answer}`, `Solved — answer: ${computeResult.answer}`),
   });
 
   await saveSessionToDisk(session.id);
@@ -235,18 +236,18 @@ async function handleOptimizationProblem(
 ) {
   // Step 1: Extract optimization structure via LLM
   updateSession(session.id, { pipeline_stage: "extracting" });
-  events.push({ stage: "extracting", detail: "提取优化问题结构..." });
+  events.push({ stage: "extracting", detail: lt("提取优化问题结构...", "Extracting the optimization problem structure...") });
 
   const structure = await extractOptimizationStructure(session.problem_text);
 
   events.push({
     stage: "extracting",
-    detail: `目标: ${structure.objective} ${structure.objective_description}, 类别数: ${structure.categories.length}`,
+    detail: lt(`目标: ${structure.objective} ${structure.objective_description}, 类别数: ${structure.categories.length}`, `Objective: ${structure.objective} ${structure.objective_description}, categories: ${structure.categories.length}`),
   });
 
   // Step 2: Deterministic optimization search
   updateSession(session.id, { pipeline_stage: "optimizing" });
-  events.push({ stage: "optimizing", detail: "确定性搜索最优解..." });
+  events.push({ stage: "optimizing", detail: lt("确定性搜索最优解...", "Searching deterministically for the optimum...") });
 
   const result = solveOptimization(structure);
 
@@ -266,7 +267,7 @@ async function handleOptimizationProblem(
 
   events.push({
     stage: "optimizing",
-    detail: `最优值: ${answerStr} (${Object.entries(result.assignments).map(([k, v]) => `${k}=${v}`).join(", ")})`,
+    detail: `${lt("最优值", "Optimal value")}: ${answerStr} (${Object.entries(result.assignments).map(([k, v]) => `${k}=${v}`).join(", ")})`,
   });
 
   // Step 3: Generate natural language solution
@@ -274,7 +275,7 @@ async function handleOptimizationProblem(
 
   if (!opts.skip_nl_solution) {
     updateSession(session.id, { pipeline_stage: "nl_solving" });
-    events.push({ stage: "nl_solving", detail: "生成自然语言解答..." });
+    events.push({ stage: "nl_solving", detail: lt("生成自然语言解答...", "Generating the natural-language solution...") });
 
     try {
       nlSolution = await generateNLSolution({
@@ -290,12 +291,12 @@ async function handleOptimizationProblem(
       updateSession(session.id, { nl_solution: nlSolution });
       events.push({
         stage: "nl_solving",
-        detail: `✅ 自然语言解答完成 (${nlSolution.steps.length} 步)`,
+        detail: lt(`✅ 自然语言解答完成 (${nlSolution.steps.length} 步)`, `✅ Natural-language solution ready (${nlSolution.steps.length} steps)`),
       });
     } catch (e) {
       events.push({
         stage: "nl_solving",
-        detail: `⚠️ 自然语言解答失败: ${e instanceof Error ? e.message : "未知错误"}`,
+        detail: lt(`⚠️ 自然语言解答失败: ${e instanceof Error ? e.message : "未知错误"}`, `⚠️ Natural-language solution failed: ${e instanceof Error ? e.message : "unknown error"}`),
       });
     }
   }
@@ -304,7 +305,7 @@ async function handleOptimizationProblem(
   const leanProofAttempt: LeanProofAttempt = {
     attempted: false,
     success: false,
-    failure_reason: "组合优化问题的 Lean 形式化需要复杂的归纳论证，当前自动证明能力有限",
+    failure_reason: lt("组合优化问题的 Lean 形式化需要复杂的归纳论证，当前自动证明能力有限", "Formalizing combinatorial optimization problems in Lean requires intricate inductive arguments, beyond current automated proving"),
   };
 
   updateSession(session.id, {
@@ -314,7 +315,7 @@ async function handleOptimizationProblem(
 
   events.push({
     stage: "complete",
-    detail: `求解完成 — 最优值: ${answerStr}`,
+    detail: lt(`求解完成 — 最优值: ${answerStr}`, `Solved — optimal value: ${answerStr}`),
   });
 
   await saveSessionToDisk(session.id);
@@ -356,7 +357,7 @@ async function handleFindAllProblem(
 ) {
   // Step 1: Systematic search and verification
   updateSession(session.id, { pipeline_stage: "computing" });
-  events.push({ stage: "computing", detail: "开始穷举搜索..." });
+  events.push({ stage: "computing", detail: lt("开始穷举搜索...", "Starting exhaustive search...") });
 
   const findAllResult = await solveFindAll({
     problemText: session.problem_text,
@@ -378,7 +379,7 @@ async function handleFindAllProblem(
 
   events.push({
     stage: "computing",
-    detail: `找到 ${findAllResult.valid_values.length} 个满足条件的值: ${findAllResult.answer}`,
+    detail: lt(`找到 ${findAllResult.valid_values.length} 个满足条件的值: ${findAllResult.answer}`, `Found ${findAllResult.valid_values.length} values satisfying the conditions: ${findAllResult.answer}`),
   });
 
   // Step 2: Generate natural language solution
@@ -386,7 +387,7 @@ async function handleFindAllProblem(
 
   if (!opts.skip_nl_solution) {
     updateSession(session.id, { pipeline_stage: "nl_solving" });
-    events.push({ stage: "nl_solving", detail: "生成自然语言解答..." });
+    events.push({ stage: "nl_solving", detail: lt("生成自然语言解答...", "Generating the natural-language solution...") });
 
     try {
       nlSolution = await generateNLSolution({
@@ -402,12 +403,12 @@ async function handleFindAllProblem(
       updateSession(session.id, { nl_solution: nlSolution });
       events.push({
         stage: "nl_solving",
-        detail: `✅ 自然语言解答完成 (${nlSolution.steps.length} 步)`,
+        detail: lt(`✅ 自然语言解答完成 (${nlSolution.steps.length} 步)`, `✅ Natural-language solution ready (${nlSolution.steps.length} steps)`),
       });
     } catch (e) {
       events.push({
         stage: "nl_solving",
-        detail: `⚠️ 自然语言解答失败: ${e instanceof Error ? e.message : "未知错误"}`,
+        detail: lt(`⚠️ 自然语言解答失败: ${e instanceof Error ? e.message : "未知错误"}`, `⚠️ Natural-language solution failed: ${e instanceof Error ? e.message : "unknown error"}`),
       });
     }
   }
@@ -416,7 +417,7 @@ async function handleFindAllProblem(
   const leanProofAttempt: LeanProofAttempt = {
     attempted: false,
     success: false,
-    failure_reason: "求所有值问题的 Lean 形式化需要完备性证明，当前自动证明能力有限",
+    failure_reason: lt("求所有值问题的 Lean 形式化需要完备性证明，当前自动证明能力有限", "Formalizing find-all-values problems in Lean requires a completeness proof, beyond current automated proving"),
   };
 
   updateSession(session.id, {
@@ -426,7 +427,7 @@ async function handleFindAllProblem(
 
   events.push({
     stage: "complete",
-    detail: `求解完成 — 满足条件的所有值: ${findAllResult.answer}`,
+    detail: lt(`求解完成 — 满足条件的所有值: ${findAllResult.answer}`, `Solved — all values satisfying the conditions: ${findAllResult.answer}`),
   });
 
   await saveSessionToDisk(session.id);
@@ -504,11 +505,11 @@ async function attemptLeanFormalization(
         attempted: true,
         success: false,
         formal_statement: formalResult.formal_statement,
-        failure_reason: "自动形式化验证未通过",
+        failure_reason: lt("自动形式化验证未通过", "Autoformalization did not pass validation"),
         limitations: [
-          "该计算问题涉及复杂代数运算，Lean 4 形式化存在以下困难：",
+          lt("该计算问题涉及复杂代数运算，Lean 4 形式化存在以下困难：", "This computational problem involves complex algebra; formalizing it in Lean 4 ran into these difficulties:"),
           ...failedLayers,
-          "建议使用自然语言解答作为主要参考。",
+          lt("建议使用自然语言解答作为主要参考。", "Use the natural-language solution as the primary reference."),
         ],
       };
     }
@@ -526,11 +527,11 @@ async function attemptLeanFormalization(
     return {
       attempted: true,
       success: false,
-      failure_reason: `形式化过程出错: ${e instanceof Error ? e.message : "未知错误"}`,
+      failure_reason: lt(`形式化过程出错: ${e instanceof Error ? e.message : "未知错误"}`, `Formalization error: ${e instanceof Error ? e.message : "unknown error"}`),
       limitations: [
-        "该问题涉及复杂的数值计算或根号运算",
-        "Lean 4 的 Mathlib 对这类问题的自动化支持有限",
-        "自然语言解答已提供完整的推导和验证过程",
+        lt("该问题涉及复杂的数值计算或根号运算", "The problem involves complex numerical computation or radicals"),
+        lt("Lean 4 的 Mathlib 对这类问题的自动化支持有限", "Mathlib (Lean 4) has limited automation for problems of this kind"),
+        lt("自然语言解答已提供完整的推导和验证过程", "The natural-language solution gives the full derivation and verification"),
       ],
     };
   }
@@ -557,13 +558,15 @@ ${formalStatement ? formalStatement : `theorem ${theoremName} : ${theoremType} :
     attempted: true,
     success: false,
     formal_statement: leanSource,
-    failure_reason: "计算问题的形式化证明需要复杂的数值推导，当前自动证明能力有限",
+    failure_reason: lt("计算问题的形式化证明需要复杂的数值推导，当前自动证明能力有限", "A formal proof of this computational problem requires involved numerical derivation, beyond current automated proving"),
     limitations: [
-      `问题的数值答案 (${answer}) 需要多步代数推导才能在 Lean 中验证`,
-      "涉及平方、根号化简、验根等步骤，Lean 的 `norm_num` / `ring` 策略无法直接处理",
-      "如需完整的形式化证明，建议手动编写 Lean proof term 并使用 `calc` 块逐步推导",
-      "自然语言解答中已包含完整的推导和验证过程",
+      lt(`问题的数值答案 (${answer}) 需要多步代数推导才能在 Lean 中验证`, `Verifying the numerical answer (${answer}) in Lean requires a multi-step algebraic derivation`),
+      lt("涉及平方、根号化简、验根等步骤，Lean 的 `norm_num` / `ring` 策略无法直接处理", "It involves squaring, simplifying radicals and checking roots, which Lean's `norm_num` / `ring` tactics cannot handle directly"),
+      lt("如需完整的形式化证明，建议手动编写 Lean proof term 并使用 `calc` 块逐步推导", "For a complete formal proof, write the Lean proof term by hand and derive the result step by step in a `calc` block"),
+      lt("自然语言解答中已包含完整的推导和验证过程", "The natural-language solution includes the full derivation and verification"),
     ],
   };
 }
 
+// Server messages and model output follow the UI language (lib/llm/output-locale.ts).
+export const POST = withRequestLocale(handlePOST);

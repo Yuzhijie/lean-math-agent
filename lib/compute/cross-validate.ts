@@ -3,6 +3,8 @@
  * Pure TypeScript — no external dependencies.
  */
 
+import { lt } from "../llm/output-locale";
+
 export interface MethodResult {
   method_name: string;
   target_value: string; // exact symbolic value (e.g., "14/5")
@@ -96,7 +98,7 @@ export function crossValidateMethods(
     const details = results.map(
       (r) => `${r.method_name}: ${r.target_value} (≈${r.target_decimal})`,
     );
-    discrepancyDetail = `方法结果不一致:\n${details.join("\n")}`;
+    discrepancyDetail = lt(`方法结果不一致:\n${details.join("\n")}`, `Methods disagree:\n${details.join("\n")}`);
   }
 
   // Vieta cross-check: if we have explicit roots and a Vieta sum
@@ -114,7 +116,7 @@ export function crossValidateMethods(
     if (crossCheckDiff > tolerance) {
       discrepancyDetail =
         (discrepancyDetail ?? "") +
-        `\n根集交叉检查: 有效根之和(${rootSum}) ≠ Vieta根之和(${vietaDecimal})`;
+        lt(`\n根集交叉检查: 有效根之和(${rootSum}) ≠ Vieta根之和(${vietaDecimal})`, `\nRoot-set cross-check: sum of valid roots (${rootSum}) ≠ Vieta sum of roots (${vietaDecimal})`);
     }
   }
 

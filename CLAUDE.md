@@ -3,7 +3,7 @@
 ## What This Is
 
 AI-powered Lean 4 math theorem prover + problem solver. Single-page Next.js app.
-- User inputs a math problem in natural language (Chinese)
+- User inputs a math problem in natural language (Chinese or English; UI and generated content follow the UI language)
 - System classifies problem type → dispatches to appropriate solver pipeline
 - Theorem problems: autoformalize (candidate voting + counterexample search) → premise retrieval + proof memory → hammer → whole-proof prover loop (sample → verify → repair with Lean feedback) → sketch-and-fill (holes closed by hammer / goal-level tactic search) → enumerate methods → plan steps → best-first proof search → Lean 4 verify
 - Computational problems: equation setup → SymPy solve → cross-validate → NL explanation
@@ -113,6 +113,7 @@ lib/
     context.ts                      # Prover context: retrieved premises + recalled proofs as one prompt block; rememberVerifiedProof
   llm/
     client.ts                       # Core LLM client (roles, sampling, retry, fallback, cache, Zod)
+    output-locale.ts                # Output language per request (ui_locale cookie): prompt switch for English, lt(zh, en), withRequestLocale
     config.ts                       # LLM config from env vars (role chains, prices)
     cache.ts                        # LRU response cache (SHA-256 keyed)
     logger.ts                       # Structured JSON logger
@@ -295,7 +296,8 @@ See `docs/P3-FEATURES.md` for detailed setup and usage guide.
 
 ## Coding Conventions
 
-- UI text: bilingual — every user-visible string is `tr("中文", "English")` from `useI18n()` (American English). The locale follows the OS/browser language; the header's language button overrides it (cookie `locale`, cleared by "follow system"). The root layout resolves the locale on the server (cookie → Accept-Language) so the first render matches. Server/LLM content (problems, solutions, check details) is not translated
+- UI text: bilingual — every user-visible string is `tr("中文", "English")` from `useI18n()` (American English). The locale follows the OS/browser language; the header's language button overrides it (cookie `locale`, cleared by "follow system"). The root layout resolves the locale on the server (cookie → Accept-Language) so the first render matches
+- Generated content follows the UI language: the browser keeps a `ui_locale` cookie; API routes are wrapped with `withRequestLocale` (lib/llm/output-locale.ts); for English, `rawChatMessages` switches the prompts' "Chinese" directives and appends an output-language instruction (prover/Lean calls: word switch only). Server-produced messages (progress events, summaries, check details, errors) use `lt("中文", "English")` at runtime — never at import time. Files bundled into the browser (lib/figure/logic.ts, render.ts, expr.ts, logic-render.ts, spec.ts) must not import output-locale; they take a `tr` parameter instead
 - Code: English
 - Types: All in `lib/types.ts`, Zod schemas in `lib/schemas.ts`
 - API pattern: POST with JSON body, return `NextResponse.json()`

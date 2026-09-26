@@ -24,6 +24,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { BuildStatus } from "../types";
 import { recordVerification } from "../llm/usage-tracker";
+import { lt } from "../llm/output-locale";
 import { parseLeanLog } from "./parse-log";
 import { getReplPool, ReplError, replLauncherFromEnv, type ReplCommandResponse, type ReplWorker } from "./repl";
 import { sanitizeLeanSource, splitHeader, stripCommentsAndStrings } from "./sanitize";
@@ -201,34 +202,36 @@ export function sandboxRoot(): string {
 }
 
 const AVAILABILITY_TTL_MS = 60_000;
-let availability: { at: number; result: { ok: true } | { ok: false; message: string } } | null = null;
+/** Only the verdict is cached; the message is built per call so it follows the UI language. */
+let availability: { at: number; ok: boolean } | null = null;
+
+function leanUnavailableMessage(): string {
+  return lt(
+    "未检测到可用的 lake/Lean。请安装 elan（https://lean-lang.org/install/），确保 `lake --version` 可用，并检查 LEAN_SANDBOX_PATH。",
+    "No usable lake/Lean found. Install elan (https://lean-lang.org/install/), make sure `lake --version` works, and check LEAN_SANDBOX_PATH.",
+  );
+}
 
 export async function checkLeanAvailable(): Promise<
   { ok: true } | { ok: false; message: string }
 > {
-  if (availability && Date.now() - availability.at < AVAILABILITY_TTL_MS) {
-    return availability.result;
+  if (!availability || Date.now() - availability.at >= AVAILABILITY_TTL_MS) {
+    let ok: boolean;
+    if (replLauncherFromEnv()) {
+      // A custom REPL launcher was configured: Lean lives wherever that
+      // command points, so `lake` need not be on PATH.
+      ok = true;
+    } else {
+      try {
+        await withLakeSlot(() => runCmd("lake", ["--version"], sandboxRoot(), 10_000));
+        ok = true;
+      } catch {
+        ok = false;
+      }
+    }
+    availability = { at: Date.now(), ok };
   }
-  let result: { ok: true } | { ok: false; message: string };
-  if (replLauncherFromEnv()) {
-    // A custom REPL launcher was configured: Lean lives wherever that
-    // command points, so `lake` need not be on PATH.
-    result = { ok: true };
-    availability = { at: Date.now(), result };
-    return result;
-  }
-  try {
-    await withLakeSlot(() => runCmd("lake", ["--version"], sandboxRoot(), 10_000));
-    result = { ok: true };
-  } catch {
-    result = {
-      ok: false,
-      message:
-        "未检测到可用的 lake/Lean。请安装 elan（https://lean-lang.org/install/），确保 `lake --version` 可用，并检查 LEAN_SANDBOX_PATH。",
-    };
-  }
-  availability = { at: Date.now(), result };
-  return result;
+  return availability.ok ? { ok: true } : { ok: false, message: leanUnavailableMessage() };
 }
 
 /** Forget the cached availability result (for testing). */
@@ -334,7 +337,10 @@ async function verifyLeanSourceUncounted(
       // that is "Lean unavailable", not a verdict about the source.
       const detail = raw.messages.map((m) => m.message).join("\n").slice(0, 1500);
       return base({
-        log: `Lean 沙箱不可用（请在 lean-sandbox 中运行 \`lake exe cache get && lake build && lake build repl\`）:\n${detail}`,
+        log: lt(
+          `Lean 沙箱不可用（请在 lean-sandbox 中运行 \`lake exe cache get && lake build && lake build repl\`）:\n${detail}`,
+          `Lean sandbox unavailable (run \`lake exe cache get && lake build && lake build repl\` in lean-sandbox):\n${detail}`,
+        ),
         status: "unavailable",
         backend: "spawn",
       });

@@ -2,8 +2,9 @@ import { NextResponse } from "next/server";
 import { autoformalize } from "@/lib/llm/autoformalize";
 import { createSession, updateSession, getSessionAsync } from "@/lib/session-store";
 import { LlmError } from "@/lib/llm/client";
+import { withRequestLocale } from "@/lib/llm/output-locale";
 
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   const body = (await req.json()) as {
     problem_text?: string;
     session_id?: string;
@@ -63,3 +64,6 @@ export async function POST(req: Request) {
     );
   }
 }
+
+// Server messages and model output follow the UI language (lib/llm/output-locale.ts).
+export const POST = withRequestLocale(handlePOST);

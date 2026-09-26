@@ -26,6 +26,7 @@ import { buildProverContext, rememberVerifiedProof } from "../prover/context";
 import { proveBySketch, sketchEnabled } from "../prover/sketch";
 import { proveWholeTheorem, wholeProofEnabled } from "../prover/whole-proof";
 import { hammerTheorem } from "../lean/hammer";
+import { lt } from "../llm/output-locale";
 import { proofSearch } from "../search/proof-search";
 import { updateSession } from "../session-store";
 import type {
@@ -87,13 +88,13 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
   let nlSolution: NaturalLanguageSolution | undefined;
   if (!opts.skip_nl_solution) {
     updateSession(session.id, { pipeline_stage: "nl_solving" });
-    emit("nl_solving", "生成自然语言解答...");
+    emit("nl_solving", lt("生成自然语言解答...", "Generating the natural-language solution..."));
     try {
       nlSolution = await generateNLSolution({ problemText: session.problem_text, problemType: "theorem" });
       updateSession(session.id, { nl_solution: nlSolution });
-      emit("nl_solving", `✅ 自然语言解答完成 (${nlSolution.steps.length} 步)`);
+      emit("nl_solving", lt(`✅ 自然语言解答完成 (${nlSolution.steps.length} 步)`, `✅ Natural-language solution ready (${nlSolution.steps.length} steps)`));
     } catch (e) {
-      emit("nl_solving", `⚠️ 自然语言解答失败: ${e instanceof Error ? e.message : "未知错误"}`);
+      emit("nl_solving", lt(`⚠️ 自然语言解答失败: ${e instanceof Error ? e.message : "未知错误"}`, `⚠️ Natural-language solution failed: ${e instanceof Error ? e.message : "unknown error"}`));
     }
   }
 
@@ -107,7 +108,7 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
 
   if (!opts.skip_autoformalize) {
     updateSession(session.id, { pipeline_stage: "autoformalizing" });
-    emit("autoformalizing", "开始自动形式化...");
+    emit("autoformalizing", lt("开始自动形式化...", "Starting autoformalization..."));
 
     const formalResult = await autoformalize({ problemText: session.problem_text });
     updateSession(session.id, {
@@ -129,24 +130,24 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
       const failedLayers = formalResult.validation_results.filter((v) => !v.pass);
       const detail = failedLayers.map((v) => `Layer ${v.layer}: ${v.detail}`).join("; ");
       updateSession(session.id, { build_status: "fail", pipeline_stage: "complete" });
-      emit("autoformalizing", `❌ 形式化验证未通过 (${failedLayers.length} 层失败)`);
+      emit("autoformalizing", lt(`❌ 形式化验证未通过 (${failedLayers.length} 层失败)`, `❌ Formalization failed validation (${failedLayers.length} layer(s) failed)`));
       return {
         status: 422,
         body: {
           session_id: session.id,
           error: "autoformalize_failed",
-          detail: `形式化验证未通过: ${detail}`,
+          detail: lt(`形式化验证未通过: ${detail}`, `Formalization failed validation: ${detail}`),
           validation_results: formalResult.validation_results,
           nl_solution: nlSolution,
         },
       };
     }
-    emit("autoformalizing", `✅ 形式化验证通过 (domain: ${formalResult.domain})`);
+    emit("autoformalizing", lt(`✅ 形式化验证通过 (domain: ${formalResult.domain})`, `✅ Formalization validated (domain: ${formalResult.domain})`));
     if (formalResult.vote) {
-      emit("autoformalizing", `候选投票：${formalResult.vote.candidates} 个候选，${formalResult.vote.agreeing} 个一致`);
+      emit("autoformalizing", lt(`候选投票：${formalResult.vote.candidates} 个候选，${formalResult.vote.agreeing} 个一致`, `Candidate vote: ${formalResult.vote.candidates} candidates, ${formalResult.vote.agreeing} in agreement`));
     }
-    if (formalResult.refutation?.verdict === "no_counterexample") emit("autoformalizing", "反例检测：随机测试未找到反例");
-    else if (formalResult.refutation?.verdict === "confirmed") emit("autoformalizing", "反例检测：陈述可判定为真");
+    if (formalResult.refutation?.verdict === "no_counterexample") emit("autoformalizing", lt("反例检测：随机测试未找到反例", "Counterexample check: random testing found no counterexample"));
+    else if (formalResult.refutation?.verdict === "confirmed") emit("autoformalizing", lt("反例检测：陈述可判定为真", "Counterexample check: the statement is decidably true"));
   } else {
     theoremName = session.theorem_name ?? "problem";
     theoremType = session.theorem_type ?? "";
@@ -164,7 +165,7 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
   };
 
   const { budget, preset } = budgetPreset(opts.budget);
-  emit("budget", `搜索预算：${budget}`);
+  emit("budget", lt(`搜索预算：${budget}`, `Search budget: ${budget}`));
 
   // ── 3. Automation first: the hammer on the root goal (REPL tactic mode),
   //       then the single-tactic probes that also work in spawn mode ──────
@@ -187,7 +188,7 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
       expectedSignature: frozenSignature,
     });
     if (trivial) {
-      emit("trivial_proof", `✅ 自动化策略直接证明 (${trivial.tactic})`);
+      emit("trivial_proof", lt(`✅ 自动化策略直接证明 (${trivial.tactic})`, `✅ Proved directly by an automation tactic (${trivial.tactic})`));
       void rememberVerifiedProof({ theoremName, theoremType, tactics: trivial.tactic, strategy, problemText: session.problem_text });
       const leanProofAttempt: LeanProofAttempt = {
         attempted: true,
@@ -206,20 +207,20 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
         pipeline_stage: "complete",
         lean_proof_attempt: leanProofAttempt,
       });
-      emit("complete", "✅ 完全形式化验证通过（自动化策略）");
+      emit("complete", lt("✅ 完全形式化验证通过（自动化策略）", "✅ Fully formally verified (automation tactic)"));
       return {
         status: 200,
         body: {
           ...baseBody,
           nl_solution: nlSolution,
           lean_proof_attempt: leanProofAttempt,
-          method: { id: strategy, title: `自动化策略 (${trivial.tactic})`, category: "other" },
+          method: { id: strategy, title: lt(`自动化策略 (${trivial.tactic})`, `Automation tactic (${trivial.tactic})`), category: "other" },
           steps: [],
           sorry_labels: [],
           fully_verified: true,
           build_status: "ok",
           total_attempts: 1,
-          sorry_report: { fully_verified: true, summary: "✅ 完全形式化验证通过", details: [] },
+          sorry_report: { fully_verified: true, summary: lt("✅ 完全形式化验证通过", "✅ Fully formally verified"), details: [] },
           assembled_lean: trivial.source,
           build_log: trivial.log,
         },
@@ -233,7 +234,7 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
   const preflightSource = assembleLeanSource({ theoremName, theoremType, stepCodes: ["sorry"], useMathlib });
   const preflight = await verifyLeanSource(session.id, preflightSource, { allowSorry: true });
   if (preflight.status !== "unavailable" && !preflight.ok) {
-    emit("preflight", `⚠️ 定理声明编译失败: ${preflight.log.slice(0, 200)}`);
+    emit("preflight", lt(`⚠️ 定理声明编译失败: ${preflight.log.slice(0, 200)}`, `⚠️ Theorem statement failed to compile: ${preflight.log.slice(0, 200)}`));
     updateSession(session.id, { build_status: "fail", pipeline_stage: "complete" });
     return {
       status: 422,
@@ -246,7 +247,7 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
   // shared by the whole-proof, sketch and goal-search prompts.
   const proverContext = await buildProverContext({ theoremType, initialGoal, problemText: session.problem_text, useMathlib });
   if (proverContext.premises.length || proverContext.recalled.length) {
-    emit("retrieval", `检索到 ${proverContext.premises.length} 条相关引理、${proverContext.recalled.length} 个相似的已验证证明`);
+    emit("retrieval", lt(`检索到 ${proverContext.premises.length} 条相关引理、${proverContext.recalled.length} 个相似的已验证证明`, `Retrieved ${proverContext.premises.length} relevant lemmas and ${proverContext.recalled.length} similar verified proofs`));
   }
 
   // ── 4. Whole-proof prover loop ───────────────────────────────────────
@@ -254,7 +255,7 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
   let wholeProofSummary: string | undefined;
   if (wholeProofOn && preflight.status !== "unavailable") {
     updateSession(session.id, { pipeline_stage: "solving" });
-    emit("whole_proof", "整体证明：采样完整证明并用 Lean 验证...");
+    emit("whole_proof", lt("整体证明：采样完整证明并用 Lean 验证...", "Whole proof: sampling complete proofs and checking them with Lean..."));
     try {
       const whole = await proveWholeTheorem({
         sessionId: session.id,
@@ -271,9 +272,9 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
           ...(opts.whole_proof_samples !== undefined ? { samples: opts.whole_proof_samples } : {}),
           ...(opts.whole_proof_rounds !== undefined ? { rounds: opts.whole_proof_rounds } : {}),
         },
-        onProgress: (p) => emit("whole_proof", `[第 ${p.round + 1} 轮] ${p.detail}`),
+        onProgress: (p) => emit("whole_proof", lt(`[第 ${p.round + 1} 轮] ${p.detail}`, `[Round ${p.round + 1}] ${p.detail}`)),
       });
-      wholeProofSummary = `${whole.samples} 个候选 / ${whole.rounds} 轮`;
+      wholeProofSummary = lt(`${whole.samples} 个候选 / ${whole.rounds} 轮`, `${whole.samples} candidates / ${whole.rounds} rounds`);
       if (whole.ok && whole.verification && whole.source) {
         void rememberVerifiedProof({ theoremName, theoremType, tactics: whole.tactics ?? "", strategy: "whole_proof", problemText: session.problem_text });
         const leanProofAttempt: LeanProofAttempt = {
@@ -290,9 +291,9 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
         };
         const step: ProofStep = {
           index: 0,
-          plain_goal: "完整证明",
+          plain_goal: lt("完整证明", "Complete proof"),
           lean_goal: theoremType,
-          plain_explanation: `整体证明（${wholeProofSummary}）`,
+          plain_explanation: lt(`整体证明（${wholeProofSummary}）`, `Whole proof (${wholeProofSummary})`),
           lean_code: whole.tactics ?? "",
           status: "ok",
           build_log: whole.verification.log,
@@ -305,20 +306,20 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
           pipeline_stage: "complete",
           lean_proof_attempt: leanProofAttempt,
         });
-        emit("complete", `✅ 完全形式化验证通过（整体证明，${wholeProofSummary}）`);
+        emit("complete", lt(`✅ 完全形式化验证通过（整体证明，${wholeProofSummary}）`, `✅ Fully formally verified (whole proof, ${wholeProofSummary})`));
         return {
           status: 200,
           body: {
             ...baseBody,
             nl_solution: nlSolution,
             lean_proof_attempt: leanProofAttempt,
-            method: { id: "whole_proof", title: `整体证明 (${wholeProofSummary})`, category: "other" },
+            method: { id: "whole_proof", title: lt(`整体证明 (${wholeProofSummary})`, `Whole proof (${wholeProofSummary})`), category: "other" },
             steps: [step],
             sorry_labels: [],
             fully_verified: true,
             build_status: "ok",
             total_attempts: whole.samples,
-            sorry_report: { fully_verified: true, summary: "✅ 完全形式化验证通过", details: [] },
+            sorry_report: { fully_verified: true, summary: lt("✅ 完全形式化验证通过", "✅ Fully formally verified"), details: [] },
             assembled_lean: whole.source,
             build_log: whole.verification.log,
             whole_proof: { rounds: whole.rounds, samples: whole.samples, suggestions: whole.suggestions },
@@ -328,11 +329,11 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
       emit(
         "whole_proof",
         whole.unavailable
-          ? "⚠️ Lean 不可用，跳过整体证明"
-          : `整体证明未通过（${wholeProofSummary}），转入分步证明`,
+          ? lt("⚠️ Lean 不可用，跳过整体证明", "⚠️ Lean unavailable; skipping whole proof")
+          : lt(`整体证明未通过（${wholeProofSummary}），转入分步证明`, `Whole proof failed (${wholeProofSummary}); switching to step-by-step proof`),
       );
     } catch (e) {
-      emit("whole_proof", `⚠️ 整体证明出错: ${e instanceof Error ? e.message : "未知错误"}`);
+      emit("whole_proof", lt(`⚠️ 整体证明出错: ${e instanceof Error ? e.message : "未知错误"}`, `⚠️ Whole proof error: ${e instanceof Error ? e.message : "unknown error"}`));
     }
   }
 
@@ -342,7 +343,7 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
   let sketchSummary: string | undefined;
   if (sketchOn && preflight.status !== "unavailable" && process.env.LEAN_SERVER_MODE !== "spawn") {
     updateSession(session.id, { pipeline_stage: "solving" });
-    emit("sketch", "骨架分解：生成带 sorry 的证明骨架，逐个子目标求解...");
+    emit("sketch", lt("骨架分解：生成带 sorry 的证明骨架，逐个子目标求解...", "Sketch decomposition: generating proof sketches with sorry holes and solving each subgoal..."));
     try {
       const sk = await proveBySketch({
         sessionId: session.id,
@@ -356,7 +357,7 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
         config: { ...preset.sketch, useMathlib, goalSearch: { ...preset.goalSearch, useMathlib } },
         onProgress: (p) => emit("sketch", p.detail),
       });
-      sketchSummary = `${sk.sketches} 个骨架 / ${sk.holesSolved}/${sk.holes} 个子目标`;
+      sketchSummary = lt(`${sk.sketches} 个骨架 / ${sk.holesSolved}/${sk.holes} 个子目标`, `${sk.sketches} sketches / ${sk.holesSolved}/${sk.holes} subgoals`);
       if (sk.ok && sk.verification && sk.source) {
         void rememberVerifiedProof({ theoremName, theoremType, tactics: sk.tactics ?? "", strategy: "sketch", problemText: session.problem_text });
         const leanProofAttempt: LeanProofAttempt = {
@@ -374,9 +375,9 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
         };
         const step: ProofStep = {
           index: 0,
-          plain_goal: "骨架分解证明",
+          plain_goal: lt("骨架分解证明", "Sketch-decomposition proof"),
           lean_goal: theoremType,
-          plain_explanation: `骨架分解（${sketchSummary}）`,
+          plain_explanation: lt(`骨架分解（${sketchSummary}）`, `Sketch decomposition (${sketchSummary})`),
           lean_code: sk.tactics ?? "",
           status: "ok",
           build_log: sk.verification.log,
@@ -389,20 +390,20 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
           pipeline_stage: "complete",
           lean_proof_attempt: leanProofAttempt,
         });
-        emit("complete", `✅ 完全形式化验证通过（骨架分解，${sketchSummary}）`);
+        emit("complete", lt(`✅ 完全形式化验证通过（骨架分解，${sketchSummary}）`, `✅ Fully formally verified (sketch decomposition, ${sketchSummary})`));
         return {
           status: 200,
           body: {
             ...baseBody,
             nl_solution: nlSolution,
             lean_proof_attempt: leanProofAttempt,
-            method: { id: "sketch", title: `骨架分解 (${sketchSummary})`, category: "other" },
+            method: { id: "sketch", title: lt(`骨架分解 (${sketchSummary})`, `Sketch decomposition (${sketchSummary})`), category: "other" },
             steps: [step],
             sorry_labels: [],
             fully_verified: true,
             build_status: "ok",
             total_attempts: sk.sketches,
-            sorry_report: { fully_verified: true, summary: "✅ 完全形式化验证通过", details: [] },
+            sorry_report: { fully_verified: true, summary: lt("✅ 完全形式化验证通过", "✅ Fully formally verified"), details: [] },
             assembled_lean: sk.source,
             build_log: sk.verification.log,
             whole_proof: wholeProofSummary ? { summary: wholeProofSummary, ok: false } : undefined,
@@ -410,15 +411,15 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
           },
         };
       }
-      emit("sketch", sk.unavailable ? "⚠️ Lean 不可用，跳过骨架分解" : `骨架分解未通过（${sketchSummary}），转入分步证明`);
+      emit("sketch", sk.unavailable ? lt("⚠️ Lean 不可用，跳过骨架分解", "⚠️ Lean unavailable; skipping sketch decomposition") : lt(`骨架分解未通过（${sketchSummary}），转入分步证明`, `Sketch decomposition failed (${sketchSummary}); switching to step-by-step proof`));
     } catch (e) {
-      emit("sketch", `⚠️ 骨架分解出错: ${e instanceof Error ? e.message : "未知错误"}`);
+      emit("sketch", lt(`⚠️ 骨架分解出错: ${e instanceof Error ? e.message : "未知错误"}`, `⚠️ Sketch decomposition error: ${e instanceof Error ? e.message : "unknown error"}`));
     }
   }
 
   // ── 5. Methods (single enumerator or multi-agent strategists + critic) ─
   updateSession(session.id, { pipeline_stage: "enumerating" });
-  emit("enumerating", "枚举解法...");
+  emit("enumerating", lt("枚举解法...", "Enumerating solution methods..."));
 
   let methods: MethodOption[];
   let methodScores: MethodScore[] | undefined;
@@ -442,7 +443,7 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
       recommended_method_id: recommendedId,
       comparison_summary: comparison,
     });
-    emit("enumerating", `多智能体评估：${methods.length} 种解法，推荐 ${recommendedId}`);
+    emit("enumerating", lt(`多智能体评估：${methods.length} 种解法，推荐 ${recommendedId}`, `Multi-agent evaluation: ${methods.length} methods, recommended ${recommendedId}`));
   } else {
     const enumResult = await enumerateMethods(session.problem_text, resolvedDomain);
     methods = enumResult.methods;
@@ -452,11 +453,11 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
       comparison_summary: comparison,
       out_of_domain_warning: enumResult.out_of_domain_warning ?? undefined,
     });
-    emit("enumerating", `找到 ${methods.length} 种解法`);
+    emit("enumerating", lt(`找到 ${methods.length} 种解法`, `Found ${methods.length} methods`));
   }
   if (methods.length === 0) {
     updateSession(session.id, { build_status: "fail", pipeline_stage: "complete" });
-    return { status: 422, body: { ...baseBody, error: "no_methods", detail: "未能枚举出任何解法", nl_solution: nlSolution } };
+    return { status: 422, body: { ...baseBody, error: "no_methods", detail: lt("未能枚举出任何解法", "Could not enumerate any solution method"), nl_solution: nlSolution } };
   }
 
   // ── 6. Select method ─────────────────────────────────────────────────
@@ -465,11 +466,11 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
     (opts.method_selection === "first"
       ? methods[0]
       : methods.reduce((best, cur) => (cur.confidence > best.confidence ? cur : best)));
-  emit("selecting", `选择方法: ${method.title} (${method.category}, confidence: ${method.confidence})`);
+  emit("selecting", lt(`选择方法: ${method.title} (${method.category}, confidence: ${method.confidence})`, `Selected method: ${method.title} (${method.category}, confidence: ${method.confidence})`));
 
   // ── 7. Plan ──────────────────────────────────────────────────────────
   updateSession(session.id, { pipeline_stage: "solving" });
-  emit("planning", "规划证明步骤...");
+  emit("planning", lt("规划证明步骤...", "Planning proof steps..."));
 
   const plan = await planSteps(session.problem_text, method, useMathlib);
   const proofSteps: ProofStep[] = plan.steps.map((s: { index: number; plain_goal: string; lean_goal: string }) => ({
@@ -497,7 +498,7 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
     selected_method_id: method.id,
     steps: proofSteps,
   });
-  emit("planning", `规划了 ${proofSteps.length} 个步骤`);
+  emit("planning", lt(`规划了 ${proofSteps.length} 个步骤`, `Planned ${proofSteps.length} steps`));
 
   // Preflight of the (possibly planner-supplied) declaration.
   let goalForSearch = initialGoal;
@@ -505,7 +506,7 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
     const src = assembleLeanSource({ theoremName, theoremType, stepCodes: ["sorry"], useMathlib });
     const check = await verifyLeanSource(session.id, src, { allowSorry: true });
     if (check.status !== "unavailable" && !check.ok) {
-      emit("preflight", "⚠️ plan 定理声明编译失败，回退到 autoformalize 版本");
+      emit("preflight", lt("⚠️ plan 定理声明编译失败，回退到 autoformalize 版本", "⚠️ Planned theorem statement failed to compile; falling back to the autoformalized version"));
       theoremName = validatedName;
       theoremType = validatedType;
       updateSession(session.id, { theorem_name: theoremName, theorem_type: theoremType });
@@ -516,7 +517,7 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
 
   // ── 8. Best-first stepwise search ────────────────────────────────────
   const adaptiveMaxSorry = opts.max_sorry ?? Math.max(2, Math.ceil(proofSteps.length * 0.5));
-  emit("solving", "开始最佳优先证明搜索...");
+  emit("solving", lt("开始最佳优先证明搜索...", "Starting best-first proof search..."));
 
   const searchResult = await proofSearch({
     session: { ...session, theorem_name: theoremName, theorem_type: theoremType, steps: proofSteps },
@@ -525,7 +526,7 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
     config: { maxSorry: adaptiveMaxSorry, useMathlib, samplesPerStep: opts.step_samples },
     domain: resolvedDomain,
     initialGoal: goalForSearch,
-    onProgress: (p) => emit("solving", `步骤 ${p.step + 1}/${p.total}: ${p.status}`),
+    onProgress: (p) => emit("solving", lt(`步骤 ${p.step + 1}/${p.total}: ${p.status}`, `Step ${p.step + 1}/${p.total}: ${p.status}`)),
   });
 
   // ── 9. Final verification (statement lock, axioms, no sorry) ─────────
@@ -557,8 +558,8 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
     success: finalResult.ok && searchResult.fullyVerified,
     formal_statement: finalSource,
     proof_code: finalSource,
-    failure_reason: finalResult.ok ? undefined : `Lean 验证失败: ${finalResult.log.slice(0, 500)}`,
-    limitations: searchResult.sorryLabels.map((s) => `步骤 ${s.step_index + 1}: ${s.reason}`),
+    failure_reason: finalResult.ok ? undefined : lt(`Lean 验证失败: ${finalResult.log.slice(0, 500)}`, `Lean verification failed: ${finalResult.log.slice(0, 500)}`),
+    limitations: searchResult.sorryLabels.map((s) => lt(`步骤 ${s.step_index + 1}: ${s.reason}`, `Step ${s.step_index + 1}: ${s.reason}`)),
     axioms: finalResult.axioms?.axioms,
     statement_locked: frozenSignature !== undefined && finalResult.signatureMatch === true,
     verifier: finalResult.backend,
@@ -587,7 +588,7 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
     pipeline_stage: "complete",
     lean_proof_attempt: leanProofAttempt,
   });
-  emit("complete", finalResult.ok ? report.summary : `❌ 最终验证失败: ${finalResult.log.slice(0, 200)}`);
+  emit("complete", finalResult.ok ? report.summary : lt(`❌ 最终验证失败: ${finalResult.log.slice(0, 200)}`, `❌ Final verification failed: ${finalResult.log.slice(0, 200)}`));
 
   return {
     status: 200,

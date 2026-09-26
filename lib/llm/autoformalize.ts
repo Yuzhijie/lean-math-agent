@@ -6,6 +6,7 @@ import { verifyLeanSource } from "../lean/sandbox";
 import { normalizeSignature } from "../lean/axioms";
 import { refuteEnabled, refuteStatement } from "../lean/refute";
 import { validateTheoremStatement } from "../lean/sanitize";
+import { lt } from "./output-locale";
 import { z } from "zod";
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -124,7 +125,12 @@ export async function autoformalize(args: {
     // Layer 1: Elaborability — can Lean compile this with sorry?
     // Also records the pretty-printed signature (`#check @name`) that the
     // final verification must reproduce (statement lock).
-    if (vote) l1.result.detail += `（候选投票：${vote.candidates} 个候选，${vote.elaborated} 个可编译，${vote.agreeing} 个与所选陈述一致）`;
+    if (vote) {
+      l1.result.detail += lt(
+        `（候选投票：${vote.candidates} 个候选，${vote.elaborated} 个可编译，${vote.agreeing} 个与所选陈述一致）`,
+        ` (candidate vote: ${vote.candidates} candidates, ${vote.elaborated} elaborate, ${vote.agreeing} agree with the chosen statement)`,
+      );
+    }
     results.push(l1.result);
     if (!l1.result.pass) {
       // ── Targeted repair: feed Lean error back to LLM to fix just the type ──
@@ -377,7 +383,10 @@ async function layerRefutation(
         result: {
           layer: 6,
           pass: false,
-          detail: `陈述为假：${r.detail}。请检查是否遗漏了前提（正整数、非零、范围）、ℕ 上的截断减法/整除，或量词范围。`,
+          detail: lt(
+            `陈述为假：${r.detail}。请检查是否遗漏了前提（正整数、非零、范围）、ℕ 上的截断减法/整除，或量词范围。`,
+            `Statement is false: ${r.detail}. Check for missing hypotheses (positivity, nonzero, ranges), truncated subtraction/division on ℕ, or quantifier ranges.`,
+          ),
         },
         refutation,
       };
@@ -386,9 +395,9 @@ async function layerRefutation(
     case "no_counterexample":
       return { result: { layer: 6, pass: true, detail: r.detail }, refutation };
     case "unavailable":
-      return { result: { layer: 6, pass: true, skipped: true, detail: "Lean 不可用，跳过反例检测" }, refutation };
+      return { result: { layer: 6, pass: true, skipped: true, detail: lt("Lean 不可用，跳过反例检测", "Lean unavailable; skipped counterexample check") }, refutation };
     default:
-      return { result: { layer: 6, pass: true, skipped: true, detail: `反例检测无法判定（${r.detail}）` }, refutation };
+      return { result: { layer: 6, pass: true, skipped: true, detail: lt(`反例检测无法判定（${r.detail}）`, `Counterexample check inconclusive (${r.detail})`) }, refutation };
   }
 }
 
@@ -403,7 +412,7 @@ async function layerElaborability(
   // `:=`, no comments, no forbidden commands.
   const shape = validateTheoremStatement(theoremName, theoremType);
   if (!shape.ok) {
-    return { result: { layer: 1, pass: false, detail: `定理陈述格式无效: ${shape.reason}` } };
+    return { result: { layer: 1, pass: false, detail: lt(`定理陈述格式无效: ${shape.reason}`, `Invalid theorem statement: ${shape.reason}`) } };
   }
   const formalStatement = `theorem ${theoremName} ${theoremType} := by sorry`;
   try {
@@ -421,7 +430,7 @@ async function layerElaborability(
           layer: 1,
           pass: true, // can't verify — assume OK (degrade gracefully)
           skipped: true,
-          detail: "Lean 不可用，跳过可阐述性检查",
+          detail: lt("Lean 不可用，跳过可阐述性检查", "Lean unavailable; skipped elaboration check"),
         },
       };
     }
@@ -430,13 +439,16 @@ async function layerElaborability(
         layer: 1,
         pass: res.ok,
         detail: res.ok
-          ? `Lean 编译通过（with sorry）${res.signature ? `，陈述: ${res.signature}` : ""}`
+          ? lt(
+              `Lean 编译通过（with sorry）${res.signature ? `，陈述: ${res.signature}` : ""}`,
+              `Lean compiled (with sorry)${res.signature ? `; statement: ${res.signature}` : ""}`,
+            )
           : res.log,
       },
       signature: res.ok ? res.signature : undefined,
     };
   } catch {
-    return { result: { layer: 1, pass: false, detail: "Lean 编译异常" } };
+    return { result: { layer: 1, pass: false, detail: lt("Lean 编译异常", "Lean compilation error") } };
   }
 }
 
@@ -455,7 +467,7 @@ async function layerNonTriviality(
     return {
       layer: 2,
       pass: false,
-      detail: `目标退化为平凡命题: ${goalPart}`,
+      detail: lt(`目标退化为平凡命题: ${goalPart}`, `Goal degenerates to a trivial proposition: ${goalPart}`),
     };
   }
 
@@ -465,7 +477,7 @@ async function layerNonTriviality(
     return {
       layer: 2,
       pass: false,
-      detail: "目标为 False，可能是矛盾前提",
+      detail: lt("目标为 False，可能是矛盾前提", "Goal is False; the hypotheses may be contradictory"),
     };
   }
 
@@ -501,7 +513,7 @@ Return JSON: { "is_non_trivial": boolean, "reasoning": string (Chinese) }`,
       layer: 2,
       pass: true, // degrade gracefully — but marked as not actually checked
       skipped: true,
-      detail: "LLM 非平凡性检查失败，默认通过",
+      detail: lt("LLM 非平凡性检查失败，默认通过", "LLM non-triviality check failed; passing by default"),
     };
   }
 }
@@ -555,14 +567,17 @@ Rate equivalence 0-1 and explain any discrepancies.`,
     return {
       layer: 3,
       pass: equivalence.score >= threshold,
-      detail: `等价度: ${equivalence.score} (阈值: ${threshold})\n${equivalence.analysis}`,
+      detail: lt(
+        `等价度: ${equivalence.score} (阈值: ${threshold})\n${equivalence.analysis}`,
+        `Equivalence: ${equivalence.score} (threshold: ${threshold})\n${equivalence.analysis}`,
+      ),
     };
   } catch {
     return {
       layer: 3,
       pass: true, // degrade gracefully — but marked as not actually checked
       skipped: true,
-      detail: "回译检查失败，默认通过",
+      detail: lt("回译检查失败，默认通过", "Back-translation check failed; passing by default"),
     };
   }
 }
@@ -576,7 +591,7 @@ async function layerNumericalVerification(
     return {
       layer: 4,
       pass: true,
-      detail: "无数值实例可验证，跳过",
+      detail: lt("无数值实例可验证，跳过", "No numerical instances to verify; skipped"),
     };
   }
 
@@ -618,8 +633,11 @@ ${JSON.stringify(formal.numerical_instances, null, 2)}`,
       layer: 4,
       pass: verification.all_consistent,
       detail: verification.all_consistent
-        ? `全部 ${verification.results.length} 个数值实例验证通过`
-        : `不一致的实例: ${verification.results
+        ? lt(
+            `全部 ${verification.results.length} 个数值实例验证通过`,
+            `All ${verification.results.length} numerical instance(s) verified`,
+          )
+        : `${lt("不一致的实例", "Inconsistent instances")}: ${verification.results
             .filter((r) => !r.match)
             .map((r) => `${JSON.stringify(r.variables)}: expected=${r.expected}, actual=${r.actual}`)
             .join("; ")}`,
@@ -629,7 +647,7 @@ ${JSON.stringify(formal.numerical_instances, null, 2)}`,
       layer: 4,
       pass: true, // degrade gracefully — but marked as not actually checked
       skipped: true,
-      detail: "数值验证失败，默认通过",
+      detail: lt("数值验证失败，默认通过", "Numerical verification failed; passing by default"),
     };
   }
 }
@@ -645,7 +663,7 @@ async function layerHypothesisRelevance(
     return {
       layer: 5,
       pass: true,
-      detail: "无条件假设，跳过相关性检查",
+      detail: lt("无条件假设，跳过相关性检查", "No hypotheses; skipped relevance check"),
     };
   }
 
@@ -677,14 +695,14 @@ Return JSON: { "all_relevant": boolean, "suspicious": string[], "analysis": stri
       pass: check.all_relevant,
       detail: check.all_relevant
         ? check.analysis
-        : `可疑假设: ${check.suspicious.join(", ")}\n${check.analysis}`,
+        : `${lt("可疑假设", "Suspicious hypotheses")}: ${check.suspicious.join(", ")}\n${check.analysis}`,
     };
   } catch {
     return {
       layer: 5,
       pass: true, // degrade gracefully — but marked as not actually checked
       skipped: true,
-      detail: "假设相关性检查失败，默认通过",
+      detail: lt("假设相关性检查失败，默认通过", "Hypothesis relevance check failed; passing by default"),
     };
   }
 }

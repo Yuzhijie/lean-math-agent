@@ -105,6 +105,10 @@ export type Tree = z.infer<typeof treeSchema>;
 
 export class LogicError extends Error {}
 
+/** Picks the Chinese or English text; server callers pass `lt` (kept out of this browser-bundled module). */
+export type Tr = (zh: string, en: string) => string;
+const zhOnly: Tr = (a) => a;
+
 export interface LogicCheck {
   ok: boolean;
   detail: string;
@@ -163,19 +167,19 @@ function permutations(n: number): number[][] {
   return out;
 }
 
-export function solveGrid(g: LogicGrid): { solved: Extract<LogicSolved, { type: "grid" }>; checks: LogicCheck[]; solutions: number[][][] } {
+export function solveGrid(g: LogicGrid, tr: Tr = zhOnly): { solved: Extract<LogicSolved, { type: "grid" }>; checks: LogicCheck[]; solutions: number[][][] } {
   const n = g.categories[0].items.length;
   const where = new Map<string, [number, number]>(); // item → [category, index]
   g.categories.forEach((c, ci) => {
-    if (c.items.length !== n) throw new LogicError(`「${c.name}」有 ${c.items.length} 项，应与「${g.categories[0].name}」一样是 ${n} 项`);
+    if (c.items.length !== n) throw new LogicError(tr(`「${c.name}」有 ${c.items.length} 项，应与「${g.categories[0].name}」一样是 ${n} 项`, `"${c.name}" has ${c.items.length} items; it should have ${n}, like "${g.categories[0].name}"`));
     c.items.forEach((it, ii) => {
-      if (where.has(it)) throw new LogicError(`名称「${it}」重复出现，请给每一项不同的名字`);
+      if (where.has(it)) throw new LogicError(tr(`名称「${it}」重复出现，请给每一项不同的名字`, `The name "${it}" appears more than once; give every item a distinct name`));
       where.set(it, [ci, ii]);
     });
   });
   const locate = (x: string) => {
     const w = where.get(x);
-    if (!w) throw new LogicError(`条件中的「${x}」不在任何类别中`);
+    if (!w) throw new LogicError(tr(`条件中的「${x}」不在任何类别中`, `"${x}" in the conditions is not in any category`));
     return w;
   };
   // An assignment maps each category to a permutation: perm[c][rowIndex] = item index in category c (category 0 is identity).
@@ -185,7 +189,7 @@ export function solveGrid(g: LogicGrid): { solved: Extract<LogicSolved, { type: 
       case "is": {
         const a = locate(k.a);
         const b = locate(k.b);
-        if (a[0] === b[0]) throw new LogicError(`「${k.a}」和「${k.b}」属于同一类别，不能「是」对方`);
+        if (a[0] === b[0]) throw new LogicError(tr(`「${k.a}」和「${k.b}」属于同一类别，不能「是」对方`, `"${k.a}" and "${k.b}" are in the same category, so one cannot "be" the other`));
         return { cats: [a[0], b[0]], test: (p: number[][]) => rowOf(p, a) === rowOf(p, b) };
       }
       case "is_not": {
@@ -235,10 +239,10 @@ export function solveGrid(g: LogicGrid): { solved: Extract<LogicSolved, { type: 
   const out: LogicCheck[] = [];
   out.push(
     solutions.length === 0
-      ? { ok: false, detail: "按给出的条件无解（条件有矛盾或编码有误）" }
+      ? { ok: false, detail: tr("按给出的条件无解（条件有矛盾或编码有误）", "No solution satisfies the given conditions (they contradict each other or are encoded incorrectly)") }
       : solutions.length === 1
-        ? { ok: true, detail: "条件确定唯一解" }
-        : { ok: false, detail: `条件有 ${solutions.length > 5000 ? "5000+" : solutions.length} 种解，尚不能唯一确定` },
+        ? { ok: true, detail: tr("条件确定唯一解", "The conditions determine a unique solution") }
+        : { ok: false, detail: tr(`条件有 ${solutions.length > 5000 ? "5000+" : solutions.length} 种解，尚不能唯一确定`, `The conditions allow ${solutions.length > 5000 ? "5000+" : solutions.length} solutions; not yet uniquely determined`) },
   );
   if (g.answer && solutions.length === 1) {
     const s = solutions[0];
@@ -246,19 +250,19 @@ export function solveGrid(g: LogicGrid): { solved: Extract<LogicSolved, { type: 
     for (const [row, vals] of Object.entries(g.answer)) {
       const r = g.categories[0].items.indexOf(row);
       if (r < 0) {
-        wrong.push(`答案中的「${row}」不是「${g.categories[0].name}」`);
+        wrong.push(tr(`答案中的「${row}」不是「${g.categories[0].name}」`, `"${row}" in the answer is not in "${g.categories[0].name}"`));
         continue;
       }
       vals.forEach((v, j) => {
         const cat = g.categories[j + 1];
         if (!cat) return;
         const expected = cat.items[s[j + 1][r]];
-        if (expected !== v) wrong.push(`${row}：推出是「${expected}」，答案写的是「${v}」`);
+        if (expected !== v) wrong.push(tr(`${row}：推出是「${expected}」，答案写的是「${v}」`, `${row}: deduced "${expected}", but the answer says "${v}"`));
       });
     }
-    out.push(wrong.length ? { ok: false, detail: `答案与推理不符：${wrong.join("；")}` } : { ok: true, detail: "答案与推理结果一致" });
+    out.push(wrong.length ? { ok: false, detail: tr(`答案与推理不符：${wrong.join("；")}`, `The answer does not match the deduction: ${wrong.join("; ")}`) } : { ok: true, detail: tr("答案与推理结果一致", "The answer matches the deduction") });
   }
-  if (g.unencoded?.length) out.push({ ok: false, detail: `以下条件未能自动校验：${g.unencoded.join("；")}` });
+  if (g.unencoded?.length) out.push({ ok: false, detail: tr(`以下条件未能自动校验：${g.unencoded.join("；")}`, `These conditions could not be checked automatically: ${g.unencoded.join("; ")}`) });
   return { solved: { type: "grid", cells, solutions: solutions.length }, checks: out, solutions };
 }
 
@@ -343,9 +347,9 @@ export function vennAsk(ask: string, ids: string[], regions: Record<string, numb
   return sum;
 }
 
-export function solveVenn(v: Venn): { solved: Extract<LogicSolved, { type: "venn" }>; checks: LogicCheck[] } {
+export function solveVenn(v: Venn, tr: Tr = zhOnly): { solved: Extract<LogicSolved, { type: "venn" }>; checks: LogicCheck[] } {
   const ids = v.sets.map((s) => s.id);
-  if (new Set(ids).size !== ids.length || ids.some((id, i) => id !== "ABC"[i])) throw new LogicError("维恩图的集合 id 依次为 A、B（、C）");
+  if (new Set(ids).size !== ids.length || ids.some((id, i) => id !== "ABC"[i])) throw new LogicError(tr("维恩图的集合 id 依次为 A、B（、C）", "Venn diagram set ids must be A, B (, C) in order"));
   const regs = REGIONS[ids.length as 2 | 3];
   const rows: number[][] = [];
   const rhs: number[] = [];
@@ -355,7 +359,7 @@ export function solveVenn(v: Venn): { solved: Extract<LogicSolved, { type: "venn
   };
   for (const s of v.sets) if (s.total !== undefined) eq((r) => regionHas(r, s.id), s.total);
   for (const it of v.intersections) {
-    if (it.sets.some((s) => !ids.includes(s))) throw new LogicError(`交集引用了不存在的集合 ${it.sets.join("∩")}`);
+    if (it.sets.some((s) => !ids.includes(s))) throw new LogicError(tr(`交集引用了不存在的集合 ${it.sets.join("∩")}`, `The intersection ${it.sets.join("∩")} refers to a set that does not exist`));
     eq((r) => it.sets.every((s) => regionHas(r, s)), it.count);
   }
   if (v.universe !== undefined) eq(() => true, v.universe);
@@ -366,21 +370,21 @@ export function solveVenn(v: Venn): { solved: Extract<LogicSolved, { type: "venn
   const regions: Record<string, number | null> = {};
   regs.forEach((r, i) => (regions[r] = x[i] === null ? null : Math.round(x[i]! * 1e6) / 1e6));
   const checks: LogicCheck[] = [];
-  if (!consistent) checks.push({ ok: false, detail: "给出的人数互相矛盾" });
+  if (!consistent) checks.push({ ok: false, detail: tr("给出的人数互相矛盾", "The given counts contradict each other") });
   const bad = Object.entries(regions).filter(([, n]) => n !== null && (n < -1e-9 || Math.abs(n - Math.round(n)) > 1e-6));
-  if (bad.length) checks.push({ ok: false, detail: `有区域人数不是非负整数：${bad.map(([k, n]) => `${k}=${n}`).join("，")}` });
+  if (bad.length) checks.push({ ok: false, detail: tr(`有区域人数不是非负整数：${bad.map(([k, n]) => `${k}=${n}`).join("，")}`, `Some region counts are not nonnegative integers: ${bad.map(([k, n]) => `${k}=${n}`).join(", ")}`) });
   const undetermined = regs.filter((r) => regions[r] === null && !(r === "none" && v.universe === undefined && v.neither === undefined));
-  if (consistent && !bad.length) checks.push(undetermined.length ? { ok: false, detail: `数据不足以确定每个区域（${undetermined.length} 个区域未定）` } : { ok: true, detail: "每个区域的人数都由条件唯一确定，且为非负整数" });
+  if (consistent && !bad.length) checks.push(undetermined.length ? { ok: false, detail: tr(`数据不足以确定每个区域（${undetermined.length} 个区域未定）`, `Not enough data to determine every region (${undetermined.length} undetermined)`) } : { ok: true, detail: tr("每个区域的人数都由条件唯一确定，且为非负整数", "Every region count is uniquely determined and a nonnegative integer") });
   let asked: number | null | undefined;
   if (v.ask) {
     asked = vennAsk(v.ask, ids, regions);
     if (v.answer !== undefined) {
       checks.push(
         asked === null
-          ? { ok: false, detail: `无法从条件算出「${v.ask}」` }
+          ? { ok: false, detail: tr(`无法从条件算出「${v.ask}」`, `Cannot compute "${v.ask}" from the conditions`) }
           : Math.abs(asked - v.answer) < 1e-6
-            ? { ok: true, detail: `「${v.ask}」= ${asked}，与答案一致` }
-            : { ok: false, detail: `「${v.ask}」应为 ${asked}，答案写的是 ${v.answer}` },
+            ? { ok: true, detail: tr(`「${v.ask}」= ${asked}，与答案一致`, `"${v.ask}" = ${asked}, matching the answer`) }
+            : { ok: false, detail: tr(`「${v.ask}」应为 ${asked}，答案写的是 ${v.answer}`, `"${v.ask}" should be ${asked}, but the answer says ${v.answer}`) },
       );
     }
   }
@@ -389,12 +393,12 @@ export function solveVenn(v: Venn): { solved: Extract<LogicSolved, { type: "venn
 
 // ── Ordering ───────────────────────────────────────────────────────────
 
-export function solveOrdering(o: Ordering): { solved: Extract<LogicSolved, { type: "ordering" }>; checks: LogicCheck[] } {
+export function solveOrdering(o: Ordering, tr: Tr = zhOnly): { solved: Extract<LogicSolved, { type: "ordering" }>; checks: LogicCheck[] } {
   const n = o.items.length;
-  if (new Set(o.items).size !== n) throw new LogicError("排序的对象名称有重复");
+  if (new Set(o.items).size !== n) throw new LogicError(tr("排序的对象名称有重复", "Duplicate names among the items to arrange"));
   const idx = (x: string) => {
     const i = o.items.indexOf(x);
-    if (i < 0) throw new LogicError(`条件中的「${x}」不在排序对象中`);
+    if (i < 0) throw new LogicError(tr(`条件中的「${x}」不在排序对象中`, `"${x}" in the conditions is not among the items to arrange`));
     return i;
   };
   const circle = o.layout === "circle";
@@ -406,7 +410,7 @@ export function solveOrdering(o: Ordering): { solved: Extract<LogicSolved, { typ
     };
     switch (k.type) {
       case "position": {
-        if (k.pos > n) throw new LogicError(`位置 ${k.pos} 超出了 ${n} 个位置`);
+        if (k.pos > n) throw new LogicError(tr(`位置 ${k.pos} 超出了 ${n} 个位置`, `Position ${k.pos} is beyond the ${n} positions`));
         const a = idx(k.a);
         return (p) => p[a] === k.pos - 1;
       }
@@ -415,7 +419,7 @@ export function solveOrdering(o: Ordering): { solved: Extract<LogicSolved, { typ
         return (p) => p[a] !== k.pos - 1;
       }
       case "left_of": {
-        if (circle) throw new LogicError("围成一圈时没有「左边」的先后，请改用 adjacent / immediately_left_of");
+        if (circle) throw new LogicError(tr("围成一圈时没有「左边」的先后，请改用 adjacent / immediately_left_of", "Around a circle there is no \"left of\" order; use adjacent / immediately_left_of instead"));
         const a = idx(k.a);
         const b = idx(k.b);
         return (p) => p[a] < p[b];
@@ -450,7 +454,7 @@ export function solveOrdering(o: Ordering): { solved: Extract<LogicSolved, { typ
         return (p) => p[a] !== 0 && p[a] !== n - 1;
       }
       case "opposite": {
-        if (!circle || n % 2) throw new LogicError("「正对面」只适用于偶数个座位的圆桌");
+        if (!circle || n % 2) throw new LogicError(tr("「正对面」只适用于偶数个座位的圆桌", "\"Opposite\" applies only to a round table with an even number of seats"));
         const a = idx(k.a);
         const b = idx(k.b);
         return (p) => d(p[a], p[b]) === n / 2;
@@ -476,16 +480,16 @@ export function solveOrdering(o: Ordering): { solved: Extract<LogicSolved, { typ
   if (o.count !== undefined) {
     checks.push(
       o.count === sols.length
-        ? { ok: true, detail: `共 ${sols.length} 种排法，与答案一致` }
-        : { ok: false, detail: `按条件共有 ${sols.length} 种排法，答案写的是 ${o.count} 种` },
+        ? { ok: true, detail: tr(`共 ${sols.length} 种排法，与答案一致`, `${sols.length} arrangements in total, matching the answer`) }
+        : { ok: false, detail: tr(`按条件共有 ${sols.length} 种排法，答案写的是 ${o.count} 种`, `The conditions allow ${sols.length} arrangements, but the answer says ${o.count}`) },
     );
   } else {
     checks.push(
       sols.length === 0
-        ? { ok: false, detail: "按给出的条件无法排列（条件有矛盾或编码有误）" }
+        ? { ok: false, detail: tr("按给出的条件无法排列（条件有矛盾或编码有误）", "No arrangement satisfies the given conditions (they contradict each other or are encoded incorrectly)") }
         : distinct === 1
-          ? { ok: true, detail: circle ? `条件确定唯一的座次（旋转${mirrorFree ? "、翻转" : ""}视为相同）` : "条件确定唯一的排列" }
-          : { ok: false, detail: `条件允许 ${distinct} 种排列` },
+          ? { ok: true, detail: circle ? tr(`条件确定唯一的座次（旋转${mirrorFree ? "、翻转" : ""}视为相同）`, `The conditions determine a unique seating (rotations${mirrorFree ? " and reflections" : ""} count as the same)`) : tr("条件确定唯一的排列", "The conditions determine a unique arrangement") }
+          : { ok: false, detail: tr(`条件允许 ${distinct} 种排列`, `The conditions allow ${distinct} arrangements`) },
     );
   }
   if (o.answer && sols.length) {
@@ -497,15 +501,15 @@ export function solveOrdering(o: Ordering): { solved: Extract<LogicSolved, { typ
       const cands = [...rotations(ans), ...(directed ? [] : rotations([...ans].reverse()))];
       return cands.some((c) => c.every((v, i) => v === s[i]));
     });
-    checks.push(match ? { ok: true, detail: "答案满足全部条件" } : { ok: false, detail: "答案的排列不满足条件" });
+    checks.push(match ? { ok: true, detail: tr("答案满足全部条件", "The answer satisfies all conditions") } : { ok: false, detail: tr("答案的排列不满足条件", "The answer's arrangement does not satisfy the conditions") });
   }
-  if (o.unencoded?.length) checks.push({ ok: false, detail: `以下条件未能自动校验：${o.unencoded.join("；")}` });
+  if (o.unencoded?.length) checks.push({ ok: false, detail: tr(`以下条件未能自动校验：${o.unencoded.join("；")}`, `These conditions could not be checked automatically: ${o.unencoded.join("; ")}`) });
   return { solved: { type: "ordering", solutions: sols.length, distinct, mirror: mirrorFree, sample: sols[0]?.map((i) => o.items[i]), fixed }, checks };
 }
 
 // ── Tree ───────────────────────────────────────────────────────────────
 
-export function solveTree(t: Tree): { solved: Extract<LogicSolved, { type: "tree" }>; checks: LogicCheck[] } {
+export function solveTree(t: Tree, tr: Tr = zhOnly): { solved: Extract<LogicSolved, { type: "tree" }>; checks: LogicCheck[] } {
   const paths: string[][] = [];
   let count = 0;
   const rec = (level: number, path: string[]) => {
@@ -523,22 +527,22 @@ export function solveTree(t: Tree): { solved: Extract<LogicSolved, { type: "tree
     }
   };
   rec(0, []);
-  const checks: LogicCheck[] = [{ ok: true, detail: `共 ${count} 种` }];
-  if (t.answer !== undefined) checks.push(t.answer === count ? { ok: true, detail: "与答案一致" } : { ok: false, detail: `树状图数出 ${count} 种，答案写的是 ${t.answer} 种` });
+  const checks: LogicCheck[] = [{ ok: true, detail: tr(`共 ${count} 种`, `${count} in total`) }];
+  if (t.answer !== undefined) checks.push(t.answer === count ? { ok: true, detail: tr("与答案一致", "Matches the answer") } : { ok: false, detail: tr(`树状图数出 ${count} 种，答案写的是 ${t.answer} 种`, `The tree diagram counts ${count}, but the answer says ${t.answer}`) });
   return { solved: { type: "tree", paths, count, truncated: count > paths.length }, checks };
 }
 
-export function solveLogic(spec: LogicSpec): { solved: LogicSolved; checks: LogicCheck[] } {
+export function solveLogic(spec: LogicSpec, tr: Tr = zhOnly): { solved: LogicSolved; checks: LogicCheck[] } {
   switch (spec.type) {
     case "grid": {
-      const r = solveGrid(spec);
+      const r = solveGrid(spec, tr);
       return { solved: r.solved, checks: r.checks };
     }
     case "venn":
-      return solveVenn(spec);
+      return solveVenn(spec, tr);
     case "ordering":
-      return solveOrdering(spec);
+      return solveOrdering(spec, tr);
     case "tree":
-      return solveTree(spec);
+      return solveTree(spec, tr);
   }
 }

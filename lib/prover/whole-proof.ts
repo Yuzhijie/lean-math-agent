@@ -25,6 +25,7 @@ import { formatSuggestions, librarySearchSuggestions } from "../lean/suggest";
 import { LlmError, sampleText, type ChatMessage } from "../llm/client";
 import { WHOLE_PROOF_SYSTEM, wholeProofRepairMessage, wholeProofUserMessage } from "../llm/prompts";
 import { expectedLatencyMs } from "../llm/usage-tracker";
+import { lt } from "../llm/output-locale";
 
 // ── Configuration ─────────────────────────────────────────────────────
 
@@ -182,7 +183,7 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
     roundsRun = round + 1;
 
     // ── Sample ────────────────────────────────────────────────────
-    progress({ round, status: "sampling", detail: `采样 ${cfg.samples} 个完整证明…` });
+    progress({ round, status: "sampling", detail: lt(`采样 ${cfg.samples} 个完整证明…`, `Sampling ${cfg.samples} whole proofs…`) });
     let samples: string[];
     try {
       samples = await sampleText({
@@ -210,7 +211,7 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
     }
 
     // ── Verify (strict: no sorry, standard axioms, statement lock) ───
-    progress({ round, status: "verifying", detail: `验证 ${tacticBlocks.length} 个候选…` });
+    progress({ round, status: "verifying", detail: lt(`验证 ${tacticBlocks.length} 个候选…`, `Verifying ${tacticBlocks.length} candidate(s)…`) });
     const verified = await Promise.all(
       tacticBlocks.map(async (tactics) => {
         const source = assemble(tactics);
@@ -235,7 +236,7 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
     const winner = verified.find((v) => v.verification.ok);
     if (winner) {
       log.push(`round ${round}: verified (${tacticBlocks.length} candidates)`);
-      progress({ round, status: "ok", detail: `✅ 第 ${round + 1} 轮验证通过` });
+      progress({ round, status: "ok", detail: lt(`✅ 第 ${round + 1} 轮验证通过`, `✅ Verified in round ${round + 1}`) });
       return done({
         ok: true,
         source: winner.source,
@@ -253,7 +254,14 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
       `round ${round}: ${verified.length} candidates failed — ` +
         verified.map((v) => summarizeFailure(v.verification, 80)).join(" | "),
     );
-    progress({ round, status: "fail", detail: `第 ${round + 1} 轮 ${verified.length} 个候选均未通过` });
+    progress({
+      round,
+      status: "fail",
+      detail: lt(
+        `第 ${round + 1} 轮 ${verified.length} 个候选均未通过`,
+        `Round ${round + 1}: none of the ${verified.length} candidate(s) passed`,
+      ),
+    });
 
     if (round === cfg.rounds) break;
 
@@ -266,7 +274,14 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
     if (cfg.suggest && best.verification.backend !== "none" && timeLeft() > 10_000) {
       const prefix = compilingPrefix(best.verification, best.source);
       if (prefix !== undefined) {
-        progress({ round, status: "searching", detail: "在失败目标处运行 exact?/apply?/simp? 检索引理…" });
+        progress({
+          round,
+          status: "searching",
+          detail: lt(
+            "在失败目标处运行 exact?/apply?/simp? 检索引理…",
+            "Running exact?/apply?/simp? at the failing goal to search for lemmas…",
+          ),
+        });
         const found = await librarySearchSuggestions({
           sessionId: args.sessionId,
           theoremName: args.theoremName,

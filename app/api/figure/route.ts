@@ -3,6 +3,7 @@ import { z } from "zod";
 import { generateFigure } from "@/lib/figure/generate";
 import { LlmError } from "@/lib/llm/client";
 import { getSessionAsync, updateSession } from "@/lib/session-store";
+import { withRequestLocale } from "@/lib/llm/output-locale";
 
 const bodySchema = z.object({
   session_id: z.string().min(1).optional(),
@@ -18,7 +19,7 @@ const bodySchema = z.object({
  * language solution, for step highlights), or for a bare problem text.
  * The figure is computed and checked server-side and cached on the session.
  */
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   const parsed = bodySchema.safeParse(await req.json().catch(() => ({})));
   if (!parsed.success) {
     return NextResponse.json({ error: "invalid request", detail: parsed.error.issues }, { status: 400 });
@@ -44,3 +45,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: msg }, { status: 502 });
   }
 }
+
+// Server messages and model output follow the UI language (lib/llm/output-locale.ts).
+export const POST = withRequestLocale(handlePOST);

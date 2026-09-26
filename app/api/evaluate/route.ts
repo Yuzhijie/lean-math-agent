@@ -3,8 +3,9 @@ import { runMultiAgentEvaluation } from "@/lib/agents/orchestrator";
 import { getSessionAsync, updateSession } from "@/lib/session-store";
 import { LlmError } from "@/lib/llm/client";
 import type { MathDomain } from "@/lib/types";
+import { withRequestLocale } from "@/lib/llm/output-locale";
 
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   const body = (await req.json()) as {
     session_id: string;
     domain?: MathDomain;
@@ -55,3 +56,6 @@ export async function POST(req: Request) {
     );
   }
 }
+
+// Server messages and model output follow the UI language (lib/llm/output-locale.ts).
+export const POST = withRequestLocale(handlePOST);

@@ -21,6 +21,7 @@ import type {
   NaturalLanguageSolution,
   Session,
 } from "@/lib/types";
+import { lt, withRequestLocale } from "@/lib/llm/output-locale";
 
 interface SolveRequest {
   problem_text?: string;
@@ -41,7 +42,7 @@ function sseFrame(data: Record<string, unknown>): string {
 
 // ── Streaming POST Handler ─────────────────────────────────────────────
 
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   const body = (await req.json()) as SolveRequest;
 
   // Get or create session
@@ -77,7 +78,7 @@ export async function POST(req: Request) {
       await withUsageScope(async (metrics) => {
         try {
           // ── Stage 0: Classify ────────────────────────────────────────
-          emit({ type: "progress", stage: "classifying", detail: "正在分析问题类型..." });
+          emit({ type: "progress", stage: "classifying", detail: lt("正在分析问题类型...", "Analyzing the problem type...") });
 
           const classification = await classifyProblem(sess.problem_text);
           const problemType = opts.force_type ?? classification.problem_type;
@@ -85,7 +86,7 @@ export async function POST(req: Request) {
           emit({
             type: "progress",
             stage: "classifying",
-            detail: `问题类型: ${problemType}`,
+            detail: lt(`问题类型: ${problemType}`, `Problem type: ${problemType}`),
           });
 
           // Dispatch to handler based on type
@@ -136,7 +137,7 @@ async function handleComputational(
   emit: (data: Record<string, unknown>) => void,
 ): Promise<Record<string, unknown>> {
   updateSession(session.id, { pipeline_stage: "computing" });
-  emit({ stage: "computing", type: "progress", detail: "开始计算求解..." });
+  emit({ stage: "computing", type: "progress", detail: lt("开始计算求解...", "Starting computation...") });
 
   const computeResult = await solveComputational({
     problemText: session.problem_text,
@@ -158,14 +159,14 @@ async function handleComputational(
   emit({
     stage: "computing",
     type: "progress",
-    detail: `答案: ${computeResult.answer} (≈${computeResult.answer_decimal}) [${computeResult.cross_validated ? "交叉验证通过" : "单一方法"}]`,
+    detail: lt(`答案: ${computeResult.answer} (≈${computeResult.answer_decimal}) [${computeResult.cross_validated ? "交叉验证通过" : "单一方法"}]`, `Answer: ${computeResult.answer} (≈${computeResult.answer_decimal}) [${computeResult.cross_validated ? "cross-validated" : "single method"}]`),
   });
 
   // NL Solution
   let nlSolution: NaturalLanguageSolution | undefined;
   if (!opts.skip_nl_solution) {
     updateSession(session.id, { pipeline_stage: "nl_solving" });
-    emit({ stage: "nl_solving", type: "progress", detail: "生成自然语言解答..." });
+    emit({ stage: "nl_solving", type: "progress", detail: lt("生成自然语言解答...", "Generating the natural-language solution...") });
 
     try {
       nlSolution = await generateNLSolution({
@@ -181,13 +182,13 @@ async function handleComputational(
       emit({
         stage: "nl_solving",
         type: "progress",
-        detail: `✅ 自然语言解答完成 (${nlSolution.steps.length} 步)`,
+        detail: lt(`✅ 自然语言解答完成 (${nlSolution.steps.length} 步)`, `✅ Natural-language solution ready (${nlSolution.steps.length} steps)`),
       });
     } catch (e) {
       emit({
         stage: "nl_solving",
         type: "progress",
-        detail: `⚠️ 自然语言解答失败: ${e instanceof Error ? e.message : "未知错误"}`,
+        detail: lt(`⚠️ 自然语言解答失败: ${e instanceof Error ? e.message : "未知错误"}`, `⚠️ Natural-language solution failed: ${e instanceof Error ? e.message : "unknown error"}`),
       });
     }
   }
@@ -195,10 +196,10 @@ async function handleComputational(
   // Lean attempt
   let leanProofAttempt: LeanProofAttempt;
   if (opts.skip_lean_attempt) {
-    leanProofAttempt = { attempted: false, success: false, failure_reason: "用户选择跳过 Lean 形式化尝试" };
+    leanProofAttempt = { attempted: false, success: false, failure_reason: lt("用户选择跳过 Lean 形式化尝试", "Lean formalization skipped at the user's request") };
   } else {
     updateSession(session.id, { pipeline_stage: "lean_attempting" });
-    emit({ stage: "lean_attempting", type: "progress", detail: "尝试 Lean 4 形式化证明..." });
+    emit({ stage: "lean_attempting", type: "progress", detail: lt("尝试 Lean 4 形式化证明...", "Attempting a Lean 4 formal proof...") });
 
     leanProofAttempt = await attemptLeanFormalization(session.problem_text, computeResult);
     updateSession(session.id, { lean_proof_attempt: leanProofAttempt });
@@ -207,13 +208,13 @@ async function handleComputational(
       stage: "lean_attempting",
       type: "progress",
       detail: leanProofAttempt.success
-        ? "✅ Lean 4 形式化证明成功"
-        : `ℹ️ Lean 4 形式化未能完成: ${leanProofAttempt.failure_reason ?? "未知原因"}`,
+        ? lt("✅ Lean 4 形式化证明成功", "✅ Lean 4 formal proof succeeded")
+        : lt(`ℹ️ Lean 4 形式化未能完成: ${leanProofAttempt.failure_reason ?? "未知原因"}`, `ℹ️ Lean 4 formalization not completed: ${leanProofAttempt.failure_reason ?? "unknown reason"}`),
     });
   }
 
   updateSession(session.id, { pipeline_stage: "complete" });
-  emit({ stage: "complete", type: "progress", detail: `求解完成 — 答案: ${computeResult.answer}` });
+  emit({ stage: "complete", type: "progress", detail: lt(`求解完成 — 答案: ${computeResult.answer}`, `Solved — answer: ${computeResult.answer}`) });
 
   return {
     session_id: session.id,
@@ -243,17 +244,17 @@ async function handleOptimization(
   emit: (data: Record<string, unknown>) => void,
 ): Promise<Record<string, unknown>> {
   updateSession(session.id, { pipeline_stage: "extracting" });
-  emit({ stage: "extracting", type: "progress", detail: "提取优化问题结构..." });
+  emit({ stage: "extracting", type: "progress", detail: lt("提取优化问题结构...", "Extracting the optimization problem structure...") });
 
   const structure = await extractOptimizationStructure(session.problem_text);
   emit({
     stage: "extracting",
     type: "progress",
-    detail: `目标: ${structure.objective}, 类别数: ${structure.categories.length}`,
+    detail: lt(`目标: ${structure.objective}, 类别数: ${structure.categories.length}`, `Objective: ${structure.objective}, categories: ${structure.categories.length}`),
   });
 
   updateSession(session.id, { pipeline_stage: "optimizing" });
-  emit({ stage: "optimizing", type: "progress", detail: "确定性搜索最优解..." });
+  emit({ stage: "optimizing", type: "progress", detail: lt("确定性搜索最优解...", "Searching deterministically for the optimum...") });
 
   const result = solveOptimization(structure);
   const answerStr = String(result.optimal_value);
@@ -273,14 +274,14 @@ async function handleOptimization(
   emit({
     stage: "optimizing",
     type: "progress",
-    detail: `最优值: ${answerStr} (${Object.entries(result.assignments).map(([k, v]) => `${k}=${v}`).join(", ")})`,
+    detail: `${lt("最优值", "Optimal value")}: ${answerStr} (${Object.entries(result.assignments).map(([k, v]) => `${k}=${v}`).join(", ")})`,
   });
 
   // NL Solution
   let nlSolution: NaturalLanguageSolution | undefined;
   if (!opts.skip_nl_solution) {
     updateSession(session.id, { pipeline_stage: "nl_solving" });
-    emit({ stage: "nl_solving", type: "progress", detail: "生成自然语言解答..." });
+    emit({ stage: "nl_solving", type: "progress", detail: lt("生成自然语言解答...", "Generating the natural-language solution...") });
 
     try {
       nlSolution = await generateNLSolution({
@@ -289,20 +290,20 @@ async function handleOptimization(
         computeResult: { answer: answerStr, answer_decimal: answerStr, solution_steps: result.reasoning.split("\n") },
       });
       updateSession(session.id, { nl_solution: nlSolution });
-      emit({ stage: "nl_solving", type: "progress", detail: `✅ 自然语言解答完成 (${nlSolution.steps.length} 步)` });
+      emit({ stage: "nl_solving", type: "progress", detail: lt(`✅ 自然语言解答完成 (${nlSolution.steps.length} 步)`, `✅ Natural-language solution ready (${nlSolution.steps.length} steps)`) });
     } catch (e) {
-      emit({ stage: "nl_solving", type: "progress", detail: `⚠️ 自然语言解答失败: ${e instanceof Error ? e.message : "未知错误"}` });
+      emit({ stage: "nl_solving", type: "progress", detail: lt(`⚠️ 自然语言解答失败: ${e instanceof Error ? e.message : "未知错误"}`, `⚠️ Natural-language solution failed: ${e instanceof Error ? e.message : "unknown error"}`) });
     }
   }
 
   const leanProofAttempt: LeanProofAttempt = {
     attempted: false,
     success: false,
-    failure_reason: "组合优化问题的 Lean 形式化需要复杂的归纳论证，当前自动证明能力有限",
+    failure_reason: lt("组合优化问题的 Lean 形式化需要复杂的归纳论证，当前自动证明能力有限", "Formalizing combinatorial optimization problems in Lean requires intricate inductive arguments, beyond current automated proving"),
   };
 
   updateSession(session.id, { pipeline_stage: "complete", lean_proof_attempt: leanProofAttempt });
-  emit({ stage: "complete", type: "progress", detail: `求解完成 — 最优值: ${answerStr}` });
+  emit({ stage: "complete", type: "progress", detail: lt(`求解完成 — 最优值: ${answerStr}`, `Solved — optimal value: ${answerStr}`) });
 
   return {
     session_id: session.id,
@@ -334,7 +335,7 @@ async function handleFindAll(
   findHints?: { parameter: string; parameter_domain?: "integer" | "positive_integer" | "real"; condition_description: string; search_range_hint?: string },
 ): Promise<Record<string, unknown>> {
   updateSession(session.id, { pipeline_stage: "computing" });
-  emit({ stage: "computing", type: "progress", detail: "开始穷举搜索..." });
+  emit({ stage: "computing", type: "progress", detail: lt("开始穷举搜索...", "Starting exhaustive search...") });
 
   const findAllResult = await solveFindAll({
     problemText: session.problem_text,
@@ -357,14 +358,14 @@ async function handleFindAll(
   emit({
     stage: "computing",
     type: "progress",
-    detail: `找到 ${findAllResult.valid_values.length} 个满足条件的值: ${findAllResult.answer}`,
+    detail: lt(`找到 ${findAllResult.valid_values.length} 个满足条件的值: ${findAllResult.answer}`, `Found ${findAllResult.valid_values.length} values satisfying the conditions: ${findAllResult.answer}`),
   });
 
   // NL Solution
   let nlSolution: NaturalLanguageSolution | undefined;
   if (!opts.skip_nl_solution) {
     updateSession(session.id, { pipeline_stage: "nl_solving" });
-    emit({ stage: "nl_solving", type: "progress", detail: "生成自然语言解答..." });
+    emit({ stage: "nl_solving", type: "progress", detail: lt("生成自然语言解答...", "Generating the natural-language solution...") });
 
     try {
       nlSolution = await generateNLSolution({
@@ -373,20 +374,20 @@ async function handleFindAll(
         computeResult: { answer: findAllResult.answer, answer_decimal: findAllResult.answer, solution_steps: findAllResult.solution_steps },
       });
       updateSession(session.id, { nl_solution: nlSolution });
-      emit({ stage: "nl_solving", type: "progress", detail: `✅ 自然语言解答完成 (${nlSolution.steps.length} 步)` });
+      emit({ stage: "nl_solving", type: "progress", detail: lt(`✅ 自然语言解答完成 (${nlSolution.steps.length} 步)`, `✅ Natural-language solution ready (${nlSolution.steps.length} steps)`) });
     } catch (e) {
-      emit({ stage: "nl_solving", type: "progress", detail: `⚠️ 自然语言解答失败: ${e instanceof Error ? e.message : "未知错误"}` });
+      emit({ stage: "nl_solving", type: "progress", detail: lt(`⚠️ 自然语言解答失败: ${e instanceof Error ? e.message : "未知错误"}`, `⚠️ Natural-language solution failed: ${e instanceof Error ? e.message : "unknown error"}`) });
     }
   }
 
   const leanProofAttempt: LeanProofAttempt = {
     attempted: false,
     success: false,
-    failure_reason: "求所有值问题的 Lean 形式化需要完备性证明，当前自动证明能力有限",
+    failure_reason: lt("求所有值问题的 Lean 形式化需要完备性证明，当前自动证明能力有限", "Formalizing find-all-values problems in Lean requires a completeness proof, beyond current automated proving"),
   };
 
   updateSession(session.id, { pipeline_stage: "complete", lean_proof_attempt: leanProofAttempt });
-  emit({ stage: "complete", type: "progress", detail: `求解完成 — 满足条件的所有值: ${findAllResult.answer}` });
+  emit({ stage: "complete", type: "progress", detail: lt(`求解完成 — 满足条件的所有值: ${findAllResult.answer}`, `Solved — all values satisfying the conditions: ${findAllResult.answer}`) });
 
   return {
     session_id: session.id,
@@ -449,11 +450,11 @@ async function attemptLeanFormalization(
         attempted: true,
         success: false,
         formal_statement: formalResult.formal_statement,
-        failure_reason: "自动形式化验证未通过",
+        failure_reason: lt("自动形式化验证未通过", "Autoformalization did not pass validation"),
         limitations: [
-          "该计算问题涉及复杂代数运算，Lean 4 形式化存在以下困难：",
+          lt("该计算问题涉及复杂代数运算，Lean 4 形式化存在以下困难：", "This computational problem involves complex algebra; formalizing it in Lean 4 ran into these difficulties:"),
           ...failedLayers,
-          "建议使用自然语言解答作为主要参考。",
+          lt("建议使用自然语言解答作为主要参考。", "Use the natural-language solution as the primary reference."),
         ],
       };
     }
@@ -462,23 +463,26 @@ async function attemptLeanFormalization(
       attempted: true,
       success: false,
       formal_statement: formalResult.formal_statement,
-      failure_reason: "计算问题的形式化证明需要复杂的数值推导，当前自动证明能力有限",
+      failure_reason: lt("计算问题的形式化证明需要复杂的数值推导，当前自动证明能力有限", "A formal proof of this computational problem requires involved numerical derivation, beyond current automated proving"),
       limitations: [
-        "问题的数值答案需要多步代数推导才能在 Lean 中验证",
-        "涉及平方、根号化简、验根等步骤，Lean 的 norm_num / ring 策略无法直接处理",
-        "自然语言解答中已提供完整的推导和验证过程",
+        lt("问题的数值答案需要多步代数推导才能在 Lean 中验证", "Verifying the numerical answer in Lean requires a multi-step algebraic derivation"),
+        lt("涉及平方、根号化简、验根等步骤，Lean 的 norm_num / ring 策略无法直接处理", "It involves squaring, simplifying radicals and checking roots, which Lean's norm_num / ring tactics cannot handle directly"),
+        lt("自然语言解答中已提供完整的推导和验证过程", "The natural-language solution gives the full derivation and verification"),
       ],
     };
   } catch (e) {
     return {
       attempted: true,
       success: false,
-      failure_reason: `形式化过程出错: ${e instanceof Error ? e.message : "未知错误"}`,
+      failure_reason: lt(`形式化过程出错: ${e instanceof Error ? e.message : "未知错误"}`, `Formalization error: ${e instanceof Error ? e.message : "unknown error"}`),
       limitations: [
-        "该问题涉及复杂的数值计算或根号运算",
-        "Lean 4 的 Mathlib 对这类问题的自动化支持有限",
-        "自然语言解答已提供完整的推导和验证过程",
+        lt("该问题涉及复杂的数值计算或根号运算", "The problem involves complex numerical computation or radicals"),
+        lt("Lean 4 的 Mathlib 对这类问题的自动化支持有限", "Mathlib (Lean 4) has limited automation for problems of this kind"),
+        lt("自然语言解答已提供完整的推导和验证过程", "The natural-language solution gives the full derivation and verification"),
       ],
     };
   }
 }
+
+// Server messages and model output follow the UI language (lib/llm/output-locale.ts).
+export const POST = withRequestLocale(handlePOST);

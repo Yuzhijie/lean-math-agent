@@ -13,6 +13,7 @@
  * illustration, and the claims checked afterwards decide whether it is
  * faithful.
  */
+import { lt } from "../llm/output-locale";
 import { compileExpr, ExprError } from "./expr";
 import type { Construction, FigureSpec, Point2, SolvedCircle } from "./spec";
 
@@ -49,7 +50,7 @@ function lineIntersection(p1: Point2, p2: Point2, q1: Point2, q2: Point2): Point
 function foot(p: Point2, a: Point2, b: Point2): Point2 {
   const ab = sub(b, a);
   const len2 = dot(ab, ab);
-  if (len2 < EPS) throw new FigureError("直线的两个端点重合");
+  if (len2 < EPS) throw new FigureError(lt("直线的两个端点重合", "The two points defining the line coincide"));
   return add(a, mul(ab, dot(sub(p, a), ab) / len2));
 }
 
@@ -68,7 +69,7 @@ interface Tri {
  * Solve a triangle from any mix of given sides/angles (SSS, SAS, ASA, AAS,
  * SSA → acute solution), filling missing data with defaults.
  */
-export function solveTriangle(given: Tri, isoscelesAt?: 0 | 1 | 2, warnings: string[] = [], label = "三角形"): Required<Tri> {
+export function solveTriangle(given: Tri, isoscelesAt?: 0 | 1 | 2, warnings: string[] = [], label = lt("三角形", "Triangle")): Required<Tri> {
   const t: Tri = { ...given };
   const angleKeys = ["A", "B", "C"] as const;
   const sideKeys = ["a", "b", "c"] as const;
@@ -129,7 +130,7 @@ export function solveTriangle(given: Tri, isoscelesAt?: 0 | 1 | 2, warnings: str
         if (t[angleKeys[i]] !== undefined) set(sideKeys[i], k * Math.sin(t[angleKeys[i]]!));
         else if (t[sideKeys[i]] !== undefined) {
           const s = t[sideKeys[i]]! / k;
-          if (s > 1 + 1e-9) throw new FigureError(`${label}：给定的边和角无法构成三角形`);
+          if (s > 1 + 1e-9) throw new FigureError(lt(`${label}：给定的边和角无法构成三角形`, `${label}: the given sides and angles cannot form a triangle`));
           let ang = Math.asin(Math.min(1, s));
           if (t[angleKeys[pair]]! + ang >= Math.PI) ang = Math.PI - ang;
           set(angleKeys[i], ang);
@@ -151,7 +152,7 @@ export function solveTriangle(given: Tri, isoscelesAt?: 0 | 1 | 2, warnings: str
       const i = [0, 1, 2].find((j) => !ks.includes(sideKeys[j]))!;
       if (t[angleKeys[i]] === undefined) {
         t[angleKeys[i]] = 60 * DEG;
-        warnings.push(`${label}：未给出夹角，按 60° 作示意`);
+        warnings.push(lt(`${label}：未给出夹角，按 60° 作示意`, `${label}: included angle not given; drawn as 60° (sketch)`));
         continue;
       }
     }
@@ -160,28 +161,28 @@ export function solveTriangle(given: Tri, isoscelesAt?: 0 | 1 | 2, warnings: str
       const sum = ka.reduce((s, k) => s + t[k]!, 0);
       const v = ka.length === 0 ? 58 * DEG : (Math.PI - sum) * 0.42;
       t[angleKeys[i]] = v;
-      warnings.push(`${label}：角未完全给出，∠${"ABC"[i]} 按 ${(v / DEG).toFixed(0)}° 作示意`);
+      warnings.push(lt(`${label}：角未完全给出，∠${"ABC"[i]} 按 ${(v / DEG).toFixed(0)}° 作示意`, `${label}: angles not fully given; ∠${"ABC"[i]} drawn as ${(v / DEG).toFixed(0)}° (sketch)`));
       continue;
     }
     if (ks.length === 0) {
       t.a = 5;
-      warnings.push(`${label}：未给出边长，按比例作图`);
+      warnings.push(lt(`${label}：未给出边长，按比例作图`, `${label}: no side lengths given; drawn to an arbitrary scale`));
       continue;
     }
-    throw new FigureError(`${label}：条件不足以确定三角形`);
+    throw new FigureError(lt(`${label}：条件不足以确定三角形`, `${label}: not enough data to determine the triangle`));
   }
   const { A, B, C, a, b, c } = t;
   if ([A, B, C, a, b, c].some((v) => v === undefined || !Number.isFinite(v) || v <= 0)) {
-    throw new FigureError(`${label}：条件矛盾或不足`);
+    throw new FigureError(lt(`${label}：条件矛盾或不足`, `${label}: the data are contradictory or insufficient`));
   }
   if (a! >= b! + c! - 1e-9 || b! >= a! + c! - 1e-9 || c! >= a! + b! - 1e-9) {
-    throw new FigureError(`${label}：边长不满足三角形不等式`);
+    throw new FigureError(lt(`${label}：边长不满足三角形不等式`, `${label}: the side lengths violate the triangle inequality`));
   }
   return t as Required<Tri>;
 }
 
 function clampCos(v: number): number {
-  if (v > 1 + 1e-9 || v < -1 - 1e-9) throw new FigureError("边长不满足三角形不等式");
+  if (v > 1 + 1e-9 || v < -1 - 1e-9) throw new FigureError(lt("边长不满足三角形不等式", "The side lengths violate the triangle inequality"));
   return Math.max(-1, Math.min(1, v));
 }
 
@@ -197,22 +198,22 @@ export function solveFigure(spec: FigureSpec): SolveResult {
     try {
       functions[f.id] = compileExpr(f.expr);
     } catch (e) {
-      throw new FigureError(`函数 ${f.id} = ${f.expr}：${e instanceof ExprError ? e.message : String(e)}`);
+      throw new FigureError(lt(`函数 ${f.id} = ${f.expr}：${e instanceof ExprError ? e.message : String(e)}`, `Function ${f.id} = ${f.expr}: ${e instanceof ExprError ? e.message : String(e)}`));
     }
   }
 
   const P = (name: string, ctx: string): Point2 => {
     const p = points[name];
-    if (!p) throw new FigureError(`${ctx}：点 ${name} 尚未定义（构造顺序需先定义它）`);
+    if (!p) throw new FigureError(lt(`${ctx}：点 ${name} 尚未定义（构造顺序需先定义它）`, `${ctx}: point ${name} is not defined yet (define it earlier in the construction order)`));
     return p;
   };
   const Circ = (name: string, ctx: string): SolvedCircle => {
     const c = circles[name];
-    if (!c) throw new FigureError(`${ctx}：圆 ${name} 尚未定义`);
+    if (!c) throw new FigureError(lt(`${ctx}：圆 ${name} 尚未定义`, `${ctx}: circle ${name} is not defined yet`));
     return c;
   };
   const define = (name: string, p: Point2, ctx: string) => {
-    if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) throw new FigureError(`${ctx}：点 ${name} 无法计算`);
+    if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) throw new FigureError(lt(`${ctx}：点 ${name} 无法计算`, `${ctx}: point ${name} cannot be computed`));
     points[name] = p;
   };
 
@@ -225,7 +226,7 @@ export function solveFigure(spec: FigureSpec): SolveResult {
       const L = sub(local[j], local[i]);
       const W = sub(points[ids[j]], points[ids[i]]);
       const scale = Math.hypot(W.x, W.y) / Math.hypot(L.x, L.y);
-      if (Math.abs(scale - 1) > 1e-6) warnings.push(`${ctx}：与已有点的距离不一致，按比例缩放`);
+      if (Math.abs(scale - 1) > 1e-6) warnings.push(lt(`${ctx}：与已有点的距离不一致，按比例缩放`, `${ctx}: inconsistent with distances between existing points; scaled to fit`));
       const angle = Math.atan2(W.y, W.x) - Math.atan2(L.y, L.x);
       const origin = local[i];
       const target = points[ids[i]];
@@ -261,13 +262,13 @@ export function solveFigure(spec: FigureSpec): SolveResult {
         const unknownSides = Object.keys(c.sides ?? {}).filter((k) => !names.includes(k));
         const unknownAngles = Object.keys(c.angles ?? {}).filter((k) => ![n0, n1, n2].includes(k));
         if (unknownSides.length || unknownAngles.length) {
-          throw new FigureError(`${ctx}：无法识别的边/角 ${[...unknownSides, ...unknownAngles].join(", ")}（边用两个顶点名如 ${n0}${n1}，角用顶点名如 ${n0}）`);
+          throw new FigureError(lt(`${ctx}：无法识别的边/角 ${[...unknownSides, ...unknownAngles].join(", ")}（边用两个顶点名如 ${n0}${n1}，角用顶点名如 ${n0}）`, `${ctx}: unrecognized side/angle ${[...unknownSides, ...unknownAngles].join(", ")} (name sides by two vertices, e.g. ${n0}${n1}, and angles by the vertex, e.g. ${n0})`));
         }
         if (c.equilateral) {
           given.A = given.B = given.C = 60 * DEG;
         }
         const apexIdx = c.isosceles_at !== undefined ? [n0, n1, n2].indexOf(c.isosceles_at) : undefined;
-        if (apexIdx === -1) throw new FigureError(`${ctx}：顶点 ${c.isosceles_at} 不在三角形中`);
+        if (apexIdx === -1) throw new FigureError(lt(`${ctx}：顶点 ${c.isosceles_at} 不在三角形中`, `${ctx}: vertex ${c.isosceles_at} is not in the triangle`));
         const apex = apexIdx as 0 | 1 | 2 | undefined;
         // Existing base vertices fix the scale when no side is given.
         if (given.a === undefined && given.b === undefined && given.c === undefined) {
@@ -320,7 +321,7 @@ export function solveFigure(spec: FigureSpec): SolveResult {
         break;
       case "intersection": {
         const x = lineIntersection(P(c.line1[0], ctx), P(c.line1[1], ctx), P(c.line2[0], ctx), P(c.line2[1], ctx));
-        if (!x) throw new FigureError(`${ctx}：两直线平行，没有交点`);
+        if (!x) throw new FigureError(lt(`${ctx}：两直线平行，没有交点`, `${ctx}: the lines are parallel and do not intersect`));
         define(c.id, x, ctx);
         break;
       }
@@ -349,14 +350,14 @@ export function solveFigure(spec: FigureSpec): SolveResult {
       case "circle": {
         const center = P(c.center, ctx);
         const r = c.radius ?? (c.through ? dist(center, P(c.through, ctx)) : undefined);
-        if (r === undefined || r <= 0) throw new FigureError(`${ctx}：需要 radius 或 through`);
+        if (r === undefined || r <= 0) throw new FigureError(lt(`${ctx}：需要 radius 或 through`, `${ctx}: radius or through is required`));
         circles[c.id] = { center, r };
         break;
       }
       case "circumcircle": {
         const [a, b, cc] = c.of.map((n) => P(n, ctx));
         const d = 2 * (a.x * (b.y - cc.y) + b.x * (cc.y - a.y) + cc.x * (a.y - b.y));
-        if (Math.abs(d) < EPS) throw new FigureError(`${ctx}：三点共线，没有外接圆`);
+        if (Math.abs(d) < EPS) throw new FigureError(lt(`${ctx}：三点共线，没有外接圆`, `${ctx}: the three points are collinear, so there is no circumcircle`));
         const a2 = dot(a, a);
         const b2 = dot(b, b);
         const c2 = dot(cc, cc);
@@ -374,10 +375,10 @@ export function solveFigure(spec: FigureSpec): SolveResult {
         const b = dist(A, C);
         const cl = dist(A, B);
         const per = a + b + cl;
-        if (per < EPS) throw new FigureError(`${ctx}：三角形退化`);
+        if (per < EPS) throw new FigureError(lt(`${ctx}：三角形退化`, `${ctx}: degenerate triangle`));
         const center = { x: (a * A.x + b * B.x + cl * C.x) / per, y: (a * A.y + b * B.y + cl * C.y) / per };
         const area = Math.abs(cross(sub(B, A), sub(C, A))) / 2;
-        if (area < EPS) throw new FigureError(`${ctx}：三点共线，没有内切圆`);
+        if (area < EPS) throw new FigureError(lt(`${ctx}：三点共线，没有内切圆`, `${ctx}: the three points are collinear, so there is no incircle`));
         circles[c.id] = { center, r: area / (per / 2) };
         if (c.center_id) define(c.center_id, center, ctx);
         break;
@@ -397,7 +398,7 @@ export function solveFigure(spec: FigureSpec): SolveResult {
         const B = 2 * dot(f, d);
         const C = dot(f, f) - circ.r * circ.r;
         const disc = B * B - 4 * A * C;
-        if (A < EPS || disc < -1e-9) throw new FigureError(`${ctx}：直线与圆没有交点`);
+        if (A < EPS || disc < -1e-9) throw new FigureError(lt(`${ctx}：直线与圆没有交点`, `${ctx}: the line does not intersect the circle`));
         const s = Math.sqrt(Math.max(0, disc));
         const ts = [(-B - s) / (2 * A), (-B + s) / (2 * A)].sort((u, v) => u - v);
         // Prefer an intersection other than an already-named endpoint.
@@ -409,7 +410,7 @@ export function solveFigure(spec: FigureSpec): SolveResult {
       }
       case "function_point": {
         const fn = functions[c.fn];
-        if (!fn) throw new FigureError(`${ctx}：函数 ${c.fn} 未定义`);
+        if (!fn) throw new FigureError(lt(`${ctx}：函数 ${c.fn} 未定义`, `${ctx}: function ${c.fn} is not defined`));
         define(c.id, { x: c.x, y: fn(c.x) }, ctx);
         break;
       }

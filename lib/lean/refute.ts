@@ -21,6 +21,7 @@
  */
 import { verifyLeanSource, type LeanVerifyResult } from "./sandbox";
 import { validateTheoremStatement } from "./sanitize";
+import { lt } from "../llm/output-locale";
 
 export type RefuteVerdict = "refuted" | "confirmed" | "no_counterexample" | "inconclusive" | "unavailable";
 
@@ -107,7 +108,7 @@ export async function refuteStatement(theoremName: string, theoremType: string, 
   const shape = validateTheoremStatement(theoremName, theoremType);
   if (!shape.ok) return done({ verdict: "inconclusive", detail: shape.reason });
   const prop = statementToProp(theoremType);
-  if (!prop) return done({ verdict: "inconclusive", detail: "无法从定理陈述构造命题" });
+  if (!prop) return done({ verdict: "inconclusive", detail: lt("无法从定理陈述构造命题", "Could not build a proposition from the theorem statement") });
   const useMathlib = opts.useMathlib ?? true;
   const header = useMathlib ? HEADER_MATHLIB : "";
   const timeoutMs = opts.timeoutMs ?? envNum("REFUTE_TIMEOUT_MS", 20_000);
@@ -123,11 +124,18 @@ export async function refuteStatement(theoremName: string, theoremType: string, 
       if (res.status === "unavailable") return done({ verdict: "unavailable", detail: res.log });
       const errors = errorTexts(res);
       if (res.ok && errors.length === 0 && !res.rejected) {
-        return done({ verdict: "refuted", method: "decide", detail: "`decide` 证明了陈述的否定：该陈述为假（可判定域上存在反例）" });
+        return done({
+          verdict: "refuted",
+          method: "decide",
+          detail: lt(
+            "`decide` 证明了陈述的否定：该陈述为假（可判定域上存在反例）",
+            "`decide` proved the negation: the statement is false (a counterexample exists in the decidable domain)",
+          ),
+        });
       }
       const text = errors.join("\n");
       if (/evaluates to false|is false/.test(text) && /decide/i.test(text)) {
-        return done({ verdict: "confirmed", method: "decide", detail: "`decide` 判定该陈述为真（可判定命题）" });
+        return done({ verdict: "confirmed", method: "decide", detail: lt("`decide` 判定该陈述为真（可判定命题）", "`decide` decided the statement is true (decidable proposition)") });
       }
       notes.push(`decide: ${text.split("\n")[0]?.slice(0, 120) || res.log.slice(0, 120)}`);
     } catch (e) {
@@ -150,11 +158,21 @@ export async function refuteStatement(theoremName: string, theoremType: string, 
           verdict: "refuted",
           method: "plausible",
           counterexample,
-          detail: `随机测试找到反例${counterexample ? `：${counterexample}` : ""}`,
+          detail: lt(
+            `随机测试找到反例${counterexample ? `：${counterexample}` : ""}`,
+            `Random testing found a counterexample${counterexample ? `: ${counterexample}` : ""}`,
+          ),
         });
       }
       if (errors.length === 0 && !res.rejected) {
-        return done({ verdict: "no_counterexample", method: "plausible", detail: `随机测试 ${trials} 次未找到反例（不是证明）` });
+        return done({
+          verdict: "no_counterexample",
+          method: "plausible",
+          detail: lt(
+            `随机测试 ${trials} 次未找到反例（不是证明）`,
+            `No counterexample found in ${trials} random trials (not a proof)`,
+          ),
+        });
       }
       notes.push(`plausible: ${text.split("\n")[0]?.slice(0, 120) || res.log.slice(0, 120)}`);
     } catch (e) {
@@ -162,5 +180,10 @@ export async function refuteStatement(theoremName: string, theoremType: string, 
     }
   }
 
-  return done({ verdict: "inconclusive", detail: notes.length ? `无法判定：${notes.join("；")}` : "无法判定" });
+  return done({
+    verdict: "inconclusive",
+    detail: notes.length
+      ? lt(`无法判定：${notes.join("；")}`, `Inconclusive: ${notes.join("; ")}`)
+      : lt("无法判定", "Inconclusive"),
+  });
 }

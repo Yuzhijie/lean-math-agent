@@ -22,6 +22,7 @@ import { splitHeader } from "../lean/sanitize";
 import { LlmError, sampleText } from "../llm/client";
 import { SKETCH_SYSTEM, sketchUserMessage } from "../llm/prompts";
 import { expectedLatencyMs } from "../llm/usage-tracker";
+import { lt } from "../llm/output-locale";
 import { goalSearch, type GoalSearchConfig } from "../search/goal-search";
 import { extractTactics } from "./whole-proof";
 
@@ -136,7 +137,7 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
       log.push(`round ${round}: not enough time left for another sketch round`);
       break;
     }
-    progress({ stage: "sampling", detail: `采样 ${cfg.samples} 个证明骨架…` });
+    progress({ stage: "sampling", detail: lt(`采样 ${cfg.samples} 个证明骨架…`, `Sampling ${cfg.samples} proof sketches…`) });
     let samples: string[];
     try {
       samples = await sampleText({
@@ -182,7 +183,7 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
         useMathlib: cfg.useMathlib,
         opens: args.opens,
       });
-      progress({ stage: "elaborating", detail: "检查骨架结构…" });
+      progress({ stage: "elaborating", detail: lt("检查骨架结构…", "Checking sketch structure…") });
       let session: ProofSession;
       try {
         session = await ProofSession.open(source);
@@ -211,7 +212,13 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
         // search is paid for.
         for (let i = 0; i < holes.length; i++) {
           if (timeLeft() <= 0) break;
-          progress({ stage: "hole", detail: `自动化尝试子目标 ${i + 1}/${holes.length}: ${lastLine(holes[i].goal)}` });
+          progress({
+            stage: "hole",
+            detail: lt(
+              `自动化尝试子目标 ${i + 1}/${holes.length}: ${lastLine(holes[i].goal)}`,
+              `Trying automation on subgoal ${i + 1}/${holes.length}: ${lastLine(holes[i].goal)}`,
+            ),
+          });
           const h = await hammer(session, holes[i].state, { useMathlib: cfg.useMathlib, budgetMs: Math.min(20_000, Math.max(1_000, timeLeft())) });
           if (h.solved && h.tactic) {
             scripts[i] = [h.tactic];
@@ -236,7 +243,13 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
             log.push(`  hole ${i + 1}: ${Math.round(Math.max(0, budget) / 1000)}s left is not enough for a search`);
             break;
           }
-          progress({ stage: "hole", detail: `搜索子目标 ${i + 1}/${holes.length}: ${lastLine(hole.goal)}` });
+          progress({
+            stage: "hole",
+            detail: lt(
+              `搜索子目标 ${i + 1}/${holes.length}: ${lastLine(hole.goal)}`,
+              `Searching subgoal ${i + 1}/${holes.length}: ${lastLine(hole.goal)}`,
+            ),
+          });
           const r = await goalSearch({
             session,
             rootState: hole.state,
@@ -266,13 +279,13 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
           continue;
         }
         const finalSource = header ? `${header}\n${body}` : body;
-        progress({ stage: "verifying", detail: "拼接后严格验证…" });
+        progress({ stage: "verifying", detail: lt("拼接后严格验证…", "Assembling and verifying strictly…") });
         const verification = await session.verify(args.sessionId, finalSource, {
           theoremName: args.theoremName,
           expectedSignature: args.expectedSignature,
         });
         if (verification.ok) {
-          progress({ stage: "ok", detail: `✅ 骨架 + ${holes.length} 个子目标全部通过` });
+          progress({ stage: "ok", detail: lt(`✅ 骨架 + ${holes.length} 个子目标全部通过`, `✅ Sketch + all ${holes.length} subgoal(s) verified`) });
           const bodyLines = body.split("\n");
           const declIdx = Math.max(0, bodyLines.findIndex((l) => /^\s*(?:theorem|lemma|example)\b/.test(l)));
           const tacticBody = bodyLines.slice(declIdx + 1).map((l) => l.replace(/^ {2}/, "")).join("\n").trim();
@@ -286,7 +299,7 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
     if (firstError && blocks.length > 0) previousErrors = firstError;
     else if (!firstError) break; // sketches elaborated but holes could not be closed — repairs will not help
   }
-  progress({ stage: "fail", detail: "骨架分解未能完成证明" });
+  progress({ stage: "fail", detail: lt("骨架分解未能完成证明", "Sketch decomposition did not complete the proof") });
   return done({});
 }
 

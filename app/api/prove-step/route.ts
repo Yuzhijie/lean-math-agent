@@ -3,8 +3,9 @@ import { assembleLeanSource, stepCodesUpTo } from "@/lib/lean/assemble";
 import { proveStepWithRepair } from "@/lib/llm/prove-step";
 import { LlmError } from "@/lib/llm/client";
 import { getSessionAsync, updateSession } from "@/lib/session-store";
+import { withRequestLocale } from "@/lib/llm/output-locale";
 
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   const body = (await req.json()) as {
     session_id?: string;
     step_index?: number;
@@ -84,3 +85,6 @@ export async function POST(req: Request) {
     );
   }
 }
+
+// Server messages and model output follow the UI language (lib/llm/output-locale.ts).
+export const POST = withRequestLocale(handlePOST);

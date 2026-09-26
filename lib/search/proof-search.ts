@@ -26,6 +26,7 @@ import { verifyLeanSource, type LeanVerifyResult } from "../lean/sandbox";
 import { classifyLeanErrors } from "../lean/parse-log";
 import { labelSorry } from "../lean/sorry-gate";
 import { tryTrivialTactic } from "../lean/trivial-proof";
+import { lt } from "../llm/output-locale";
 import { PriorityQueue } from "./priority-queue";
 
 // ── Configuration ─────────────────────────────────────────────────────
@@ -352,7 +353,7 @@ export async function proofSearch(args: {
       newSteps[stepIdx] = {
         ...newSteps[stepIdx],
         lean_code: fallback.lean_code,
-        plain_explanation: `自动策略: ${fallback.tactic}`,
+        plain_explanation: lt(`自动策略: ${fallback.tactic}`, `Automatic tactic: ${fallback.tactic}`),
         status: "ok",
       };
       pushChild(

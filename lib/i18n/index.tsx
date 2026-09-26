@@ -64,6 +64,8 @@ export function I18nProvider({
 
   useEffect(() => {
     document.documentElement.lang = locale;
+    // Tell the server which language is on screen, so model-written content (problems, solutions) matches it.
+    document.cookie = `ui_locale=${locale};path=/;max-age=${365 * 24 * 60 * 60};samesite=lax`;
   }, [locale]);
 
   const setPref = useCallback((p: LocalePref) => {

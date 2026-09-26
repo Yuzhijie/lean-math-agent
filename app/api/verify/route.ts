@@ -3,8 +3,9 @@ import { assembleLeanSource } from "@/lib/lean/assemble";
 import { verifyLeanSource } from "@/lib/lean/sandbox";
 import { getSessionAsync, updateSession } from "@/lib/session-store";
 import type { LeanProofAttempt } from "@/lib/types";
+import { lt, withRequestLocale } from "@/lib/llm/output-locale";
 
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   const body = (await req.json()) as { session_id?: string };
   if (!body.session_id?.trim()) {
     return NextResponse.json({ error: "session_id required" }, { status: 400 });
@@ -50,15 +51,15 @@ export async function POST(req: Request) {
     proof_code: result.ok ? assembled_lean : undefined,
     failure_reason: result.ok
       ? sorrySteps.length > 0
-        ? `Lean 编译通过，但有 ${sorrySteps.length} 个步骤使用了 sorry（未完成的证明）`
+        ? lt(`Lean 编译通过，但有 ${sorrySteps.length} 个步骤使用了 sorry（未完成的证明）`, `Lean compiled, but ${sorrySteps.length} step(s) use sorry (incomplete proof)`)
         : undefined
-      : `Lean 验证失败: ${result.log.slice(0, 300)}`,
+      : lt(`Lean 验证失败: ${result.log.slice(0, 300)}`, `Lean verification failed: ${result.log.slice(0, 300)}`),
     limitations: [
       ...sorrySteps.map(
-        (s) => `步骤 ${s.index + 1} (${s.plain_goal}): 使用了 sorry，需要进一步完善`,
+        (s) => lt(`步骤 ${s.index + 1} (${s.plain_goal}): 使用了 sorry，需要进一步完善`, `Step ${s.index + 1} (${s.plain_goal}): uses sorry and needs more work`),
       ),
       ...failedSteps.map(
-        (s) => `步骤 ${s.index + 1} (${s.plain_goal}): 证明失败`,
+        (s) => lt(`步骤 ${s.index + 1} (${s.plain_goal}): 证明失败`, `Step ${s.index + 1} (${s.plain_goal}): proof failed`),
       ),
     ],
     axioms: result.axioms?.axioms,
@@ -88,3 +89,6 @@ export async function POST(req: Request) {
     },
   });
 }
+
+// Server messages and model output follow the UI language (lib/llm/output-locale.ts).
+export const POST = withRequestLocale(handlePOST);

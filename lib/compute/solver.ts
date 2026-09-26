@@ -6,6 +6,7 @@ import {
 } from "./cross-validate";
 import { setupEquations, type EquationSetup } from "../llm/equation-setup";
 import { chatJson } from "../llm/client";
+import { lt } from "../llm/output-locale";
 import { z } from "zod";
 import {
   CROSS_VALIDATION_SYSTEM,
@@ -388,9 +389,9 @@ Provide a step-by-step explanation of the solution.`,
   } catch {
     // Fallback: generate minimal explanation
     return [
-      `设${setup.variables.map((v) => v.description).join("、")}`,
-      `建立方程: ${setup.equations.map((eq) => `${eq.lhs} = ${eq.rhs}`).join("; ")}`,
-      `求解得到答案: ${validation.final_answer}`,
+      lt(`设${setup.variables.map((v) => v.description).join("、")}`, `Let ${setup.variables.map((v) => v.description).join(", ")}`),
+      lt(`建立方程: ${setup.equations.map((eq) => `${eq.lhs} = ${eq.rhs}`).join("; ")}`, `Set up the equations: ${setup.equations.map((eq) => `${eq.lhs} = ${eq.rhs}`).join("; ")}`),
+      lt(`求解得到答案: ${validation.final_answer}`, `Solving gives the answer: ${validation.final_answer}`),
     ];
   }
 }

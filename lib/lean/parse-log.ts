@@ -1,4 +1,5 @@
 import type { ClassifiedError, ErrorKind } from "../types";
+import { lt } from "../llm/output-locale";
 
 /**
  * Original log filtering — extracts useful error/warning lines.
@@ -17,7 +18,8 @@ export function parseLeanLog(log: string): string {
 interface ErrorPattern {
   kind: ErrorKind;
   patterns: RegExp[];
-  suggestion: string;
+  /** Called at use time so the text follows the request's UI language. */
+  suggestion: () => string;
 }
 
 const ERROR_PATTERNS: ErrorPattern[] = [
@@ -28,8 +30,11 @@ const ERROR_PATTERNS: ErrorPattern[] = [
       /unknown constant '([^']+)'/i,
       /unknown tactic '([^']+)'/i,
     ],
-    suggestion:
-      "检查标识符拼写。如果是 Mathlib 引理，使用完整限定名（如 Nat.add_comm）。尝试 `exact?` 或 `apply?` 搜索。",
+    suggestion: () =>
+      lt(
+        "检查标识符拼写。如果是 Mathlib 引理，使用完整限定名（如 Nat.add_comm）。尝试 `exact?` 或 `apply?` 搜索。",
+        "Check the identifier's spelling. For a Mathlib lemma, use the fully qualified name (e.g. Nat.add_comm). Try `exact?` or `apply?` to search.",
+      ),
   },
   {
     kind: "type_mismatch",
@@ -39,8 +44,11 @@ const ERROR_PATTERNS: ErrorPattern[] = [
       /expected .+ but got/i,
       /application type mismatch/i,
     ],
-    suggestion:
-      "类型不匹配。可能需要显式类型转换（↑n for nat→int），push_cast，或使用不同版本的引理。",
+    suggestion: () =>
+      lt(
+        "类型不匹配。可能需要显式类型转换（↑n for nat→int），push_cast，或使用不同版本的引理。",
+        "Type mismatch. You may need an explicit cast (↑n for ℕ→ℤ), push_cast, or a different variant of the lemma.",
+      ),
   },
   {
     kind: "unsolved_goal",
@@ -50,8 +58,11 @@ const ERROR_PATTERNS: ErrorPattern[] = [
       /tactic '.*' did not close the goal/i,
       /goals to prove/i,
     ],
-    suggestion:
-      "目标未完全闭合。尝试更强的自动化：omega, linarith, ring, norm_num。或将步骤拆分为更小的子目标。",
+    suggestion: () =>
+      lt(
+        "目标未完全闭合。尝试更强的自动化：omega, linarith, ring, norm_num。或将步骤拆分为更小的子目标。",
+        "The goal was not fully closed. Try stronger automation: omega, linarith, ring, norm_num. Or split the step into smaller subgoals.",
+      ),
   },
   {
     kind: "tactic_failed",
@@ -63,8 +74,11 @@ const ERROR_PATTERNS: ErrorPattern[] = [
       /omega failed/i,
       /linarith failed/i,
     ],
-    suggestion:
-      "特定策略失败。尝试替代方案：rw→simp, induction→cases, ring→omega, simp→simp only [...]。",
+    suggestion: () =>
+      lt(
+        "特定策略失败。尝试替代方案：rw→simp, induction→cases, ring→omega, simp→simp only [...]。",
+        "A specific tactic failed. Try alternatives: rw→simp, induction→cases, ring→omega, simp→simp only [...].",
+      ),
   },
   {
     kind: "missing_lemma",
@@ -74,8 +88,11 @@ const ERROR_PATTERNS: ErrorPattern[] = [
       /lemma .* does not exist/i,
       /no applicable tactic/i,
     ],
-    suggestion:
-      "所需引理不存在。将其作为局部 `have` 引理声明，或使用更通用的方法。",
+    suggestion: () =>
+      lt(
+        "所需引理不存在。将其作为局部 `have` 引理声明，或使用更通用的方法。",
+        "The required lemma does not exist. State it as a local `have` lemma, or use a more general approach.",
+      ),
   },
   {
     kind: "scope_error",
@@ -84,8 +101,11 @@ const ERROR_PATTERNS: ErrorPattern[] = [
       /unknown local declaration/i,
       /no such local constant/i,
     ],
-    suggestion:
-      "变量不在作用域内。检查是否需要用 `intro`, `obtain`, 或 `cases` 引入。",
+    suggestion: () =>
+      lt(
+        "变量不在作用域内。检查是否需要用 `intro`, `obtain`, 或 `cases` 引入。",
+        "Variable not in scope. Check whether it needs to be introduced with `intro`, `obtain`, or `cases`.",
+      ),
   },
   {
     kind: "syntax_error",
@@ -95,7 +115,11 @@ const ERROR_PATTERNS: ErrorPattern[] = [
       /invalid .* syntax/i,
       /ill-formed/i,
     ],
-    suggestion: "修复 Lean 语法。检查括号、逗号、关键字拼写和缩进。",
+    suggestion: () =>
+      lt(
+        "修复 Lean 语法。检查括号、逗号、关键字拼写和缩进。",
+        "Fix the Lean syntax. Check parentheses, commas, keyword spelling, and indentation.",
+      ),
   },
   {
     kind: "timeout",
@@ -104,8 +128,11 @@ const ERROR_PATTERNS: ErrorPattern[] = [
       /deterministic timeout/i,
       /timeout/i,
     ],
-    suggestion:
-      "Lean 超时。简化步骤：拆分为更小的子目标，使用更直接的策略，用 `simp only [...]` 限制 simp 集。",
+    suggestion: () =>
+      lt(
+        "Lean 超时。简化步骤：拆分为更小的子目标，使用更直接的策略，用 `simp only [...]` 限制 simp 集。",
+        "Lean timed out. Simplify the step: split it into smaller subgoals, use more direct tactics, and restrict the simp set with `simp only [...]`.",
+      ),
   },
 ];
 
@@ -139,7 +166,7 @@ export function classifyLeanErrors(log: string): ClassifiedError[] {
         kind,
         message: line.replace(/.*error:\s*/i, "").trim(),
         raw: line,
-        suggestion: ERROR_PATTERNS.find((p) => p.kind === kind)?.suggestion,
+        suggestion: ERROR_PATTERNS.find((p) => p.kind === kind)?.suggestion(),
       };
 
       if (lineMatch) {

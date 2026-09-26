@@ -1,3 +1,5 @@
+import { lt } from "../llm/output-locale";
+
 // ── Lean source sanitizer ─────────────────────────────────────────────
 //
 // Everything sent to the verifier is LLM output derived from user text, and
@@ -178,7 +180,10 @@ export function sanitizeLeanSource(source: string): SanitizeResult {
   if (source.length > MAX_SOURCE_LENGTH) {
     return {
       ok: false,
-      reason: `Lean 源码超过 ${MAX_SOURCE_LENGTH} 字符上限`,
+      reason: lt(
+        `Lean 源码超过 ${MAX_SOURCE_LENGTH} 字符上限`,
+        `Lean source exceeds the ${MAX_SOURCE_LENGTH}-character limit`,
+      ),
       matches: [],
     };
   }
@@ -200,7 +205,10 @@ export function sanitizeLeanBody(body: string): SanitizeResult {
   const unique = [...new Set(matches)];
   return {
     ok: false,
-    reason: `Lean 源码包含不允许的命令/关键字（可执行代码、绕过内核或引入公理）: ${unique.join(", ")}`,
+    reason: lt(
+      `Lean 源码包含不允许的命令/关键字（可执行代码、绕过内核或引入公理）: ${unique.join(", ")}`,
+      `Lean source contains disallowed commands/keywords (executable code, kernel bypass, or new axioms): ${unique.join(", ")}`,
+    ),
     matches: unique,
   };
 }
@@ -221,27 +229,45 @@ export function validateTheoremStatement(
   theoremType: string,
 ): { ok: true } | { ok: false; reason: string } {
   if (!LEAN_IDENT_RE.test(name)) {
-    return { ok: false, reason: `定理名不是合法的 Lean 标识符: ${JSON.stringify(name)}` };
+    return {
+      ok: false,
+      reason: lt(
+        `定理名不是合法的 Lean 标识符: ${JSON.stringify(name)}`,
+        `Theorem name is not a valid Lean identifier: ${JSON.stringify(name)}`,
+      ),
+    };
   }
   const t = theoremType.trim();
-  if (t.length === 0) return { ok: false, reason: "定理陈述为空" };
+  if (t.length === 0) return { ok: false, reason: lt("定理陈述为空", "Theorem statement is empty") };
   if (t.length > MAX_STATEMENT_LENGTH) {
-    return { ok: false, reason: `定理陈述超过 ${MAX_STATEMENT_LENGTH} 字符上限` };
+    return {
+      ok: false,
+      reason: lt(
+        `定理陈述超过 ${MAX_STATEMENT_LENGTH} 字符上限`,
+        `Theorem statement exceeds the ${MAX_STATEMENT_LENGTH}-character limit`,
+      ),
+    };
   }
-  if (/[\r\n]/.test(t)) return { ok: false, reason: "定理陈述必须是单行" };
-  if (t.includes(":=")) return { ok: false, reason: "定理陈述不能包含 `:=`" };
+  if (/[\r\n]/.test(t)) return { ok: false, reason: lt("定理陈述必须是单行", "Theorem statement must be a single line") };
+  if (t.includes(":=")) return { ok: false, reason: lt("定理陈述不能包含 `:=`", "Theorem statement must not contain `:=`") };
   if (t.includes("--") || t.includes("/-")) {
-    return { ok: false, reason: "定理陈述不能包含注释" };
+    return { ok: false, reason: lt("定理陈述不能包含注释", "Theorem statement must not contain comments") };
   }
-  if (!t.includes(":")) return { ok: false, reason: "定理陈述缺少 `:`" };
+  if (!t.includes(":")) return { ok: false, reason: lt("定理陈述缺少 `:`", "Theorem statement is missing `:`") };
   const first = t[0];
   if (!":({[⦃".includes(first)) {
-    return { ok: false, reason: "定理陈述必须以 `:` 或绑定符 `(`、`{`、`[`、`⦃` 开头" };
+    return {
+      ok: false,
+      reason: lt(
+        "定理陈述必须以 `:` 或绑定符 `(`、`{`、`[`、`⦃` 开头",
+        "Theorem statement must start with `:` or a binder `(`, `{`, `[`, `⦃`",
+      ),
+    };
   }
   const body = sanitizeLeanBody(t);
   if (!body.ok) return { ok: false, reason: body.reason };
   if (/\b(sorry|admit|sorryAx)\b/.test(stripCommentsAndStrings(t))) {
-    return { ok: false, reason: "定理陈述不能包含 sorry" };
+    return { ok: false, reason: lt("定理陈述不能包含 sorry", "Theorem statement must not contain sorry") };
   }
   return { ok: true };
 }

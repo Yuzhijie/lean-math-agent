@@ -7,6 +7,7 @@ import {
   DIFFICULTY_LEVELS,
   COMPETITION_DOMAINS,
 } from "@/lib/types";
+import { withRequestLocale } from "@/lib/llm/output-locale";
 
 // Problem generation can take a long time with slow LLM endpoints.
 // Deadline = GENERATE_TIMEOUT_MS (180s) × 2.5 = 450s; give a 30s buffer.
@@ -19,7 +20,7 @@ interface GenerateRequest {
   count?: number;
 }
 
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   let body: GenerateRequest;
   try {
     body = (await req.json()) as GenerateRequest;
@@ -75,3 +76,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: msg }, { status: 502 });
   }
 }
+
+// Server messages and model output follow the UI language (lib/llm/output-locale.ts).
+export const POST = withRequestLocale(handlePOST);

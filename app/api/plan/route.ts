@@ -10,8 +10,9 @@ import {
 } from "@/lib/session-store";
 import type { ProofStep } from "@/lib/types";
 import { generateNLSolution } from "@/lib/llm/nl-solution";
+import { withRequestLocale } from "@/lib/llm/output-locale";
 
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   const body = (await req.json()) as {
     session_id?: string;
     method_id?: string;
@@ -94,3 +95,6 @@ export async function POST(req: Request) {
     );
   }
 }
+
+// Server messages and model output follow the UI language (lib/llm/output-locale.ts).
+export const POST = withRequestLocale(handlePOST);

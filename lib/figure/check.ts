@@ -5,6 +5,7 @@
  * fit together is caught here). A figure with a failing claim is still
  * shown, but labelled as a sketch ("示意图") rather than an accurate figure.
  */
+import { lt } from "../llm/output-locale";
 import { LogicError, solveLogic } from "./logic";
 import { dist, FigureError, solveFigure, type SolveResult } from "./solve";
 import type { Claim, ClaimResult, FigureSpec, Point2, SolvedFigure } from "./spec";
@@ -35,7 +36,7 @@ const relClose = (a: number, b: number) => Math.abs(a - b) <= LEN_TOL * Math.max
 export function checkClaim(claim: Claim, s: SolveResult): ClaimResult {
   const P = (n: string) => {
     const p = s.points[n];
-    if (!p) throw new Error(`点 ${n} 未定义`);
+    if (!p) throw new Error(lt(`点 ${n} 未定义`, `Point ${n} is not defined`));
     return p;
   };
   try {
@@ -43,41 +44,41 @@ export function checkClaim(claim: Claim, s: SolveResult): ClaimResult {
       case "perpendicular": {
         const [[a, b], [c, d]] = claim.lines;
         const ang = lineAngle(P(a), P(b), P(c), P(d));
-        return { claim, ok: Math.abs(ang - 90) <= ANG_TOL, detail: `${a}${b} 与 ${c}${d} 夹角 ${fmt(ang)}°（应为 90°）` };
+        return { claim, ok: Math.abs(ang - 90) <= ANG_TOL, detail: lt(`${a}${b} 与 ${c}${d} 夹角 ${fmt(ang)}°（应为 90°）`, `Angle between ${a}${b} and ${c}${d}: ${fmt(ang)}° (should be 90°)`) };
       }
       case "parallel": {
         const [[a, b], [c, d]] = claim.lines;
         const ang = lineAngle(P(a), P(b), P(c), P(d));
-        return { claim, ok: ang <= ANG_TOL, detail: `${a}${b} 与 ${c}${d} 夹角 ${fmt(ang)}°（应平行）` };
+        return { claim, ok: ang <= ANG_TOL, detail: lt(`${a}${b} 与 ${c}${d} 夹角 ${fmt(ang)}°（应平行）`, `Angle between ${a}${b} and ${c}${d}: ${fmt(ang)}° (should be parallel)`) };
       }
       case "equal_length": {
         const [[a, b], [c, d]] = claim.segments;
         const l1 = dist(P(a), P(b));
         const l2 = dist(P(c), P(d));
-        return { claim, ok: relClose(l1, l2), detail: `${a}${b} = ${fmt(l1)}，${c}${d} = ${fmt(l2)}` };
+        return { claim, ok: relClose(l1, l2), detail: lt(`${a}${b} = ${fmt(l1)}，${c}${d} = ${fmt(l2)}`, `${a}${b} = ${fmt(l1)}, ${c}${d} = ${fmt(l2)}`) };
       }
       case "length": {
         const [a, b] = claim.segment;
         const l = dist(P(a), P(b));
-        return { claim, ok: relClose(l, claim.value), detail: `${a}${b} = ${fmt(l)}（应为 ${fmt(claim.value)}）` };
+        return { claim, ok: relClose(l, claim.value), detail: lt(`${a}${b} = ${fmt(l)}（应为 ${fmt(claim.value)}）`, `${a}${b} = ${fmt(l)} (should be ${fmt(claim.value)})`) };
       }
       case "angle": {
         const [a, v, b] = claim.points;
         const ang = angleAt(P(a), P(v), P(b));
-        return { claim, ok: Math.abs(ang - claim.value) <= ANG_TOL, detail: `∠${a}${v}${b} = ${fmt(ang)}°（应为 ${fmt(claim.value)}°）` };
+        return { claim, ok: Math.abs(ang - claim.value) <= ANG_TOL, detail: lt(`∠${a}${v}${b} = ${fmt(ang)}°（应为 ${fmt(claim.value)}°）`, `∠${a}${v}${b} = ${fmt(ang)}° (should be ${fmt(claim.value)}°)`) };
       }
       case "collinear": {
         const pts = claim.points.map(P);
         const [p0, p1] = pts;
         const len = dist(p0, p1) || 1;
         const worst = Math.max(...pts.slice(2).map((q) => Math.abs((p1.x - p0.x) * (q.y - p0.y) - (p1.y - p0.y) * (q.x - p0.x)) / len));
-        return { claim, ok: worst <= LEN_TOL * Math.max(1, len), detail: `${claim.points.join("、")} ${worst <= LEN_TOL * Math.max(1, len) ? "共线" : `偏离 ${fmt(worst)}`}` };
+        return { claim, ok: worst <= LEN_TOL * Math.max(1, len), detail: lt(`${claim.points.join("、")} ${worst <= LEN_TOL * Math.max(1, len) ? "共线" : `偏离 ${fmt(worst)}`}`, `${claim.points.join(", ")} ${worst <= LEN_TOL * Math.max(1, len) ? "collinear" : `off by ${fmt(worst)}`}`) };
       }
       case "on_circle": {
         const c = s.circles[claim.circle];
-        if (!c) throw new Error(`圆 ${claim.circle} 未定义`);
+        if (!c) throw new Error(lt(`圆 ${claim.circle} 未定义`, `Circle ${claim.circle} is not defined`));
         const d = dist(P(claim.point), c.center);
-        return { claim, ok: relClose(d, c.r), detail: `${claim.point} 到圆心距离 ${fmt(d)}，半径 ${fmt(c.r)}` };
+        return { claim, ok: relClose(d, c.r), detail: lt(`${claim.point} 到圆心距离 ${fmt(d)}，半径 ${fmt(c.r)}`, `Distance from ${claim.point} to center: ${fmt(d)}, radius ${fmt(c.r)}`) };
       }
       case "concyclic": {
         const [a, b, c, d] = claim.points.map(P);
@@ -85,13 +86,13 @@ export function checkClaim(claim: Claim, s: SolveResult): ClaimResult {
         const x = angleAt(a, c, b);
         const y = angleAt(a, d, b);
         const ok = Math.abs(x - y) <= ANG_TOL || Math.abs(x + y - 180) <= ANG_TOL;
-        return { claim, ok, detail: `${claim.points.join("")} ${ok ? "四点共圆" : "不共圆"}` };
+        return { claim, ok, detail: lt(`${claim.points.join("")} ${ok ? "四点共圆" : "不共圆"}`, `${claim.points.join("")} ${ok ? "concyclic" : "not concyclic"}`) };
       }
       case "function_passes": {
         const f = s.functions[claim.fn];
-        if (!f) throw new Error(`函数 ${claim.fn} 未定义`);
+        if (!f) throw new Error(lt(`函数 ${claim.fn} 未定义`, `Function ${claim.fn} is not defined`));
         const y = f(claim.x);
-        return { claim, ok: Number.isFinite(y) && relClose(y, claim.y), detail: `${claim.fn}(${fmt(claim.x)}) = ${Number.isFinite(y) ? fmt(y) : "无定义"}（应为 ${fmt(claim.y)}）` };
+        return { claim, ok: Number.isFinite(y) && relClose(y, claim.y), detail: lt(`${claim.fn}(${fmt(claim.x)}) = ${Number.isFinite(y) ? fmt(y) : "无定义"}（应为 ${fmt(claim.y)}）`, `${claim.fn}(${fmt(claim.x)}) = ${Number.isFinite(y) ? fmt(y) : "undefined"} (should be ${fmt(claim.y)})`) };
       }
     }
   } catch (e) {
@@ -124,7 +125,7 @@ export function buildFigure(spec: FigureSpec): SolvedFigure {
   let logic: SolvedFigure["logic"];
   if (spec.logic) {
     try {
-      const r = solveLogic(spec.logic);
+      const r = solveLogic(spec.logic, lt);
       logic = r.solved;
       claims.push(...r.checks);
     } catch (e) {
