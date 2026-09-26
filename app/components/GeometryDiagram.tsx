@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Ruler, RotateCcw, ZoomIn, ZoomOut } from 'lucide-react';
+import { useI18n } from '@/lib/i18n';
 
 interface GeometryPoint {
   name: string;
@@ -38,6 +39,7 @@ export function GeometryDiagram({
   width = 500,
   height = 400,
 }: GeometryDiagramProps) {
+  const { tr } = useI18n();
   const [zoom, setZoom] = useState(1);
   const [hoveredPoint, setHoveredPoint] = useState<string | null>(null);
 
@@ -49,7 +51,7 @@ export function GeometryDiagram({
         <div className="flex items-center justify-between">
           <CardTitle className="text-white flex items-center gap-2 text-base">
             <Ruler className="h-4 w-4 text-blue-500" />
-            几何图形
+            {tr('几何图形', 'Geometry diagram')}
           </CardTitle>
           <div className="flex items-center gap-1">
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setZoom(z => Math.min(z * 1.2, 3))}>

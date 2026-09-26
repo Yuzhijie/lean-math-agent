@@ -5,8 +5,10 @@ import { useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Github, Mail } from 'lucide-react';
+import { useI18n } from '@/lib/i18n';
 
 export default function SignInPage() {
+  const { tr } = useI18n();
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get('callbackUrl') || '/';
   const error = searchParams.get('error');
@@ -15,17 +17,23 @@ export default function SignInPage() {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
       <Card className="w-full max-w-md mx-4 bg-slate-800/50 border-slate-700 backdrop-blur-sm">
         <CardHeader className="space-y-1">
-          <CardTitle className="text-2xl font-bold text-white">登录</CardTitle>
+          <CardTitle className="text-2xl font-bold text-white">{tr('登录', 'Sign in')}</CardTitle>
           <CardDescription className="text-slate-400">
-            使用 GitHub 或 Google 账号登录以保存证明历史
+            {tr(
+              '使用 GitHub 或 Google 账号登录以保存证明历史',
+              'Sign in with GitHub or Google to save your proof history',
+            )}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {error && (
             <div className="bg-red-500/10 border border-red-500/50 text-red-400 px-4 py-2 rounded-md text-sm">
               {error === 'OAuthSignin' || error === 'OAuthCallback'
-                ? '第三方登录失败，请检查 OAuth 配置后重试'
-                : '登录失败，请重试'}
+                ? tr(
+                    '第三方登录失败，请检查 OAuth 配置后重试',
+                    'Third-party sign-in failed. Check the OAuth configuration and try again.',
+                  )
+                : tr('登录失败，请重试', 'Sign-in failed. Please try again.')}
             </div>
           )}
 

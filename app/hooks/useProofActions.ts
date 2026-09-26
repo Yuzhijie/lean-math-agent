@@ -13,6 +13,7 @@ import type {
 } from "@/lib/types";
 import type { RunMetrics } from "@/lib/llm/usage-tracker";
 import type { Action, ProofSessionState } from "./useProofSession";
+import { useI18n } from "@/lib/i18n";
 
 type ApiErrorBody = { error?: string };
 
@@ -36,6 +37,7 @@ export function useProofActions(
   state: ProofSessionState,
   dispatch: Dispatch<Action>,
 ) {
+  const { tr } = useI18n();
   // Track last action for retry
   const lastActionRef = useRef<(() => Promise<void>) | null>(null);
 
@@ -68,10 +70,10 @@ export function useProofActions(
     } catch (e) {
       dispatch({
         type: "REQUEST_ERROR",
-        message: e instanceof Error ? e.message : "枚举失败",
+        message: e instanceof Error ? e.message : tr("枚举失败", "Failed to enumerate methods"),
       });
     }
-  }, [dispatch, state.problemText]);
+  }, [dispatch, state.problemText, tr]);
 
   // ── Plan method ──────────────────────────────────────────────────
 
@@ -105,11 +107,11 @@ export function useProofActions(
       } catch (e) {
         dispatch({
           type: "REQUEST_ERROR",
-          message: e instanceof Error ? e.message : "规划失败",
+          message: e instanceof Error ? e.message : tr("规划失败", "Failed to plan proof"),
         });
       }
     },
-    [dispatch, state.sessionId],
+    [dispatch, state.sessionId, tr],
   );
 
   // ── Prove step ───────────────────────────────────────────────────
@@ -151,11 +153,11 @@ export function useProofActions(
       } catch (e) {
         dispatch({
           type: "REQUEST_ERROR",
-          message: e instanceof Error ? e.message : "证明本步失败",
+          message: e instanceof Error ? e.message : tr("证明本步失败", "Failed to prove step"),
         });
       }
     },
-    [dispatch, state.sessionId],
+    [dispatch, state.sessionId, tr],
   );
 
   // ── Prove all ────────────────────────────────────────────────────
@@ -202,10 +204,10 @@ export function useProofActions(
     } catch (e) {
       dispatch({
         type: "REQUEST_ERROR",
-        message: e instanceof Error ? e.message : "逐步生成失败",
+        message: e instanceof Error ? e.message : tr("逐步生成失败", "Failed to prove steps"),
       });
     }
-  }, [dispatch, state.sessionId, state.steps]);
+  }, [dispatch, state.sessionId, state.steps, tr]);
 
   // ── Verify ───────────────────────────────────────────────────────
 
@@ -236,10 +238,10 @@ export function useProofActions(
     } catch (e) {
       dispatch({
         type: "REQUEST_ERROR",
-        message: e instanceof Error ? e.message : "验证失败",
+        message: e instanceof Error ? e.message : tr("验证失败", "Verification failed"),
       });
     }
-  }, [dispatch, state.sessionId]);
+  }, [dispatch, state.sessionId, tr]);
 
   // ── Solve all (one-click, streaming) ─────────────────────────────
 
@@ -357,10 +359,10 @@ export function useProofActions(
     } catch (e) {
       dispatch({
         type: "REQUEST_ERROR",
-        message: e instanceof Error ? e.message : "求解失败",
+        message: e instanceof Error ? e.message : tr("求解失败", "Failed to solve"),
       });
     }
-  }, [dispatch, state.problemText]);
+  }, [dispatch, state.problemText, tr]);
 
   // ── Switch method ────────────────────────────────────────────────
 
@@ -428,11 +430,11 @@ export function useProofActions(
       } catch (e) {
         dispatch({
           type: "REQUEST_ERROR",
-          message: e instanceof Error ? e.message : "加载会话失败",
+          message: e instanceof Error ? e.message : tr("加载会话失败", "Failed to load session"),
         });
       }
     },
-    [dispatch],
+    [dispatch, tr],
   );
 
   // ── Retry last action ──────────────────────────────────────────

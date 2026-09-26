@@ -1,10 +1,18 @@
 /**
- * i18n context and hook for internationalization
+ * i18n context and hooks.
+ *
+ * - `t(key)` looks up a key in the message catalogues (zh-CN.ts / en-US.ts).
+ * - `tr(zh, en)` picks between an inline Chinese and English string; most
+ *   UI text uses this so each string stays next to its translation.
+ *
+ * The locale follows the system language unless the user picked one in the
+ * language switcher (see config.ts). The server passes the locale it
+ * resolved (cookie or Accept-Language) so the first render already matches.
  */
 'use client';
 
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Locale, defaultLocale, getLocaleFromCookie, setLocaleCookie } from './config';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { type Locale, type LocalePref, defaultLocale, matchLocale, setLocaleCookie } from './config';
 import zhCN from './zh-CN';
 import enUS from './en-US';
 
@@ -16,54 +24,65 @@ const translations: Record<Locale, Messages> = {
 };
 
 interface I18nContextType {
+  /** Locale in effect. */
   locale: Locale;
+  /** What the user chose: a locale, or "system". */
+  pref: LocalePref;
+  /** Locale the operating system / browser asks for. */
+  systemLocale: Locale;
+  setPref: (pref: LocalePref) => void;
+  /** @deprecated use setPref */
   setLocale: (locale: Locale) => void;
   t: (key: string, params?: Record<string, string>) => string;
+  tr: (zh: string, en: string) => string;
 }
 
 const I18nContext = createContext<I18nContextType | undefined>(undefined);
 
-export function I18nProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>(defaultLocale);
+function subscribeLanguages(onChange: () => void) {
+  window.addEventListener('languagechange', onChange);
+  return () => window.removeEventListener('languagechange', onChange);
+}
+
+export function I18nProvider({
+  children,
+  initialPref = 'system',
+  initialSystemLocale = defaultLocale,
+}: {
+  children: ReactNode;
+  initialPref?: LocalePref;
+  /** System locale as the server saw it (Accept-Language), used until the browser reports its own. */
+  initialSystemLocale?: Locale;
+}) {
+  const [pref, setPrefState] = useState<LocalePref>(initialPref);
+  const systemLocale = useSyncExternalStore(
+    subscribeLanguages,
+    () => matchLocale(navigator.languages?.length ? navigator.languages : [navigator.language]),
+    () => initialSystemLocale,
+  );
+  const locale: Locale = pref === 'system' ? systemLocale : pref;
 
   useEffect(() => {
-    const savedLocale = getLocaleFromCookie();
-    setLocaleState(savedLocale);
+    document.documentElement.lang = locale;
+  }, [locale]);
+
+  const setPref = useCallback((p: LocalePref) => {
+    setPrefState(p);
+    setLocaleCookie(p);
   }, []);
 
-  const setLocale = (newLocale: Locale) => {
-    setLocaleState(newLocale);
-    setLocaleCookie(newLocale);
-  };
+  const value = useMemo<I18nContextType>(() => {
+    const t = (key: string, params?: Record<string, string>): string => {
+      let v: unknown = translations[locale];
+      for (const k of key.split('.')) v = (v as Record<string, unknown> | undefined)?.[k];
+      if (typeof v !== 'string') return key;
+      return params ? Object.entries(params).reduce((s, [k, p]) => s.replace(`{${k}}`, p), v) : v;
+    };
+    const tr = (zh: string, en: string) => (locale === 'en-US' ? en : zh);
+    return { locale, pref, systemLocale, setPref, setLocale: setPref, t, tr };
+  }, [locale, pref, systemLocale, setPref]);
 
-  const t = (key: string, params?: Record<string, string>): string => {
-    const keys = key.split('.');
-    let value: any = translations[locale];
-
-    for (const k of keys) {
-      value = value?.[k];
-    }
-
-    if (typeof value !== 'string') {
-      console.warn(`Translation key not found: ${key}`);
-      return key;
-    }
-
-    if (params) {
-      return Object.entries(params).reduce(
-        (str, [paramKey, paramValue]) => str.replace(`{${paramKey}}`, paramValue),
-        value
-      );
-    }
-
-    return value;
-  };
-
-  return (
-    <I18nContext.Provider value={{ locale, setLocale, t }}>
-      {children}
-    </I18nContext.Provider>
-  );
+  return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }
 
 export function useI18n() {

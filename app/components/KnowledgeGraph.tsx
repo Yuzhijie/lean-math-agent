@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Search, ZoomIn, ZoomOut, RotateCcw, Network } from 'lucide-react';
+import { useI18n } from '@/lib/i18n';
 
 interface GraphNode {
   id: string;
@@ -27,6 +28,7 @@ interface KnowledgeGraphProps {
 }
 
 export function KnowledgeGraph({ initialNodeId }: KnowledgeGraphProps) {
+  const { tr } = useI18n();
   const [nodes, setNodes] = useState<GraphNode[]>([]);
   const [edges, setEdges] = useState<GraphEdge[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -96,7 +98,7 @@ export function KnowledgeGraph({ initialNodeId }: KnowledgeGraphProps) {
         <div className="flex items-center justify-between">
           <CardTitle className="text-white flex items-center gap-2">
             <Network className="h-5 w-5 text-amber-500" />
-            知识图谱
+            {tr('知识图谱', 'Knowledge graph')}
           </CardTitle>
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="icon" onClick={() => setZoom(z => z * 1.2)}>
@@ -112,7 +114,7 @@ export function KnowledgeGraph({ initialNodeId }: KnowledgeGraphProps) {
         </div>
         <div className="flex gap-2 mt-2">
           <Input
-            placeholder="搜索概念、定理..."
+            placeholder={tr('搜索概念、定理...', 'Search concepts, theorems...')}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSearch()}

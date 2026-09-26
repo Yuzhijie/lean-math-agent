@@ -161,9 +161,15 @@ export type Action =
 
 // ── Initial State ──────────────────────────────────────────────────────
 
+/** Sample problem pre-filled in the input box, per UI language (swapped on language change while unedited). */
+export const SAMPLE_PROBLEM = {
+  "zh-CN": "证明对任意自然数 n，n + 0 = n",
+  "en-US": "Prove that n + 0 = n for every natural number n",
+} as const;
+
 export const INITIAL_STATE: ProofSessionState = {
   sessionId: null,
-  problemText: "证明对任意自然数 n，n + 0 = n",
+  problemText: SAMPLE_PROBLEM["zh-CN"],
   methods: [],
   methodScores: [],
   recommendedMethodId: null,
@@ -431,8 +437,8 @@ export function derivePhase(state: ProofSessionState): UiPhase {
 
 // ── Hook ───────────────────────────────────────────────────────────────
 
-export function useProofSession() {
-  const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
+export function useProofSession(initialProblemText: string = INITIAL_STATE.problemText) {
+  const [state, dispatch] = useReducer(reducer, initialProblemText, (text) => ({ ...INITIAL_STATE, problemText: text }));
 
   const phase = useMemo(() => derivePhase(state), [state]);
 

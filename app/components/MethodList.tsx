@@ -6,6 +6,7 @@ import { MathText } from "./MathText";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { Star, ArrowUpDown } from "lucide-react";
+import { useI18n } from "@/lib/i18n";
 
 type SortKey = "confidence" | "composite" | "feasibility" | "elegance";
 
@@ -18,12 +19,16 @@ type Props = {
   onSelect: (methodId: string) => void;
 };
 
-const sortLabels: Record<SortKey, string> = {
-  confidence: "置信度",
-  composite: "综合",
-  feasibility: "可行性",
-  elegance: "优雅度",
-};
+function getSortLabels(
+  tr: (zh: string, en: string) => string,
+): Record<SortKey, string> {
+  return {
+    confidence: tr("置信度", "Confidence"),
+    composite: tr("综合", "Overall"),
+    feasibility: tr("可行性", "Feasibility"),
+    elegance: tr("优雅度", "Elegance"),
+  };
+}
 
 export function MethodList({
   methods,
@@ -33,6 +38,8 @@ export function MethodList({
   disabled,
   onSelect,
 }: Props) {
+  const { tr } = useI18n();
+  const sortLabels = getSortLabels(tr);
   const [sortKey, setSortKey] = useState<SortKey>("confidence");
 
   const scoreMap = useMemo(() => {
@@ -62,7 +69,12 @@ export function MethodList({
   if (methods.length === 0) {
     return (
       <div className="flex items-center justify-center rounded-lg border border-dashed border-border p-8">
-        <p className="text-sm text-muted-foreground">枚举解法后将显示方法列表。</p>
+        <p className="text-sm text-muted-foreground">
+          {tr(
+            "枚举解法后将显示方法列表。",
+            "Methods will appear here once they have been enumerated.",
+          )}
+        </p>
       </div>
     );
   }
@@ -73,7 +85,7 @@ export function MethodList({
     <div className="rounded-lg border border-border bg-card overflow-hidden">
       <div className="px-4 py-3 border-b border-border bg-muted/20 flex items-center justify-between">
         <h2 className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-          解法
+          {tr("解法", "Methods")}
         </h2>
         {scores && scores.length > 0 && (
           <div className="flex items-center gap-1">
@@ -141,7 +153,7 @@ export function MethodList({
                     <>
                       <span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
                       <span className="font-medium text-primary">
-                        综合 {(score.composite * 100).toFixed(0)}
+                        {tr("综合", "Overall")} {(score.composite * 100).toFixed(0)}
                       </span>
                     </>
                   )}

@@ -305,17 +305,17 @@ function regionHas(region: string, set: string): boolean {
 }
 
 /** Value of an asked expression from region counts, or null when not determined. */
-/** The asked quantity in words, e.g. "neither" → "都不", "A∩B" → "语文和数学都…". */
-export function vennAskLabel(ask: string, sets: { id: string; label: string }[]): string {
+/** The asked quantity in words, e.g. "neither" → "都不…的" / "in none of the sets". */
+export function vennAskLabel(ask: string, sets: { id: string; label: string }[], en = false): string {
   const name = (id: string) => sets.find((s) => s.id === id)?.label ?? id;
   const q = ask.replace(/\s+/g, "").replace(/只|仅/g, "only").replace(/都不|none|neither/gi, "none").replace(/∩/g, "&").replace(/∪/g, "|");
-  if (q === "none") return "都不…的";
-  if (/^exactly(one|1)$|^恰好一/.test(q)) return "恰好一项的";
-  if (/^exactly(two|2)$|^恰好两/.test(q)) return "恰好两项的";
-  if (/^only[A-C]$/.test(q)) return `只${name(q.slice(4))}的`;
-  if (/^[A-C](&[A-C])+$/.test(q)) return `${q.split("&").map(name).join("、")}都…的`;
-  if (/^[A-C]\|[A-C](\|[A-C])*$/.test(q)) return `至少一项的`;
-  if (/^[A-C]$/.test(q)) return `${name(q)}的`;
+  if (q === "none") return en ? "in none" : "都不…的";
+  if (/^exactly(one|1)$|^恰好一/.test(q)) return en ? "in exactly one" : "恰好一项的";
+  if (/^exactly(two|2)$|^恰好两/.test(q)) return en ? "in exactly two" : "恰好两项的";
+  if (/^only[A-C]$/.test(q)) return en ? `only ${name(q.slice(4))}` : `只${name(q.slice(4))}的`;
+  if (/^[A-C](&[A-C])+$/.test(q)) return en ? `${q.split("&").map(name).join(" and ")}` : `${q.split("&").map(name).join("、")}都…的`;
+  if (/^[A-C]\|[A-C](\|[A-C])*$/.test(q)) return en ? "in at least one" : "至少一项的";
+  if (/^[A-C]$/.test(q)) return en ? name(q) : `${name(q)}的`;
   return ask;
 }
 

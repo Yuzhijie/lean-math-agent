@@ -1,8 +1,11 @@
+"use client";
+
 import type { MethodOption, MethodScore } from "@/lib/types";
 import { MathText } from "./MathText";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Lightbulb, ThumbsUp, ThumbsDown, Code } from "lucide-react";
+import { useI18n } from "@/lib/i18n";
 
 type Props = {
   method?: MethodOption;
@@ -24,22 +27,23 @@ interface DimensionBar {
 }
 
 function ScoreBars({ score }: { score: MethodScore }) {
+  const { tr } = useI18n();
   const dimensions: DimensionBar[] = [
-    { label: "可行性", value: score.feasibility, color: "bg-blue-500" },
-    { label: "优雅度", value: score.elegance, color: "bg-purple-500" },
-    { label: "Lean 难度", value: score.lean_difficulty, color: "bg-orange-500", invert: true },
-    { label: "Mathlib 覆盖", value: score.mathlib_coverage, color: "bg-green-500" },
-    { label: "教学价值", value: score.pedagogical_value, color: "bg-teal-500" },
+    { label: tr("可行性", "Feasibility"), value: score.feasibility, color: "bg-blue-500" },
+    { label: tr("优雅度", "Elegance"), value: score.elegance, color: "bg-purple-500" },
+    { label: tr("Lean 难度", "Lean difficulty"), value: score.lean_difficulty, color: "bg-orange-500", invert: true },
+    { label: tr("Mathlib 覆盖", "Mathlib coverage"), value: score.mathlib_coverage, color: "bg-green-500" },
+    { label: tr("教学价值", "Teaching value"), value: score.pedagogical_value, color: "bg-teal-500" },
   ];
 
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2 mb-3">
         <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-          评分
+          {tr("评分", "Scores")}
         </span>
         <span className="text-xs font-semibold text-primary">
-          综合 {Math.round(score.composite * 100)}
+          {tr("综合", "Overall")} {Math.round(score.composite * 100)}
         </span>
       </div>
       {dimensions.map((d) => {
@@ -72,15 +76,21 @@ function ScoreBars({ score }: { score: MethodScore }) {
 }
 
 export function MethodDetail({ method, score, comparisonSummary }: Props) {
+  const { tr } = useI18n();
   if (!method) {
     return (
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">灵感与权衡</CardTitle>
+          <CardTitle className="text-base">
+            {tr("灵感与权衡", "Inspiration & trade-offs")}
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-sm text-muted-foreground">
-            选择一种解法以查看灵感、优缺点与草图。
+            {tr(
+              "选择一种解法以查看灵感、优缺点与草图。",
+              "Select a method to see its inspiration, pros and cons, and sketch.",
+            )}
           </p>
           {comparisonSummary && (
             <>

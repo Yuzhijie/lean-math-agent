@@ -8,6 +8,7 @@ import { Star, Table2, Minimize2 } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { MathText } from "./MathText";
+import { useI18n } from "@/lib/i18n";
 
 type Props = {
   methods: MethodOption[];
@@ -21,16 +22,22 @@ interface Dimension {
   higherBetter: boolean;
 }
 
-const DIMENSIONS: Dimension[] = [
-  { key: "feasibility", label: "可行性", higherBetter: true },
-  { key: "elegance", label: "优雅度", higherBetter: true },
-  { key: "lean_difficulty", label: "Lean 难度", higherBetter: false },
-  { key: "mathlib_coverage", label: "Mathlib 覆盖", higherBetter: true },
-  { key: "pedagogical_value", label: "教学价值", higherBetter: true },
-  { key: "composite", label: "综合评分", higherBetter: true },
-];
+function getDimensions(tr: (zh: string, en: string) => string): Dimension[] {
+  return [
+    { key: "feasibility", label: tr("可行性", "Feasibility"), higherBetter: true },
+    { key: "elegance", label: tr("优雅度", "Elegance"), higherBetter: true },
+    { key: "lean_difficulty", label: tr("Lean 难度", "Lean difficulty"), higherBetter: false },
+    { key: "mathlib_coverage", label: tr("Mathlib 覆盖", "Mathlib coverage"), higherBetter: true },
+    { key: "pedagogical_value", label: tr("教学价值", "Teaching value"), higherBetter: true },
+    { key: "composite", label: tr("综合评分", "Overall score"), higherBetter: true },
+  ];
+}
+
+// Dimension keys/directions (labels are locale-independent here).
+const DIMENSIONS = getDimensions((zh) => zh);
 
 export function MethodComparison({ methods, scores, recommendedId }: Props) {
+  const { tr } = useI18n();
   const [compact, setCompact] = useState(false);
 
   const scoreMap = useMemo(() => {
@@ -68,7 +75,10 @@ export function MethodComparison({ methods, scores, recommendedId }: Props) {
     return (
       <Card>
         <CardContent className="p-6 text-center text-sm text-muted-foreground">
-          暂无评分数据。运行评估后可查看方法对比。
+          {tr(
+            "暂无评分数据。运行评估后可查看方法对比。",
+            "No score data yet. Run an evaluation to compare methods.",
+          )}
         </CardContent>
       </Card>
     );
@@ -79,7 +89,7 @@ export function MethodComparison({ methods, scores, recommendedId }: Props) {
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
           <CardTitle className="text-base flex items-center gap-2">
-            方法对比
+            {tr("方法对比", "Method comparison")}
           </CardTitle>
           <Button
             variant="ghost"
@@ -92,7 +102,7 @@ export function MethodComparison({ methods, scores, recommendedId }: Props) {
             ) : (
               <Minimize2 className="h-3.5 w-3.5 mr-1" />
             )}
-            {compact ? "详细" : "简洁"}
+            {compact ? tr("详细", "Detailed") : tr("简洁", "Compact")}
           </Button>
         </div>
       </CardHeader>
@@ -131,7 +141,7 @@ export function MethodComparison({ methods, scores, recommendedId }: Props) {
               <thead>
                 <tr>
                   <th className="text-left py-2 pr-3 text-muted-foreground font-medium">
-                    维度
+                    {tr("维度", "Dimension")}
                   </th>
                   {ranked.map((s) => {
                     const method = methods.find((m) => m.id === s.method_id);
@@ -155,7 +165,7 @@ export function MethodComparison({ methods, scores, recommendedId }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {DIMENSIONS.map((dim) => (
+                {getDimensions(tr).map((dim) => (
                   <tr key={dim.key} className="border-t border-border/50">
                     <td className="py-2 pr-3 text-muted-foreground">
                       {dim.label}

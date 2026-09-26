@@ -2,37 +2,42 @@
 
 import { cn } from "@/lib/utils";
 import { CheckCircle2, Loader2 } from "lucide-react";
+import { useI18n } from "@/lib/i18n";
 
 type Props = {
   events: Array<{ stage: string; detail: string }>;
   busy: string | null;
 };
 
-// ── Stage labels (Chinese) ──────────────────────────────────────────────
+// ── Stage labels ──────────────────────────────────────────────────────
 
-const stageLabels: Record<string, string> = {
-  classifying: "分析问题",
-  extracting: "提取结构",
-  optimizing: "搜索最优解",
-  nl_solving: "生成解答",
-  autoformalizing: "自动形式化",
-  enumerating: "枚举解法",
-  evaluating: "评估解法",
-  selecting: "选择解法",
-  planning: "规划步骤",
-  solving: "证明搜索",
-  computing: "计算求解",
-  lean_attempting: "Lean 形式化",
-  trivial_proof: "简单证明",
-  preflight: "预检",
-  reviewing: "回顾",
-  complete: "完成",
-  failed: "失败",
-};
+function getStageLabels(tr: (zh: string, en: string) => string): Record<string, string> {
+  return {
+    classifying: tr("分析问题", "Analyze problem"),
+    extracting: tr("提取结构", "Extract structure"),
+    optimizing: tr("搜索最优解", "Search for optimum"),
+    nl_solving: tr("生成解答", "Generate solution"),
+    autoformalizing: tr("自动形式化", "Autoformalize"),
+    enumerating: tr("枚举解法", "Enumerate methods"),
+    evaluating: tr("评估解法", "Evaluate methods"),
+    selecting: tr("选择解法", "Select method"),
+    planning: tr("规划步骤", "Plan steps"),
+    solving: tr("证明搜索", "Proof search"),
+    computing: tr("计算求解", "Compute"),
+    lean_attempting: tr("Lean 形式化", "Lean formalization"),
+    trivial_proof: tr("简单证明", "Trivial proof"),
+    preflight: tr("预检", "Preflight"),
+    reviewing: tr("回顾", "Review"),
+    complete: tr("完成", "Done"),
+    failed: tr("失败", "Failed"),
+  };
+}
 
 // ── Component ─────────────────────────────────────────────────────────────
 
 export function PipelineProgress({ events, busy }: Props) {
+  const { tr } = useI18n();
+  const stageLabels = getStageLabels(tr);
   if (events.length === 0 && !busy) return null;
 
   // Group events by stage, keep last detail per stage
@@ -58,7 +63,7 @@ export function PipelineProgress({ events, busy }: Props) {
           ) : (
             <Loader2 className="h-3.5 w-3.5 text-primary animate-spin" />
           )}
-          {isComplete ? "求解完成" : isFailed ? "求解失败" : "求解中..."}
+          {isComplete ? tr("求解完成", "Solved") : isFailed ? tr("求解失败", "Solving failed") : tr("求解中...", "Solving...")}
         </h3>
       </div>
       <div className="p-4">

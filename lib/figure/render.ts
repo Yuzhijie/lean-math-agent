@@ -17,6 +17,8 @@ export interface RenderOptions {
   maxHeight?: number;
   /** Element ids to emphasise (points, segment ids or names like "AD", circle ids, function ids, angle ids). */
   highlight?: string[];
+  /** Language of the diagram's own labels (logic diagrams). */
+  locale?: "zh-CN" | "en-US";
 }
 
 const COLORS = {
@@ -43,7 +45,7 @@ function niceStep(range: number): number {
 
 export function renderFigureSvg(fig: SolvedFigure, opts: RenderOptions = {}): string {
   // Logic-puzzle diagrams (grid / Venn / line-up / tree) have their own renderer.
-  if (fig.spec.logic && fig.logic) return renderLogicSvg(fig.spec.logic, fig.logic, opts.highlight ?? []);
+  if (fig.spec.logic && fig.logic) return renderLogicSvg(fig.spec.logic, fig.logic, opts.highlight ?? [], opts.locale);
   const W = opts.width ?? 480;
   const maxH = opts.maxHeight ?? 380;
   const hi = new Set(opts.highlight ?? []);

@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { CheckCircle2, XCircle, Clock, AlertTriangle } from "lucide-react";
+import { useI18n } from "@/lib/i18n";
 
 type Props = {
   steps: ProofStep[];
@@ -11,26 +12,33 @@ type Props = {
   onSelect: (index: number) => void;
 };
 
-const statusConfig: Record<
+type Tr = ReturnType<typeof useI18n>["tr"];
+
+function getStatusConfig(tr: Tr): Record<
   ProofStep["status"],
   { label: string; variant: "success" | "destructive" | "secondary" | "warning"; icon: typeof CheckCircle2 }
-> = {
-  ok: { label: "完成", variant: "success", icon: CheckCircle2 },
-  fail: { label: "失败", variant: "destructive", icon: XCircle },
-  pending: { label: "待处理", variant: "secondary", icon: Clock },
-  sorry: { label: "sorry", variant: "warning", icon: AlertTriangle },
-};
+> {
+  return {
+    ok: { label: tr("完成", "Done"), variant: "success", icon: CheckCircle2 },
+    fail: { label: tr("失败", "Failed"), variant: "destructive", icon: XCircle },
+    pending: { label: tr("待处理", "Pending"), variant: "secondary", icon: Clock },
+    sorry: { label: "sorry", variant: "warning", icon: AlertTriangle },
+  };
+}
 
 export function StepPane({ steps, selectedIndex, onSelect }: Props) {
+  const { tr } = useI18n();
+  const statusConfig = getStatusConfig(tr);
+
   if (steps.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center p-8 text-center">
         <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted/40 mb-3">
           <Clock className="h-5 w-5 text-muted-foreground" />
         </div>
-        <p className="text-sm font-medium text-muted-foreground">证明步骤</p>
+        <p className="text-sm font-medium text-muted-foreground">{tr("证明步骤", "Proof steps")}</p>
         <p className="mt-1 text-xs text-muted-foreground/70">
-          选择解法并规划后，步骤将显示在此。
+          {tr("选择解法并规划后，步骤将显示在此。", "Steps will appear here after you choose and plan a method.")}
         </p>
       </div>
     );
@@ -40,7 +48,7 @@ export function StepPane({ steps, selectedIndex, onSelect }: Props) {
     <div className="min-w-0">
       <div className="px-4 py-3 border-b border-border bg-muted/10">
         <h2 className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-          证明步骤
+          {tr("证明步骤", "Proof steps")}
           <span className="ml-2 text-primary">{steps.length}</span>
         </h2>
       </div>

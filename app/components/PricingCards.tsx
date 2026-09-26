@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Check, Zap, Building2, Crown } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import { useI18n } from '@/lib/i18n';
 
 interface Plan {
   id: string;
@@ -17,51 +18,55 @@ interface Plan {
   popular?: boolean;
 }
 
-const plans: Plan[] = [
-  {
-    id: 'free',
-    name: '免费版',
-    price: 0,
-    features: [
-      '每月 10 次证明',
-      '7 天会话历史',
-      '单线程求解',
-      '基础方法推荐',
-    ],
-    icon: <Zap className="h-6 w-6" />,
-  },
-  {
-    id: 'pro',
-    name: '专业版',
-    price: 49,
-    features: [
-      '每月 500 次证明',
-      '无限会话历史',
-      '并行求解',
-      '高级方法推荐',
-      '优先支持',
-      '导出为 PDF',
-    ],
-    icon: <Crown className="h-6 w-6" />,
-    popular: true,
-  },
-  {
-    id: 'enterprise',
-    name: '企业版',
-    price: 199,
-    features: [
-      '无限证明',
-      '团队协作',
-      'API 访问',
-      '自定义模型',
-      '专属支持',
-      'SLA 保障',
-    ],
-    icon: <Building2 className="h-6 w-6" />,
-  },
-];
+function getPlans(tr: (zh: string, en: string) => string): Plan[] {
+  return [
+    {
+      id: 'free',
+      name: tr('免费版', 'Free'),
+      price: 0,
+      features: [
+        tr('每月 10 次证明', '10 proofs per month'),
+        tr('7 天会话历史', '7-day session history'),
+        tr('单线程求解', 'Single-threaded solving'),
+        tr('基础方法推荐', 'Basic method recommendations'),
+      ],
+      icon: <Zap className="h-6 w-6" />,
+    },
+    {
+      id: 'pro',
+      name: tr('专业版', 'Pro'),
+      price: 49,
+      features: [
+        tr('每月 500 次证明', '500 proofs per month'),
+        tr('无限会话历史', 'Unlimited session history'),
+        tr('并行求解', 'Parallel solving'),
+        tr('高级方法推荐', 'Advanced method recommendations'),
+        tr('优先支持', 'Priority support'),
+        tr('导出为 PDF', 'Export to PDF'),
+      ],
+      icon: <Crown className="h-6 w-6" />,
+      popular: true,
+    },
+    {
+      id: 'enterprise',
+      name: tr('企业版', 'Enterprise'),
+      price: 199,
+      features: [
+        tr('无限证明', 'Unlimited proofs'),
+        tr('团队协作', 'Team collaboration'),
+        tr('API 访问', 'API access'),
+        tr('自定义模型', 'Custom models'),
+        tr('专属支持', 'Dedicated support'),
+        tr('SLA 保障', 'SLA guarantee'),
+      ],
+      icon: <Building2 className="h-6 w-6" />,
+    },
+  ];
+}
 
 export function PricingCards() {
+  const { tr } = useI18n();
+  const plans = getPlans(tr);
   const { data: session } = useSession();
   const router = useRouter();
   const [loading, setLoading] = useState<string | null>(null);
@@ -105,7 +110,7 @@ export function PricingCards() {
         >
           {plan.popular && (
             <Badge className="absolute -top-3 left-1/2 -translate-x-1/2 bg-amber-600">
-              最受欢迎
+              {tr('最受欢迎', 'Most popular')}
             </Badge>
           )}
           <CardHeader>
@@ -119,7 +124,7 @@ export function PricingCards() {
             </div>
             <CardDescription className="text-3xl font-bold text-white mt-4">
               ¥{plan.price}
-              <span className="text-sm font-normal text-slate-400">/月</span>
+              <span className="text-sm font-normal text-slate-400">{tr('/月', '/mo')}</span>
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -142,7 +147,11 @@ export function PricingCards() {
               onClick={() => handleSubscribe(plan.id)}
               disabled={loading === plan.id || plan.id === 'free'}
             >
-              {loading === plan.id ? '处理中...' : plan.id === 'free' ? '当前计划' : '订阅'}
+              {loading === plan.id
+                ? tr('处理中...', 'Processing...')
+                : plan.id === 'free'
+                  ? tr('当前计划', 'Current plan')
+                  : tr('订阅', 'Subscribe')}
             </Button>
           </CardFooter>
         </Card>

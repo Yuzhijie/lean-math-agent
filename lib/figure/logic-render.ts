@@ -25,13 +25,18 @@ const text = (x: number, y: number, s: string, opts: { size?: number; fill?: str
 /** Rough rendered width of a label (CJK ≈ 1em, Latin ≈ 0.6em). */
 const textWidth = (s: string, size: number) => [...s].reduce((w, ch) => w + (ch.codePointAt(0)! >= 0x2000 ? size : size * 0.6), 0);
 
-export function renderLogicSvg(spec: LogicSpec, solved: LogicSolved, highlight: string[] = []): string {
+// Language of the diagram's own labels; set per call (rendering is synchronous).
+let EN = false;
+const tr = (zh: string, en: string) => (EN ? en : zh);
+
+export function renderLogicSvg(spec: LogicSpec, solved: LogicSolved, highlight: string[] = [], locale: "zh-CN" | "en-US" = "zh-CN"): string {
+  EN = locale === "en-US";
   const hi = new Set(highlight);
   if (spec.type === "grid" && solved.type === "grid") return renderGrid(spec, solved, hi);
   if (spec.type === "venn" && solved.type === "venn") return renderVenn(spec, solved, hi);
   if (spec.type === "ordering" && solved.type === "ordering") return renderOrdering(spec, solved, hi);
   if (spec.type === "tree" && solved.type === "tree") return renderTree(spec, solved, hi);
-  return svg(200, 40, [text(100, 24, "无法绘制", { fill: C.muted })]);
+  return svg(200, 40, [text(100, 24, tr("无法绘制", "Cannot draw"), { fill: C.muted })]);
 }
 
 // ── Grid ───────────────────────────────────────────────────────────────
@@ -87,10 +92,11 @@ function renderGrid(g: Extract<LogicSpec, { type: "grid" }>, s: Extract<LogicSol
     footFill = C.ok;
     const parts = rows.map((r, ri) => [r, ...cats.map((cat, ci) => cat.items[s.cells[ri][ci].indexOf(1)] ?? "?")].join("—"));
     const maxW = Math.max(width, 360);
-    let line = "结论：";
+    const head = tr("结论：", "Answer: ");
+    let line = head;
     parts.forEach((p, i) => {
-      const piece = p + (i < parts.length - 1 ? "，" : "");
-      if (line !== "结论：" && line !== "" && textWidth(line + piece, 13) > maxW) {
+      const piece = p + (i < parts.length - 1 ? tr("，", "; ") : "");
+      if (line !== head && line !== "" && textWidth(line + piece, 13) > maxW) {
         lines.push(line);
         line = "";
       }
@@ -98,7 +104,7 @@ function renderGrid(g: Extract<LogicSpec, { type: "grid" }>, s: Extract<LogicSol
     });
     lines.push(line);
   } else {
-    lines.push(s.solutions === 0 ? "条件矛盾：无解" : `✓ 为已确定，空白为仍有多种可能（共 ${s.solutions} 种解）`);
+    lines.push(s.solutions === 0 ? tr("条件矛盾：无解", "Conditions contradict: no solution") : tr(`✓ 为已确定，空白为仍有多种可能（共 ${s.solutions} 种解）`, `✓ = determined; blank = still open (${s.solutions} solutions)`));
   }
   lines.forEach((l, i) => out.push(text(4, footY + i * 20, l, { size: footSize, fill: footFill, anchor: "start" })));
   const W = Math.max(width, ...lines.map((l) => textWidth(l, footSize) + 10));
@@ -129,7 +135,7 @@ function renderVenn(v: Extract<LogicSpec, { type: "venn" }>, s: Extract<LogicSol
   const showUniverse = v.universe !== undefined || v.neither !== undefined || s.regions.none !== null;
   if (showUniverse) {
     out.push(`<rect x="8" y="8" width="${W - 16}" height="${H - 16}" rx="10" fill="none" stroke="${C.line}" stroke-width="1.4"/>`);
-    out.push(text(20, 30, `${v.universe_label ?? "全体"}${v.universe !== undefined ? `（${v.universe}）` : ""}`, { size: 12, fill: C.muted, anchor: "start" }));
+    out.push(text(20, 30, `${v.universe_label ?? tr("全体", "All")}${v.universe !== undefined ? tr(`（${v.universe}）`, ` (${v.universe})`) : ""}`, { size: 12, fill: C.muted, anchor: "start" }));
   }
   v.sets.forEach((set, i) => {
     const c = centers[i];
@@ -148,10 +154,10 @@ function renderVenn(v: Extract<LogicSpec, { type: "venn" }>, s: Extract<LogicSol
     const label = val === null || val === undefined ? "?" : String(Math.round(val * 1000) / 1000);
     if (on) out.push(`<circle cx="${p.x}" cy="${p.y - 5}" r="17" fill="${C.hi}" fill-opacity="0.25" stroke="${C.hi}" stroke-width="1.6"/>`);
     out.push(text(p.x, p.y, label, { size: 17, fill: on ? C.hi : label === "?" ? C.muted : C.text, weight: "700" }));
-    if (k === "none") out.push(text(p.x - 34, p.y + 5, "都不", { size: 11, fill: C.muted, anchor: "end" }));
+    if (k === "none") out.push(text(p.x - 34, p.y + 5, tr("都不", "None"), { size: 11, fill: C.muted, anchor: "end" }));
   }
   if (v.ask && s.asked !== undefined) {
-    out.push(text(20, H - 22, `所求：${vennAskLabel(v.ask, v.sets)}人数 = ${s.asked === null ? "?" : s.asked}`, { size: 13, fill: s.asked === null ? C.muted : C.ok, anchor: "start" }));
+    out.push(text(20, H - 22, tr(`所求：${vennAskLabel(v.ask, v.sets)}人数 = ${s.asked === null ? "?" : s.asked}`, `Asked: ${vennAskLabel(v.ask, v.sets, true)} = ${s.asked === null ? "?" : s.asked}`), { size: 13, fill: s.asked === null ? C.muted : C.ok, anchor: "start" }));
   }
   return svg(W, H, out);
 }
@@ -169,12 +175,12 @@ function renderOrdering(o: Extract<LogicSpec, { type: "ordering" }>, s: Extract<
   const out: string[] = [];
   const note =
     s.solutions === 0
-      ? "条件矛盾：无法排列"
+      ? tr("条件矛盾：无法排列", "Conditions contradict: no arrangement")
       : counting
-        ? `共 ${s.solutions} 种排法（图为其中一种）`
+        ? tr(`共 ${s.solutions} 种排法（图为其中一种）`, `${s.solutions} arrangements (one shown)`)
         : unique
-          ? "唯一排列"
-          : `共 ${distinct} 种排列，「?」处尚未确定`;
+          ? tr("唯一排列", "Unique arrangement")
+          : tr(`共 ${distinct} 种排列，「?」处尚未确定`, `${distinct} arrangements; \"?\" is not yet determined`);
   if (o.layout === "row") {
     const boxW = Math.max(56, ...o.items.map((it) => textWidth(it, 14) + 16));
     const gap = 10;
@@ -187,9 +193,9 @@ function renderOrdering(o: Extract<LogicSpec, { type: "ordering" }>, s: Extract<
       const on = who ? hi.has(who) : false;
       out.push(`<rect x="${x}" y="30" width="${boxW}" height="46" rx="8" fill="${on ? C.hi : C.sets[0]}" fill-opacity="${on ? 0.22 : who ? 0.12 : 0.03}" stroke="${on ? C.hi : who ? C.sets[0] : C.line}" stroke-width="${on ? 2.2 : 1.4}"${who ? "" : ' stroke-dasharray="5 4"'}/>`);
       out.push(text(x + boxW / 2, 58, who ?? "?", { size: 15, fill: on ? C.hi : who ? C.text : C.muted, weight: "600" }));
-      out.push(text(x + boxW / 2, 94, `第${i + 1}个`, { size: 11, fill: C.muted }));
+      out.push(text(x + boxW / 2, 94, tr(`第${i + 1}个`, `#${i + 1}`), { size: 11, fill: C.muted }));
     }
-    const [l, r] = o.ends ?? ["左", "右"];
+    const [l, r] = o.ends ?? [tr("左", "Left"), tr("右", "Right")];
     out.push(text(18, 58, l, { size: 12, fill: C.muted }));
     out.push(text(W - 18, 58, r, { size: 12, fill: C.muted }));
     out.push(text(W / 2, 120, note, { size: 12, fill: unique ? C.ok : C.muted }));
@@ -202,7 +208,7 @@ function renderOrdering(o: Extract<LogicSpec, { type: "ordering" }>, s: Extract<
   const cy = 170;
   const R = 120;
   out.push(`<circle cx="${cx}" cy="${cy}" r="${R - 42}" fill="${C.grid}" fill-opacity="0.35" stroke="${C.line}" stroke-width="1.4"/>`);
-  out.push(text(cx, cy + 4, "圆桌", { size: 12, fill: C.muted }));
+  out.push(text(cx, cy + 4, tr("圆桌", "Table"), { size: 12, fill: C.muted }));
   for (let i = 0; i < n; i++) {
     const a = -Math.PI / 2 + (2 * Math.PI * i) / n;
     const x = cx + R * Math.cos(a);
@@ -212,7 +218,7 @@ function renderOrdering(o: Extract<LogicSpec, { type: "ordering" }>, s: Extract<
     out.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="26" fill="${on ? C.hi : C.sets[0]}" fill-opacity="${on ? 0.22 : who ? 0.14 : 0.03}" stroke="${on ? C.hi : who ? C.sets[0] : C.line}" stroke-width="${on ? 2.2 : 1.4}"${who ? "" : ' stroke-dasharray="5 4"'}/>`);
     out.push(text(+x.toFixed(1), +(y + 5).toFixed(1), who ?? "?", { size: 14, fill: on ? C.hi : who ? C.text : C.muted, weight: "600" }));
   }
-  out.push(text(cx, H - 18, `${note}（顺时针；旋转${s.mirror ? "、翻转" : ""}视为同一种）`, { size: 12, fill: unique ? C.ok : C.muted }));
+  out.push(text(cx, H - 18, tr(`${note}（顺时针；旋转${s.mirror ? "、翻转" : ""}视为同一种）`, `${note} (clockwise; rotations${s.mirror ? " and reflections" : ""} count once)`), { size: 12, fill: unique ? C.ok : C.muted }));
   return svg(W, H, out);
 }
 
@@ -261,6 +267,6 @@ function renderTree(t: Extract<LogicSpec, { type: "tree" }>, s: Extract<LogicSol
     const lastX = 60 + (p.length - 1) * colW + colW / 2 + textWidth(p[p.length - 1], 13) / 2 + 14;
     out.push(text(lastX, top + li * leafH + leafH / 2 + 4.5, `${li + 1}. ${p.join("")}`, { size: 11, fill: C.muted, anchor: "start" }));
   });
-  out.push(text(30, H - 16, s.truncated ? `共 ${s.count} 种（图中画出前 ${leaves} 种）` : `共 ${s.count} 种`, { size: 13, fill: C.ok, anchor: "start", weight: "600" }));
+  out.push(text(30, H - 16, s.truncated ? tr(`共 ${s.count} 种（图中画出前 ${leaves} 种）`, `${s.count} in total (first ${leaves} shown)`) : tr(`共 ${s.count} 种`, `${s.count} in total`), { size: 13, fill: C.ok, anchor: "start", weight: "600" }));
   return svg(W, H, out);
 }

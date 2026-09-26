@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
 import { FileCode } from "lucide-react";
+import { useI18n } from "@/lib/i18n";
 
 type Props = {
   leanSource: string;
@@ -14,11 +15,12 @@ export function LeanPane({
   view,
   onViewChange,
 }: Props) {
+  const { tr } = useI18n();
   const text =
     view === "step"
       ? selectedStepCode?.trim()
         ? selectedStepCode
-        : "// 本步尚无 Lean 代码"
+        : tr("// 本步尚无 Lean 代码", "// No Lean code for this step yet")
       : leanSource.trim()
         ? leanSource
         : "";
@@ -41,7 +43,7 @@ export function LeanPane({
                 : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
             )}
           >
-            全文
+            {tr("全文", "Full")}
           </button>
           <button
             type="button"
@@ -53,7 +55,7 @@ export function LeanPane({
                 : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
             )}
           >
-            本步
+            {tr("本步", "Step")}
           </button>
         </div>
       </div>
@@ -68,7 +70,7 @@ export function LeanPane({
             <FileCode className="h-5 w-5 text-muted-foreground" />
           </div>
           <p className="text-sm text-muted-foreground">
-            证明步骤后，组装的 Lean 源码将显示在此。
+            {tr("证明步骤后，组装的 Lean 源码将显示在此。", "The assembled Lean source will appear here once steps are proved.")}
           </p>
         </div>
       )}

@@ -41,7 +41,7 @@ app/
     Header.tsx                      # Navigation header (auth, locale, links)
     KnowledgeGraph.tsx              # Interactive Neo4j knowledge graph SVG
     LeanPane.tsx                    # Lean source viewer (full/step toggle)
-    LocaleSwitcher.tsx              # Language selector (zh-CN / en-US)
+    LocaleSwitcher.tsx              # Language button in the page header: follow system / 简体中文 / English
     MathText.tsx                    # LaTeX rendering via KaTeX
     MethodDetail.tsx                # Method inspiration + pros/cons
     MethodList.tsx                  # Scrollable method list with confidence
@@ -85,8 +85,8 @@ lib/
   utils.ts                          # cn() utility (clsx + tailwind-merge)
   math-segments.ts                  # Math text segmenter ($, $$, \(, \[)
   i18n/
-    config.ts                       # Locale configuration (zh-CN, en-US)
-    index.ts                        # I18nProvider + useI18n hook
+    config.ts                       # Locales, system-language matching (Accept-Language / navigator.languages), `locale` cookie
+    index.tsx                       # I18nProvider + useI18n: locale, pref (manual or "system"), t(key), tr(zh, en)
     zh-CN.ts                        # Chinese translations
     en-US.ts                        # English translations
   payments/
@@ -295,7 +295,7 @@ See `docs/P3-FEATURES.md` for detailed setup and usage guide.
 
 ## Coding Conventions
 
-- UI text: Chinese (zh-CN)
+- UI text: bilingual — every user-visible string is `tr("中文", "English")` from `useI18n()` (American English). The locale follows the OS/browser language; the header's language button overrides it (cookie `locale`, cleared by "follow system"). The root layout resolves the locale on the server (cookie → Accept-Language) so the first render matches. Server/LLM content (problems, solutions, check details) is not translated
 - Code: English
 - Types: All in `lib/types.ts`, Zod schemas in `lib/schemas.ts`
 - API pattern: POST with JSON body, return `NextResponse.json()`

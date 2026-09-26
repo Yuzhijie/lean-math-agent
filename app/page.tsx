@@ -11,11 +11,13 @@ import { MethodComparison } from "./components/MethodComparison";
 import { PipelineProgress } from "./components/PipelineProgress";
 import { ProblemGenerator, type UsedProblemFigure } from "./components/ProblemGenerator";
 import { SessionHistory } from "./components/SessionHistory";
+import { LocaleSwitcher } from "./components/LocaleSwitcher";
 import { StepCard } from "./components/StepCard";
 import { StepPane } from "./components/StepPane";
 import { containsMath } from "@/lib/math-segments";
-import { useProofSession } from "./hooks/useProofSession";
+import { SAMPLE_PROBLEM, useProofSession } from "./hooks/useProofSession";
 import { useProofActions } from "./hooks/useProofActions";
+import { useI18n } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -46,6 +48,7 @@ import {
 } from "lucide-react";
 
 export default function Home() {
+  const { tr, locale } = useI18n();
   const {
     state,
     dispatch,
@@ -56,7 +59,15 @@ export default function Home() {
     planned,
     canProve,
     canVerify,
-  } = useProofSession();
+  } = useProofSession(SAMPLE_PROBLEM[locale]);
+
+  // The pre-filled sample problem follows the UI language until the user edits it.
+  useEffect(() => {
+    const samples = Object.values(SAMPLE_PROBLEM) as string[];
+    if (samples.includes(state.problemText) && state.problemText !== SAMPLE_PROBLEM[locale]) {
+      dispatch({ type: "SET_PROBLEM_TEXT", text: SAMPLE_PROBLEM[locale] });
+    }
+  }, [locale, state.problemText, dispatch]);
 
   const {
     enumerate,
@@ -126,13 +137,13 @@ export default function Home() {
   const hasResults = !!(nlSolution || leanProofAttempt || methods.length > 0);
 
   const phaseLabel: Record<string, string> = {
-    idle: "就绪",
-    enumerated: "已枚举",
-    planned: "已规划",
-    proving: "证明中",
-    proved: "已证明",
-    verified: "已验证",
-    solved: "已求解",
+    idle: tr("就绪", "Ready"),
+    enumerated: tr("已枚举", "Enumerated"),
+    planned: tr("已规划", "Planned"),
+    proving: tr("证明中", "Proving"),
+    proved: tr("已证明", "Proved"),
+    verified: tr("已验证", "Verified"),
+    solved: tr("已求解", "Solved"),
   };
 
   const buildBadgeVariant =
@@ -161,7 +172,7 @@ export default function Home() {
                     Lean Math Agent
                   </h1>
                   <p className="text-[11px] text-muted-foreground">
-                    AI × Lean 4 形式化证明
+                    {tr("AI × Lean 4 形式化证明", "AI × Lean 4 formal proofs")}
                   </p>
                 </div>
               </div>
@@ -177,6 +188,7 @@ export default function Home() {
                     build: {buildStatus}
                   </Badge>
                 )}
+                <LocaleSwitcher />
                 <Button
                   variant="ghost"
                   size="sm"
@@ -185,7 +197,7 @@ export default function Home() {
                   className="gap-1.5"
                 >
                   <History className="h-3.5 w-3.5" />
-                  <span className="hidden sm:inline">历史</span>
+                  <span className="hidden sm:inline">{tr("历史", "History")}</span>
                 </Button>
                 <Button
                   variant="ghost"
@@ -196,7 +208,7 @@ export default function Home() {
                 >
                   <Sparkles className="h-3.5 w-3.5" />
                   <span className="hidden sm:inline">
-                    {showGenerator ? "收起" : "生成题目"}
+                    {showGenerator ? tr("收起", "Hide") : tr("生成题目", "Generate problem")}
                   </span>
                 </Button>
               </div>
@@ -223,12 +235,12 @@ export default function Home() {
               <div className="flex items-center justify-between">
                 <CardTitle className="flex items-center gap-2 text-base">
                   <Calculator className="h-4 w-4 text-primary" />
-                  问题
+                  {tr("问题", "Problem")}
                 </CardTitle>
                 {busy && (
                   <Badge variant="info" className="gap-1.5 animate-pulse-soft">
                     <span className="h-1.5 w-1.5 rounded-full bg-primary animate-spin" />
-                    工作中：{busy}
+                    {tr("工作中：", "Working: ")}{busy}
                   </Badge>
                 )}
               </div>
@@ -242,7 +254,7 @@ export default function Home() {
                 }
                 disabled={!!busy}
                 rows={3}
-                placeholder="输入数学问题，支持 LaTeX 公式（如 $x^2 + y^2 = z^2$）..."
+                placeholder={tr("输入数学问题，支持 LaTeX 公式（如 $x^2 + y^2 = z^2$）...", "Enter a math problem; LaTeX is supported (e.g. $x^2 + y^2 = z^2$)...")}
                 className="min-h-[80px] text-base leading-relaxed"
               />
               )}
@@ -252,7 +264,7 @@ export default function Home() {
                 <div className="rounded-md border border-border/60 bg-muted/30 p-3 animate-fade-in">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                      问题
+                      {tr("问题", "Problem")}
                     </span>
                     {inputHidden && (
                       <Button
@@ -263,7 +275,7 @@ export default function Home() {
                         onClick={() => setInputHidden(false)}
                       >
                         <Pencil className="h-3 w-3" />
-                        编辑
+                        {tr("编辑", "Edit")}
                       </Button>
                     )}
                   </div>
@@ -291,7 +303,7 @@ export default function Home() {
                   className="gap-1.5"
                 >
                   <Play className="h-3.5 w-3.5" />
-                  一键求解
+                  {tr("一键求解", "Solve")}
                 </Button>
                 <Button
                   variant="outline"
@@ -301,7 +313,7 @@ export default function Home() {
                   className="gap-1.5"
                 >
                   <ListOrdered className="h-3.5 w-3.5" />
-                  枚举解法
+                  {tr("枚举解法", "Enumerate methods")}
                 </Button>
               </div>
 
@@ -323,7 +335,7 @@ export default function Home() {
             <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 text-sm animate-fade-in">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
               <div>
-                <span className="font-medium text-warning">域外警告：</span>
+                <span className="font-medium text-warning">{tr("域外警告：", "Out-of-domain warning: ")}</span>
                 <span className="text-muted-foreground">{outOfDomainWarning}</span>
               </div>
             </div>
@@ -333,10 +345,10 @@ export default function Home() {
             <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm animate-fade-in">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
               <div className="text-muted-foreground">
-                Lean / lake 不可用。请安装 elan 与 Lean 4，并确保{" "}
+                {tr("Lean / lake 不可用。请安装 elan 与 Lean 4，并确保", "Lean / lake is unavailable. Install elan and Lean 4, and make sure")}{" "}
                 <code className="rounded bg-muted px-1.5 py-0.5 text-xs font-mono">lean-sandbox</code>{" "}
-                可{" "}
-                <code className="rounded bg-muted px-1.5 py-0.5 text-xs font-mono">lake build</code>。
+                {tr("可", "passes")}{" "}
+                <code className="rounded bg-muted px-1.5 py-0.5 text-xs font-mono">lake build</code>{tr("。", ".")}
               </div>
             </div>
           )}
@@ -357,13 +369,13 @@ export default function Home() {
                 {nlSolution && (
                   <TabsTrigger value="solution" className="gap-1.5 data-[state=active]:bg-primary/10 data-[state=active]:text-primary">
                     <BookOpen className="h-3.5 w-3.5" />
-                    解答
+                    {tr("解答", "Solution")}
                   </TabsTrigger>
                 )}
                 {methods.length > 0 && (
                   <TabsTrigger value="methods" className="gap-1.5 data-[state=active]:bg-primary/10 data-[state=active]:text-primary">
                     <ListOrdered className="h-3.5 w-3.5" />
-                    解法
+                    {tr("解法", "Methods")}
                     <span className="ml-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-bold text-primary">
                       {methods.length}
                     </span>
@@ -372,7 +384,7 @@ export default function Home() {
                 {(planned || steps.length > 0) && (
                   <TabsTrigger value="proof" className="gap-1.5 data-[state=active]:bg-primary/10 data-[state=active]:text-primary">
                     <FileCode className="h-3.5 w-3.5" />
-                    证明
+                    {tr("证明", "Proof")}
                   </TabsTrigger>
                 )}
                 {leanProofAttempt && (
@@ -391,12 +403,12 @@ export default function Home() {
                       <div className="flex items-center justify-between">
                         <CardTitle className="flex items-center gap-2">
                           <BookOpen className="h-5 w-5 text-primary" />
-                          自然语言解答
+                          {tr("自然语言解答", "Natural-language solution")}
                         </CardTitle>
                         <Badge
                           variant={solvedProblemType === "theorem" ? "info" : "default"}
                         >
-                          {solvedProblemType === "theorem" ? "定理证明" : "计算求解"}
+                          {solvedProblemType === "theorem" ? tr("定理证明", "Theorem proof") : tr("计算求解", "Computation")}
                         </Badge>
                       </div>
                     </CardHeader>
@@ -421,7 +433,7 @@ export default function Home() {
                               setStepsExpanded(!stepsExpanded);
                             }}
                           >
-                            {stepsExpanded ? "折叠全部" : "展开全部"}
+                            {stepsExpanded ? tr("折叠全部", "Collapse all") : tr("展开全部", "Expand all")}
                           </Button>
                         </div>
                       )}
@@ -445,7 +457,7 @@ export default function Home() {
                       <div className="rounded-lg border-2 border-success/30 bg-success/5 p-4">
                         <div className="text-[11px] font-bold uppercase tracking-wider text-success mb-2">
                           <CheckCircle2 className="inline h-3.5 w-3.5 mr-1" />
-                          最终答案
+                          {tr("最终答案", "Final answer")}
                         </div>
                         <div className="text-base font-semibold">
                           <MathText text={nlSolution.final_answer} />
@@ -455,7 +467,7 @@ export default function Home() {
                       {/* Verification */}
                       {nlSolution.verification && (
                         <div className="rounded-lg border border-border/60 bg-muted/20 p-4 text-sm">
-                          <span className="font-semibold text-muted-foreground">验证：</span>
+                          <span className="font-semibold text-muted-foreground">{tr("验证：", "Verification: ")}</span>
                           <MathText text={nlSolution.verification} />
                         </div>
                       )}
@@ -476,7 +488,7 @@ export default function Home() {
                         onClick={() => setShowComparison(false)}
                       >
                         <Columns3 className="h-3.5 w-3.5 mr-1" />
-                        列表视图
+                        {tr("列表视图", "List view")}
                       </Button>
                     </div>
                     <MethodComparison
@@ -496,7 +508,7 @@ export default function Home() {
                           onClick={() => setShowComparison(true)}
                         >
                           <Columns3 className="h-3.5 w-3.5 mr-1" />
-                          对比视图
+                          {tr("对比视图", "Compare view")}
                         </Button>
                       </div>
                     )}
@@ -538,7 +550,7 @@ export default function Home() {
                         className="gap-1.5"
                       >
                         <Play className="h-3.5 w-3.5" />
-                        证明本步
+                        {tr("证明本步", "Prove step")}
                       </Button>
                       <Button
                         variant="outline"
@@ -549,7 +561,7 @@ export default function Home() {
                         className="gap-1.5"
                       >
                         <ListOrdered className="h-3.5 w-3.5" />
-                        全部逐步生成
+                        {tr("全部逐步生成", "Prove all steps")}
                       </Button>
                       <Button
                         variant="outline"
@@ -560,7 +572,7 @@ export default function Home() {
                         className="gap-1.5"
                       >
                         <CheckCircle2 className="h-3.5 w-3.5" />
-                        验证
+                        {tr("验证", "Verify")}
                       </Button>
                       <Separator orientation="vertical" className="h-6" />
                       <Tooltip>
@@ -582,10 +594,10 @@ export default function Home() {
                             className="gap-1.5"
                           >
                             <RotateCcw className="h-3.5 w-3.5" />
-                            重试
+                            {tr("重试", "Retry")}
                           </Button>
                         </TooltipTrigger>
-                        <TooltipContent>重试当前步骤的证明</TooltipContent>
+                        <TooltipContent>{tr("重试当前步骤的证明", "Retry the proof of the current step")}</TooltipContent>
                       </Tooltip>
                       <Button
                         variant="ghost"
@@ -593,7 +605,7 @@ export default function Home() {
                         disabled={!!busy || phase === "idle"}
                         onClick={switchMethod}
                       >
-                        换解法
+                        {tr("换解法", "Switch method")}
                       </Button>
                     </div>
 
@@ -629,7 +641,7 @@ export default function Home() {
                       <div className="flex items-center justify-between">
                         <CardTitle className="flex items-center gap-2">
                           <FlaskConical className="h-5 w-5 text-primary" />
-                          Lean 4 形式化
+                          {tr("Lean 4 形式化", "Lean 4 formalization")}
                         </CardTitle>
                         <Badge
                           variant={
@@ -641,10 +653,10 @@ export default function Home() {
                           }
                         >
                           {!leanProofAttempt.attempted
-                            ? "未尝试"
+                            ? tr("未尝试", "Not attempted")
                             : leanProofAttempt.success
-                              ? "✅ 证明成功"
-                              : "⚠️ 未能完成"}
+                              ? tr("✅ 证明成功", "✅ Proof succeeded")
+                              : tr("⚠️ 未能完成", "⚠️ Incomplete")}
                         </Badge>
                       </div>
                     </CardHeader>
@@ -652,28 +664,37 @@ export default function Home() {
                       {leanProofAttempt.attempted && leanProofAttempt.success && (
                         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                           <Badge variant="secondary">
-                            公理：{leanProofAttempt.axioms && leanProofAttempt.axioms.length > 0
+                            {tr("公理：", "Axioms: ")}{leanProofAttempt.axioms && leanProofAttempt.axioms.length > 0
                               ? leanProofAttempt.axioms.join(", ")
-                              : "无"}
+                              : tr("无", "none")}
                           </Badge>
                           <Badge variant={leanProofAttempt.statement_locked ? "success" : "warning"}>
                             {leanProofAttempt.statement_locked
-                              ? "陈述与形式化校验一致"
-                              : "陈述未经形式化校验锁定"}
+                              ? tr("陈述与形式化校验一致", "Statement matches the checked formalization")
+                              : tr("陈述未经形式化校验锁定", "Statement not locked by formalization check")}
                           </Badge>
                           {leanProofAttempt.verifier && (
-                            <span>验证后端：{leanProofAttempt.verifier === "repl" ? "Lean REPL" : leanProofAttempt.verifier}</span>
+                            <span>{tr("验证后端：", "Verifier: ")}{leanProofAttempt.verifier === "repl" ? "Lean REPL" : leanProofAttempt.verifier}</span>
                           )}
                           {leanProofAttempt.strategy && (
                             <span>
-                              证明方式：
+                              {tr("证明方式：", "Strategy: ")}
                               {leanProofAttempt.strategy === "whole_proof"
-                                ? `整体证明（${leanProofAttempt.attempts ?? "?"} 个候选 / ${leanProofAttempt.rounds ?? "?"} 轮）`
+                                ? tr(
+                                    `整体证明（${leanProofAttempt.attempts ?? "?"} 个候选 / ${leanProofAttempt.rounds ?? "?"} 轮）`,
+                                    `Whole proof (${leanProofAttempt.attempts ?? "?"} candidates / ${leanProofAttempt.rounds ?? "?"} rounds)`,
+                                  )
                                 : leanProofAttempt.strategy === "sketch"
-                                  ? `骨架分解（${leanProofAttempt.holes_solved ?? "?"}/${leanProofAttempt.holes ?? "?"} 个子目标）`
+                                  ? tr(
+                                      `骨架分解（${leanProofAttempt.holes_solved ?? "?"}/${leanProofAttempt.holes ?? "?"} 个子目标）`,
+                                      `Proof sketch (${leanProofAttempt.holes_solved ?? "?"}/${leanProofAttempt.holes ?? "?"} subgoals)`,
+                                    )
                                   : leanProofAttempt.strategy === "trivial" || leanProofAttempt.strategy === "hammer"
-                                    ? "自动化策略"
-                                    : `分步搜索（${leanProofAttempt.attempts ?? "?"} 次尝试）`}
+                                    ? tr("自动化策略", "Automated tactics")
+                                    : tr(
+                                        `分步搜索（${leanProofAttempt.attempts ?? "?"} 次尝试）`,
+                                        `Stepwise search (${leanProofAttempt.attempts ?? "?"} attempts)`,
+                                      )}
                             </span>
                           )}
                         </div>
@@ -708,17 +729,21 @@ export default function Home() {
           {/* ── Run metrics ─────────────────────────────────────────── */}
           {runMetrics && (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-xs text-muted-foreground animate-fade-in">
-              <span>LLM 调用 {runMetrics.llm_calls} 次</span>
+              <span>{tr(`LLM 调用 ${runMetrics.llm_calls} 次`, `${runMetrics.llm_calls} LLM calls`)}</span>
               <span>
                 tokens {runMetrics.prompt_tokens + runMetrics.completion_tokens}
-                {runMetrics.by_role?.prover ? `（prover ${runMetrics.by_role.prover.requests} 次）` : ""}
+                {runMetrics.by_role?.prover
+                  ? tr(`（prover ${runMetrics.by_role.prover.requests} 次）`, ` (prover: ${runMetrics.by_role.prover.requests})`)
+                  : ""}
               </span>
-              {runMetrics.estimated_cost !== undefined && <span>估算费用 {runMetrics.estimated_cost.toFixed(4)}</span>}
+              {runMetrics.estimated_cost !== undefined && <span>{tr("估算费用", "Est. cost")} {runMetrics.estimated_cost.toFixed(4)}</span>}
               <span>
-                Lean 验证 {runMetrics.lean_verifications} 次
-                {runMetrics.lean_verifications > 0 ? `（${(runMetrics.lean_verify_ms / 1000).toFixed(1)}s）` : ""}
+                {tr(`Lean 验证 ${runMetrics.lean_verifications} 次`, `${runMetrics.lean_verifications} Lean verifications`)}
+                {runMetrics.lean_verifications > 0
+                  ? tr(`（${(runMetrics.lean_verify_ms / 1000).toFixed(1)}s）`, ` (${(runMetrics.lean_verify_ms / 1000).toFixed(1)}s)`)
+                  : ""}
               </span>
-              <span>总耗时 {(runMetrics.wall_ms / 1000).toFixed(1)}s</span>
+              <span>{tr("总耗时", "Total time")} {(runMetrics.wall_ms / 1000).toFixed(1)}s</span>
             </div>
           )}
 
@@ -729,7 +754,7 @@ export default function Home() {
                 <details>
                   <summary className="flex cursor-pointer items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors select-none">
                     <ChevronDown className="h-4 w-4" />
-                    求解过程日志 ({solveEvents.length} 条)
+                    {tr(`求解过程日志 (${solveEvents.length} 条)`, `Solve log (${solveEvents.length} entries)`)}
                   </summary>
                   <div className="mt-3 max-h-64 overflow-auto rounded-md bg-code-bg p-3 font-mono text-xs leading-relaxed text-muted-foreground">
                     {solveEvents.map((evt, i) => (
@@ -756,7 +781,7 @@ export default function Home() {
         {/* ── Footer ──────────────────────────────────────────────── */}
         <footer className="border-t border-border/40 py-6 text-center text-xs text-muted-foreground">
           <span className="text-gradient font-medium">Lean Math Agent</span>
-          {" "}— AI 驱动的数学定理证明
+          {" "}— {tr("AI 驱动的数学定理证明", "AI-powered mathematical theorem proving")}
         </footer>
       </div>
     </TooltipProvider>

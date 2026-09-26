@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MathText } from "./MathText";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/lib/i18n";
 import {
   Clock,
   CheckCircle2,
@@ -63,7 +64,9 @@ const PER_PAGE = 20;
 
 // ── Relative time formatting ──────────────────────────────────────────
 
-function relativeTime(ts: number): string {
+type Tr = (zh: string, en: string) => string;
+
+function relativeTime(ts: number, tr: Tr, locale: string): string {
   const now = Date.now();
   const diff = now - ts;
   const seconds = Math.floor(diff / 1000);
@@ -71,34 +74,40 @@ function relativeTime(ts: number): string {
   const hours = Math.floor(minutes / 60);
   const days = Math.floor(hours / 24);
 
-  if (seconds < 60) return "刚刚";
-  if (minutes < 60) return `${minutes} 分钟前`;
-  if (hours < 24) return `${hours} 小时前`;
-  if (days < 7) return `${days} 天前`;
-  if (days < 30) return `${Math.floor(days / 7)} 周前`;
+  if (seconds < 60) return tr("刚刚", "just now");
+  if (minutes < 60) return tr(`${minutes} 分钟前`, `${minutes} min ago`);
+  if (hours < 24) return tr(`${hours} 小时前`, `${hours} h ago`);
+  if (days < 7) return tr(`${days} 天前`, days === 1 ? "1 day ago" : `${days} days ago`);
+  if (days < 30) {
+    const weeks = Math.floor(days / 7);
+    return tr(`${weeks} 周前`, weeks === 1 ? "1 week ago" : `${weeks} weeks ago`);
+  }
 
   const d = new Date(ts);
-  return `${d.getMonth() + 1}/${d.getDate()}`;
+  return d.toLocaleDateString(locale, { month: "numeric", day: "numeric" });
 }
 
 // ── Pipeline stage badge ──────────────────────────────────────────────
 
-const stageConfig: Record<
-  string,
-  { label: string; variant: "success" | "destructive" | "warning" | "secondary" | "default" }
-> = {
-  idle: { label: "初始", variant: "secondary" },
-  complete: { label: "完成", variant: "success" },
-  failed: { label: "失败", variant: "destructive" },
-  solving: { label: "求解中", variant: "default" },
-  computing: { label: "计算中", variant: "default" },
-  enumerating: { label: "枚举中", variant: "default" },
-  planning: { label: "规划中", variant: "default" },
-};
+type StageVariant = "success" | "destructive" | "warning" | "secondary" | "default";
+
+function getStageConfig(tr: Tr): Record<string, { label: string; variant: StageVariant }> {
+  return {
+    idle: { label: tr("初始", "Idle"), variant: "secondary" },
+    complete: { label: tr("完成", "Done"), variant: "success" },
+    failed: { label: tr("失败", "Failed"), variant: "destructive" },
+    solving: { label: tr("求解中", "Solving"), variant: "default" },
+    computing: { label: tr("计算中", "Computing"), variant: "default" },
+    enumerating: { label: tr("枚举中", "Enumerating"), variant: "default" },
+    planning: { label: tr("规划中", "Planning"), variant: "default" },
+  };
+}
 
 // ── Component ─────────────────────────────────────────────────────────
 
 export function SessionHistory({ open, onOpenChange, onLoadSession, refreshKey }: Props) {
+  const { tr, locale } = useI18n();
+  const stageConfig = getStageConfig(tr);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -155,7 +164,7 @@ export function SessionHistory({ open, onOpenChange, onLoadSession, refreshKey }
         }
       } catch (e) {
         if (!cancelled)
-          setError(e instanceof Error ? e.message : "加载失败");
+          setError(e instanceof Error ? e.message : tr("加载失败", "Failed to load"));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -165,7 +174,7 @@ export function SessionHistory({ open, onOpenChange, onLoadSession, refreshKey }
     return () => {
       cancelled = true;
     };
-  }, [open, refreshKey, page, debouncedQuery]);
+  }, [open, refreshKey, page, debouncedQuery, tr]);
 
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
 
@@ -197,7 +206,7 @@ export function SessionHistory({ open, onOpenChange, onLoadSession, refreshKey }
           <div className="flex items-center justify-between">
             <SheetTitle className="flex items-center gap-2 text-base">
               <Clock className="h-4 w-4 text-primary" />
-              历史记录
+              {tr("历史记录", "History")}
             </SheetTitle>
             {/* The "clear all" button was removed together with the
                 unauthenticated DELETE /api/sessions endpoint: sessions are
@@ -205,7 +214,7 @@ export function SessionHistory({ open, onOpenChange, onLoadSession, refreshKey }
                 Individual sessions can still be deleted from the list. */}
           </div>
           <SheetDescription>
-            浏览并恢复之前的求解会话{total > 0 && ` (${total} 条)`}
+            {tr("浏览并恢复之前的求解会话", "Browse and restore previous solving sessions")}{total > 0 && tr(` (${total} 条)`, ` (${total})`)}
           </SheetDescription>
         </SheetHeader>
 
@@ -217,7 +226,7 @@ export function SessionHistory({ open, onOpenChange, onLoadSession, refreshKey }
               <Input
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="搜索历史..."
+                placeholder={tr("搜索历史...", "Search history...")}
                 className="pl-8 h-8 text-xs"
               />
             </div>
@@ -242,7 +251,7 @@ export function SessionHistory({ open, onOpenChange, onLoadSession, refreshKey }
           {error && !loading && (
             <div className="flex flex-col items-center justify-center py-12 text-center px-4">
               <XCircle className="h-8 w-8 text-destructive mb-3" />
-              <p className="text-sm font-medium text-destructive">加载失败</p>
+              <p className="text-sm font-medium text-destructive">{tr("加载失败", "Failed to load")}</p>
               <p className="mt-1 text-xs text-muted-foreground">{error}</p>
             </div>
           )}
@@ -254,10 +263,10 @@ export function SessionHistory({ open, onOpenChange, onLoadSession, refreshKey }
                 <FileText className="h-5 w-5 text-muted-foreground" />
               </div>
               <p className="text-sm font-medium text-muted-foreground">
-                暂无历史记录
+                {tr("暂无历史记录", "No history yet")}
               </p>
               <p className="mt-1 text-xs text-muted-foreground/70">
-                求解问题后，会话将自动保存
+                {tr("求解问题后，会话将自动保存", "Sessions are saved automatically after you solve a problem")}
               </p>
             </div>
           )}
@@ -267,10 +276,10 @@ export function SessionHistory({ open, onOpenChange, onLoadSession, refreshKey }
             <div className="flex flex-col items-center justify-center py-12 text-center px-4">
               <SearchX className="h-8 w-8 text-muted-foreground/50 mb-3" />
               <p className="text-sm font-medium text-muted-foreground">
-                未找到匹配的会话
+                {tr("未找到匹配的会话", "No matching sessions")}
               </p>
               <p className="mt-1 text-xs text-muted-foreground/70">
-                尝试其他搜索关键词
+                {tr("尝试其他搜索关键词", "Try different search terms")}
               </p>
             </div>
           )}
@@ -327,14 +336,14 @@ export function SessionHistory({ open, onOpenChange, onLoadSession, refreshKey }
                     {/* Meta row */}
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-[11px] text-muted-foreground">
-                        {relativeTime(session.created_at)}
+                        {relativeTime(session.created_at, tr, locale)}
                       </span>
                       <div className="flex items-center gap-1.5">
                         {session.has_nl_solution && (
-                          <span title="有解答"><BookOpen className="h-3 w-3 text-primary/60" /></span>
+                          <span title={tr("有解答", "Has solution")}><BookOpen className="h-3 w-3 text-primary/60" /></span>
                         )}
                         {session.has_lean_attempt && (
-                          <span title="有 Lean 证明"><FlaskConical className="h-3 w-3 text-primary/60" /></span>
+                          <span title={tr("有 Lean 证明", "Has Lean proof")}><FlaskConical className="h-3 w-3 text-primary/60" /></span>
                         )}
                         <Badge variant={stage.variant} className="text-[10px] gap-0.5">
                           {stage.label}
@@ -374,7 +383,7 @@ export function SessionHistory({ open, onOpenChange, onLoadSession, refreshKey }
               onClick={() => setPage((p) => p - 1)}
             >
               <ChevronLeft className="h-3.5 w-3.5 mr-1" />
-              上一页
+              {tr("上一页", "Previous")}
             </Button>
             <span className="text-[11px] text-muted-foreground">
               {page} / {totalPages}
@@ -386,7 +395,7 @@ export function SessionHistory({ open, onOpenChange, onLoadSession, refreshKey }
               disabled={page >= totalPages}
               onClick={() => setPage((p) => p + 1)}
             >
-              下一页
+              {tr("下一页", "Next")}
               <ChevronRight className="h-3.5 w-3.5 ml-1" />
             </Button>
           </div>

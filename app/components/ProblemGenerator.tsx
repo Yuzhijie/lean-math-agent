@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/lib/i18n";
 import {
   Sparkles,
   GraduationCap,
@@ -53,36 +54,44 @@ type Props = {
   disabled?: boolean;
 };
 
-const GRADE_LABELS: Record<GradeLevel, string> = {
-  elementary: "小学",
-  middle: "初中",
-  high: "高中",
-  university: "大学",
-};
+type Tr = (zh: string, en: string) => string;
 
-const DIFFICULTY_LABELS: Record<DifficultyLevel, string> = {
-  standard: "标准",
-  advanced: "提高",
-  competition: "竞赛",
-};
+function getLabels(tr: Tr) {
+  const GRADE_LABELS: Record<GradeLevel, string> = {
+    elementary: tr("小学", "Primary school"),
+    middle: tr("初中", "Middle school"),
+    high: tr("高中", "High school"),
+    university: tr("大学", "University"),
+  };
 
-const DOMAIN_LABELS: Record<CompetitionDomain, string> = {
-  competition_elementary: "竞赛初等",
-  competition_inequality: "竞赛不等式",
-  competition_number_theory: "竞赛数论",
-  competition_combinatorics: "竞赛组合",
-  competition_set_theory: "竞赛集合",
-  number_theory: "数论",
-  combinatorics: "组合",
-  set_theory: "集合",
-  algebra: "代数",
-  geometry: "几何",
-  inequality: "不等式",
-  logic: "逻辑",
-  computation: "计算",
-};
+  const DIFFICULTY_LABELS: Record<DifficultyLevel, string> = {
+    standard: tr("标准", "Standard"),
+    advanced: tr("提高", "Advanced"),
+    competition: tr("竞赛", "Competition"),
+  };
+
+  const DOMAIN_LABELS: Record<CompetitionDomain, string> = {
+    competition_elementary: tr("竞赛初等", "Competition elementary math"),
+    competition_inequality: tr("竞赛不等式", "Competition inequalities"),
+    competition_number_theory: tr("竞赛数论", "Competition number theory"),
+    competition_combinatorics: tr("竞赛组合", "Competition combinatorics"),
+    competition_set_theory: tr("竞赛集合", "Competition set theory"),
+    number_theory: tr("数论", "Number theory"),
+    combinatorics: tr("组合", "Combinatorics"),
+    set_theory: tr("集合", "Set theory"),
+    algebra: tr("代数", "Algebra"),
+    geometry: tr("几何", "Geometry"),
+    inequality: tr("不等式", "Inequalities"),
+    logic: tr("逻辑", "Logic"),
+    computation: tr("计算", "Computation"),
+  };
+
+  return { GRADE_LABELS, DIFFICULTY_LABELS, DOMAIN_LABELS };
+}
 
 export function ProblemGenerator({ onUseProblem, onFormalize, disabled }: Props) {
+  const { tr } = useI18n();
+  const { GRADE_LABELS, DIFFICULTY_LABELS, DOMAIN_LABELS } = getLabels(tr);
   const [gradeLevel, setGradeLevel] = useState<GradeLevel>("high");
   const [difficulty, setDifficulty] = useState<DifficultyLevel>("competition");
   const [domain, setDomain] = useState<CompetitionDomain>("competition_number_theory");
@@ -121,14 +130,14 @@ export function ProblemGenerator({ onUseProblem, onFormalize, disabled }: Props)
         error?: string;
       };
       if (!res.ok) {
-        throw new Error(data.error ?? "生成失败");
+        throw new Error(data.error ?? tr("生成失败", "Generation failed"));
       }
       setProblems(data.problems ?? []);
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") {
-        setError("生成超时，请减少题目数量（建议1-2题）或选择标准难度后重试");
+        setError(tr("生成超时，请减少题目数量（建议1-2题）或选择标准难度后重试", "Generation timed out. Reduce the number of problems (1–2 recommended) or choose Standard difficulty, then try again."));
       } else {
-        setError(e instanceof Error ? e.message : "生成失败");
+        setError(e instanceof Error ? e.message : tr("生成失败", "Generation failed"));
       }
     } finally {
       setBusy(false);
@@ -140,7 +149,7 @@ export function ProblemGenerator({ onUseProblem, onFormalize, disabled }: Props)
       <CardContent className="p-5 space-y-5">
         <div className="flex items-center gap-2">
           <Sparkles className="h-4 w-4 text-primary" />
-          <h2 className="text-sm font-semibold text-foreground">题目生成器</h2>
+          <h2 className="text-sm font-semibold text-foreground">{tr("题目生成器", "Problem generator")}</h2>
         </div>
 
         {/* Controls */}
@@ -148,7 +157,7 @@ export function ProblemGenerator({ onUseProblem, onFormalize, disabled }: Props)
           <div className="space-y-1.5">
             <label className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
               <GraduationCap className="h-3 w-3" />
-              学段
+              {tr("学段", "Level")}
             </label>
             <Select
               value={gradeLevel}
@@ -171,7 +180,7 @@ export function ProblemGenerator({ onUseProblem, onFormalize, disabled }: Props)
           <div className="space-y-1.5">
             <label className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
               <BarChart3 className="h-3 w-3" />
-              难度
+              {tr("难度", "Difficulty")}
             </label>
             <Select
               value={difficulty}
@@ -194,7 +203,7 @@ export function ProblemGenerator({ onUseProblem, onFormalize, disabled }: Props)
           <div className="space-y-1.5">
             <label className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
               <FolderOpen className="h-3 w-3" />
-              领域
+              {tr("领域", "Topic")}
             </label>
             <Select
               value={domain}
@@ -217,7 +226,7 @@ export function ProblemGenerator({ onUseProblem, onFormalize, disabled }: Props)
           <div className="space-y-1.5">
             <label className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
               <Hash className="h-3 w-3" />
-              数量
+              {tr("数量", "Count")}
             </label>
             <Input
               type="number"
@@ -238,7 +247,7 @@ export function ProblemGenerator({ onUseProblem, onFormalize, disabled }: Props)
               className="w-full gap-1.5"
             >
               <Sparkles className="h-3.5 w-3.5" />
-              生成
+              {tr("生成", "Generate")}
             </Button>
           </div>
         </div>
@@ -254,7 +263,7 @@ export function ProblemGenerator({ onUseProblem, onFormalize, disabled }: Props)
           <div className="space-y-3 animate-slide-up">
             <Separator />
             <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-              生成结果 ({problems.length})
+              {tr("生成结果", "Results")} ({problems.length})
             </p>
             {problems.map((problem) => (
               <ProblemCard
@@ -285,6 +294,8 @@ function ProblemCard({
   onFormalize: () => void;
   disabled?: boolean;
 }) {
+  const { tr } = useI18n();
+  const { GRADE_LABELS, DIFFICULTY_LABELS, DOMAIN_LABELS } = getLabels(tr);
   const [showAnswer, setShowAnswer] = useState(false);
   const [showHints, setShowHints] = useState(false);
   const [figure, setFigure] = useState<SolvedFigure | undefined>(undefined);
@@ -345,7 +356,7 @@ function ProblemCard({
             className="gap-1.5"
           >
             <CheckCircle2 className="h-3.5 w-3.5" />
-            使用此题
+            {tr("使用此题", "Use this problem")}
           </Button>
           <Button
             size="sm"
@@ -354,7 +365,7 @@ function ProblemCard({
             className="gap-1.5"
           >
             {showHints ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-            {showHints ? "隐藏提示" : "查看提示"}
+            {showHints ? tr("隐藏提示", "Hide hints") : tr("查看提示", "Show hints")}
           </Button>
           <Button
             size="sm"
@@ -363,7 +374,7 @@ function ProblemCard({
             className="gap-1.5"
           >
             {showAnswer ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-            {showAnswer ? "隐藏答案" : "查看答案"}
+            {showAnswer ? tr("隐藏答案", "Hide answer") : tr("查看答案", "Show answer")}
           </Button>
           <Button
             size="sm"
@@ -373,14 +384,14 @@ function ProblemCard({
             className="gap-1.5"
           >
             <FileCode className="h-3.5 w-3.5" />
-            形式化
+            {tr("形式化", "Formalize")}
           </Button>
         </div>
 
         {/* Hints */}
         {showHints && (
           <div className="rounded-lg bg-primary/5 border border-primary/10 p-3 text-sm animate-slide-down">
-            <p className="text-xs font-semibold text-primary mb-2">提示</p>
+            <p className="text-xs font-semibold text-primary mb-2">{tr("提示", "Hints")}</p>
             <ol className="list-inside list-decimal space-y-1 text-sm text-card-foreground">
               {problem.hints.map((hint, i) => (
                 <li key={i}>
@@ -396,7 +407,7 @@ function ProblemCard({
           <div className="rounded-lg bg-success/5 border border-success/20 p-3 text-sm animate-slide-down">
             <p className="text-xs font-semibold text-success mb-2 flex items-center gap-1">
               <CheckCircle2 className="h-3 w-3" />
-              答案
+              {tr("答案", "Answer")}
             </p>
             <MathText text={problem.answer} />
           </div>

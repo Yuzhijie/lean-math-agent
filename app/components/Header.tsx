@@ -6,8 +6,10 @@ import { Button } from '@/components/ui/button';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { Crown, BookOpen, History, Network } from 'lucide-react';
+import { useI18n } from '@/lib/i18n';
 
 export function Header() {
+  const { tr } = useI18n();
   const { data: session } = useSession();
   const router = useRouter();
 
@@ -33,7 +35,7 @@ export function Header() {
                 className="text-slate-400 hover:text-white"
               >
                 <History className="h-4 w-4 mr-1" />
-                <span className="hidden md:inline">历史</span>
+                <span className="hidden md:inline">{tr('历史', 'History')}</span>
               </Button>
               <Button
                 variant="ghost"
@@ -42,7 +44,7 @@ export function Header() {
                 className="text-slate-400 hover:text-white"
               >
                 <Network className="h-4 w-4 mr-1" />
-                <span className="hidden md:inline">知识图谱</span>
+                <span className="hidden md:inline">{tr('知识图谱', 'Knowledge graph')}</span>
               </Button>
             </>
           )}
@@ -53,7 +55,7 @@ export function Header() {
             className="text-amber-500 hover:text-amber-400"
           >
             <Crown className="h-4 w-4 mr-1" />
-            <span className="hidden md:inline">订阅</span>
+            <span className="hidden md:inline">{tr('订阅', 'Subscription')}</span>
           </Button>
           <LocaleSwitcher />
           <AuthButton />

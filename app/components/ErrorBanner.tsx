@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
 import {
   AlertCircle,
@@ -27,6 +28,7 @@ export function ErrorBanner({
   onRetry,
   onDismiss,
 }: Props) {
+  const { tr } = useI18n();
   const [expanded, setExpanded] = useState(false);
 
   if (!error) return null;
@@ -34,7 +36,7 @@ export function ErrorBanner({
   const isAutoformalizeError = error === "autoformalize_failed";
   const Icon = isAutoformalizeError ? AlertTriangle : AlertCircle;
   const displayMessage = isAutoformalizeError
-    ? "自动形式化失败"
+    ? tr("自动形式化失败", "Autoformalization failed")
     : error;
 
   const hasDetails = detail || (validationResults && validationResults.length > 0);
@@ -86,7 +88,7 @@ export function ErrorBanner({
               ) : (
                 <ChevronDown className="h-3 w-3" />
               )}
-              详情
+              {tr("详情", "Details")}
             </Button>
           )}
           {onRetry && (
@@ -97,7 +99,7 @@ export function ErrorBanner({
               className="h-7 px-2 text-xs gap-1"
             >
               <RotateCcw className="h-3 w-3" />
-              重试
+              {tr("重试", "Retry")}
             </Button>
           )}
           {onDismiss && (
@@ -122,7 +124,7 @@ export function ErrorBanner({
           {validationResults && validationResults.length > 0 && (
             <div className="space-y-1.5">
               <p className="text-xs font-medium text-muted-foreground">
-                验证层级结果：
+                {tr("验证层级结果：", "Validation layer results:")}
               </p>
               {validationResults.map((v) => (
                 <div
@@ -137,7 +139,7 @@ export function ErrorBanner({
                     {v.pass ? "✓" : "✗"}
                   </span>
                   <span className="text-muted-foreground">
-                    第{v.layer}层：{v.detail}
+                    {tr(`第${v.layer}层：`, `Layer ${v.layer}: `)}{v.detail}
                   </span>
                 </div>
               ))}
