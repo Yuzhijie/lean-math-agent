@@ -1,0 +1,251 @@
+/**
+ * Importing questions into a bank through draft batches.
+ *
+ *   parseImport   file → questions (per format) → validation + duplicate
+ *                 checks → draft batch (status "draft"); the original file
+ *                 is kept as an asset of the bank
+ *   recheckBatch  after the user edits drafts: validate + check again
+ *   commitBatch   the user confirmed the rights → selected drafts become items
+ *
+ * Formats: json / jsonl, csv (tsv), xlsx, markdown / text, pdf (text layer only).
+ */
+import { lt } from "@/lib/llm/output-locale";
+import { addItems, BankError, getBank, getBatch, getCategory, listItems, putBatch, saveAsset } from "../store";
+import { draftItemSchema, IMPORT_FORMATS, type DraftItem, type ImportBatch, type ImportFormat, type Item } from "../types";
+import { checkDrafts, EMPTY_STEM, fieldsOf, isCheckIssue, reportOf, type WorkingDraft } from "./checks";
+import { clampStr, recordToFields, type ParsedQuestion } from "./fields";
+import { parsePdf, refineWithModel } from "./pdf";
+import { decodeText, previewTable, readRows, rowsToQuestions } from "./tabular";
+import { splitText } from "./text";
+
+export { EMPTY_STEM } from "./checks";
+
+/** Most drafts one batch may hold. */
+export const MAX_DRAFTS = 5000;
+
+const EXT_FORMAT: Record<string, ImportFormat> = {
+  json: "json",
+  jsonl: "jsonl",
+  ndjson: "jsonl",
+  csv: "csv",
+  tsv: "csv",
+  xlsx: "xlsx",
+  md: "markdown",
+  markdown: "markdown",
+  txt: "text",
+  text: "text",
+  pdf: "pdf",
+};
+
+const ASSET_EXT: Record<ImportFormat, string> = { json: "json", jsonl: "jsonl", csv: "csv", xlsx: "xlsx", markdown: "md", text: "txt", pdf: "pdf" };
+
+export function detectFormat(fileName: string, data: Buffer): ImportFormat {
+  const ext = /\.([A-Za-z0-9]+)$/.exec(fileName.trim())?.[1]?.toLowerCase();
+  if (ext && EXT_FORMAT[ext]) return EXT_FORMAT[ext];
+  if (ext === "xls" || ext === "doc" || ext === "docx") {
+    throw new BankError(lt(`暂不支持 .${ext} 文件，请另存为 .xlsx、.csv、.pdf 或文本`, `.${ext} files are not supported yet; save as .xlsx, .csv, .pdf or text`), 415);
+  }
+  if (data.subarray(0, 5).toString("latin1") === "%PDF-") return "pdf";
+  if (data[0] === 0x50 && data[1] === 0x4b && data[2] === 0x03 && data[3] === 0x04) return "xlsx";
+  const head = decodeText(data.subarray(0, 64 * 1024)).trimStart();
+  if (head.startsWith("[")) return "json";
+  if (head.startsWith("{")) {
+    const lines = head.split(/\r?\n/).filter((l) => l.trim());
+    return lines.length > 1 && lines.slice(0, 2).every((l) => l.trim().startsWith("{") && l.trim().endsWith("}")) ? "jsonl" : "json";
+  }
+  return /^#{1,6}\s/m.test(head) ? "markdown" : "text";
+}
+
+export async function previewColumns(data: Buffer, format: "csv" | "xlsx"): Promise<{ headers: string[]; suggested: Record<string, string>; sample: string[][] }> {
+  return previewTable(data, format);
+}
+
+// ── JSON ─────────────────────────────────────────────────────────────
+
+function jsonRecords(text: string): { records: unknown[]; bad: Array<{ line: number; text: string }> } {
+  const body = text.replace(/^﻿/, "").trim();
+  try {
+    const v = JSON.parse(body) as unknown;
+    if (Array.isArray(v)) return { records: v, bad: [] };
+    if (v && typeof v === "object") {
+      const o = v as Record<string, unknown>;
+      for (const k of ["items", "questions", "data", "records", "problems"]) if (Array.isArray(o[k])) return { records: o[k] as unknown[], bad: [] };
+      return { records: [v], bad: [] };
+    }
+    return { records: [v], bad: [] };
+  } catch {
+    // JSON Lines.
+    const records: unknown[] = [];
+    const bad: Array<{ line: number; text: string }> = [];
+    body.split(/\r?\n/).forEach((line, i) => {
+      const t = line.trim();
+      if (!t) return;
+      try {
+        records.push(JSON.parse(t.replace(/,$/, "")));
+      } catch {
+        bad.push({ line: i + 1, text: t });
+        records.push(Symbol.for("bad"));
+      }
+    });
+    return { records, bad };
+  }
+}
+
+function parseJson(data: Buffer): ParsedQuestion[] {
+  const parsed = jsonRecords(decodeText(data));
+  const bad = parsed.bad;
+  // Our own export starts with a bank header line ({kind: "bank", …}); it is not a question.
+  const records = parsed.records.filter((r) => !(r && typeof r === "object" && !Array.isArray(r) && (r as { kind?: unknown }).kind === "bank"));
+  let b = 0;
+  return records.map((rec, i) => {
+    if (typeof rec === "symbol") {
+      const line = bad[b++];
+      return {
+        fields: recordToFields({}).fields,
+        raw: clampStr(line.text, 40_000),
+        issues: [lt(`第 ${line.line} 行不是有效的 JSON`, `Line ${line.line} is not valid JSON`)],
+      };
+    }
+    if (typeof rec === "string") {
+      const { fields, issues } = recordToFields({ stem: rec });
+      return { fields, raw: rec, issues };
+    }
+    if (!rec || typeof rec !== "object" || Array.isArray(rec)) {
+      return { fields: recordToFields({}).fields, raw: clampStr(JSON.stringify(rec) ?? "", 40_000), issues: [lt(`第 ${i + 1} 条记录不是对象`, `Record ${i + 1} is not an object`)] };
+    }
+    const { fields, issues } = recordToFields(rec as Record<string, unknown>);
+    if (!fields.stem) issues.unshift(lt(`第 ${i + 1} 条记录没有题目字段（stem / question / 题目）`, `Record ${i + 1} has no question field (stem / question / 题目)`));
+    return { fields, raw: clampStr(JSON.stringify(rec, null, 2), 40_000), issues };
+  });
+}
+
+// ── Public API ───────────────────────────────────────────────────────
+
+export async function parseImport(args: {
+  owner: string;
+  bankId: string;
+  fileName: string;
+  data: Buffer;
+  format?: ImportFormat;
+  columnMap?: Record<string, string>;
+  useModel?: boolean;
+}): Promise<ImportBatch> {
+  const { owner, bankId, fileName, data } = args;
+  const bank = getBank(owner, bankId);
+  const format = args.format ?? detectFormat(fileName, data);
+  if (!IMPORT_FORMATS.includes(format)) throw new BankError(lt("不支持的文件格式", "Unsupported file format"), 415);
+  if (!data.length) throw new BankError(lt("文件是空的", "The file is empty"), 400);
+
+  let questions: ParsedQuestion[];
+  let columnMap: Record<string, string> | undefined;
+  switch (format) {
+    case "json":
+    case "jsonl":
+      questions = parseJson(data);
+      break;
+    case "csv":
+    case "xlsx": {
+      const rows = await readRows(data, format);
+      if (rows.length < 2) throw new BankError(lt("表格中没有数据行（第一行应是表头）", "The sheet has no data rows (the first row should be the headers)"), 422);
+      columnMap = args.columnMap ?? (await previewTable(data, format)).suggested;
+      questions = rowsToQuestions(rows, columnMap);
+      break;
+    }
+    case "markdown":
+    case "text":
+      questions = splitText(decodeText(data));
+      break;
+    case "pdf":
+      questions = await parsePdf(data);
+      if (args.useModel !== false && bank.allow_model && process.env.LLM_API_KEY && questions.length) questions = await refineWithModel(questions);
+      break;
+  }
+  if (!questions.length) throw new BankError(lt("文件中没有找到题目", "No questions were found in the file"), 422);
+  if (questions.length > MAX_DRAFTS) throw new BankError(lt(`一次最多导入 ${MAX_DRAFTS} 道题，请拆分文件`, `At most ${MAX_DRAFTS} questions per import; split the file`), 413);
+
+  const file = clampStr(fileName, 300);
+  const working: WorkingDraft[] = questions.map((q) => ({
+    fields: { ...q.fields, source: { ...q.fields.source, file } },
+    raw: q.raw,
+    issues: q.issues,
+  }));
+  const drafts = checkDrafts(working, listItems(owner, bankId));
+  const asset = saveAsset(owner, bankId, data, ASSET_EXT[format]);
+  return putBatch(owner, bankId, {
+    file_name: file,
+    format,
+    status: "draft",
+    rights_confirmed: false,
+    column_map: columnMap,
+    drafts,
+    assets: [asset],
+    report: reportOf(drafts),
+  });
+}
+
+const contentKey = (d: Partial<DraftItem>) => JSON.stringify([d.stem, d.type, d.options ?? [], d.answer ?? "", d.solution ?? ""]);
+
+/** Drafts ready for checking: parse issues are kept only for drafts whose content the user has not changed. */
+function toWorking(drafts: DraftItem[], stored: DraftItem[]): WorkingDraft[] {
+  const byId = new Map(stored.map((d) => [d.draft_id, d]));
+  return drafts.map((d) => {
+    const prev = byId.get(d.draft_id);
+    const unchanged = prev && contentKey(prev) === contentKey(d);
+    return {
+      draft_id: d.draft_id,
+      fields: fieldsOf(d),
+      raw: d.raw ?? prev?.raw ?? "",
+      issues: unchanged ? prev.issues.filter((x) => !isCheckIssue(x)) : [],
+      include: d.include,
+      prevStatus: prev?.status,
+    };
+  });
+}
+
+function draftBatch(owner: string, bankId: string, batchId: string): ImportBatch {
+  const batch = getBatch(owner, bankId, batchId);
+  if (batch.status !== "draft") throw new BankError(lt("这批导入已经提交或放弃，不能再修改", "This import batch was already committed or discarded"), 409);
+  return batch;
+}
+
+export function recheckBatch(owner: string, bankId: string, batchId: string, drafts?: DraftItem[]): ImportBatch {
+  const batch = draftBatch(owner, bankId, batchId);
+  let next: DraftItem[] = batch.drafts;
+  if (drafts) {
+    if (drafts.length > MAX_DRAFTS) throw new BankError(lt(`一次最多导入 ${MAX_DRAFTS} 道题`, `At most ${MAX_DRAFTS} questions per import`), 413);
+    next = drafts.map((d, i) => {
+      // Lenient: an edited draft with an emptied stem is kept (as an error) instead of rejecting the whole request.
+      const parsed = draftItemSchema.safeParse({ ...d, stem: d.stem?.trim() ? d.stem : EMPTY_STEM });
+      if (!parsed.success) throw new BankError(lt(`第 ${i + 1} 条草稿无效：${parsed.error.issues[0]?.path.join(".")}`, `Draft ${i + 1} is invalid: ${parsed.error.issues[0]?.path.join(".")}`), 400);
+      return parsed.data;
+    });
+  }
+  const checked = checkDrafts(toWorking(next, batch.drafts), listItems(owner, bankId));
+  return putBatch(owner, bankId, { ...batch, drafts: checked, report: reportOf(checked) });
+}
+
+export function commitBatch(owner: string, bankId: string, batchId: string, opts: { rightsConfirmed: boolean; categoryId?: string }): { batch: ImportBatch; items: Item[] } {
+  const batch = draftBatch(owner, bankId, batchId);
+  if (!opts.rightsConfirmed) {
+    throw new BankError(lt("请先确认你有权使用这些题目（版权或授权）", "Please confirm you have the right to use these questions (copyright or licence) first"), 400);
+  }
+  if (opts.categoryId) getCategory(owner, bankId, opts.categoryId);
+  // Check again: the bank may have changed since the batch was parsed.
+  const drafts = checkDrafts(toWorking(batch.drafts, batch.drafts), listItems(owner, bankId));
+  const chosen = drafts.filter((d) => d.include && d.status !== "error" && d.status !== "duplicate");
+  const items = chosen.length
+    ? addItems(
+        owner,
+        bankId,
+        chosen.map((d) => ({ fields: fieldsOf(d), origin: "imported" as const, category_ids: opts.categoryId ? [opts.categoryId] : [] })),
+      )
+    : [];
+  const saved = putBatch(owner, bankId, {
+    ...batch,
+    drafts,
+    status: "committed",
+    rights_confirmed: true,
+    report: { ...reportOf(drafts), committed: items.length },
+  });
+  return { batch: saved, items };
+}

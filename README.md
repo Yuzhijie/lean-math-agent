@@ -110,6 +110,19 @@ limits of stages 4–5 together. Every accepted proof is stored in proof memory.
 response and session carries `metrics`: LLM calls/tokens by role and model, an estimated cost
 (`LLM_PRICES`), Lean verifications by backend and wall time.
 
+### Question banks (试题库)
+
+`/bank` keeps each customer's own questions locally, per signed-in account (`.data/banks/`). Import
+PDF (text PDFs), JSON/JSONL, CSV, Excel or Markdown: the file becomes a draft batch you review and
+edit before committing, with duplicates flagged. Organise questions in categories — a manual group,
+a saved filter, or a style template that describes a type of question without source questions
+(e.g. ICAS-style) — then generate new questions of the same type. Each candidate is checked (format,
+an independent re-solve of the answer, similarity to the bank, fit to the type) and is added to the
+bank only when you adopt it. Export writes JSONL that imports back.
+
+Third-party papers (e.g. ICAS) may only be imported with the publisher's permission; the import
+wizard asks for that confirmation.
+
 ### Figures (图文并茂)
 
 Solutions to geometry and function problems come with a figure. The model only describes the figure

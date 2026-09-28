@@ -18,7 +18,8 @@ import { containsMath } from "@/lib/math-segments";
 import { SAMPLE_PROBLEM, useProofSession } from "./hooks/useProofSession";
 import { useProofActions } from "./hooks/useProofActions";
 import { useI18n } from "@/lib/i18n";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -45,7 +46,9 @@ import {
   History,
   Columns3,
   Pencil,
+  Library,
 } from "lucide-react";
+import Link from "next/link";
 
 export default function Home() {
   const { tr, locale } = useI18n();
@@ -117,6 +120,23 @@ export default function Home() {
     setInputHidden(true);
     setUsedFigure(figure ? { ...figure, text } : null);
   };
+
+  // "使用此题" from the question bank (/bank) arrives as ?problem=<text>.
+  const applyProblemFromBank = useProblemFromGenerator;
+  const problemParamHandled = useRef(false);
+  useEffect(() => {
+    if (problemParamHandled.current) return;
+    problemParamHandled.current = true;
+    const url = new URL(window.location.href);
+    const text = url.searchParams.get("problem");
+    if (!text?.trim()) return;
+    dispatch({ type: "SET_PROBLEM_TEXT", text });
+    applyProblemFromBank(text);
+    url.searchParams.delete("problem");
+    window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+    // Runs once on mount; the handler only needs the text.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Auto-select tab when session data changes (e.g., after loading history)
   const prevSessionId = useRef(state.sessionId);
@@ -199,6 +219,10 @@ export default function Home() {
                   <History className="h-3.5 w-3.5" />
                   <span className="hidden sm:inline">{tr("历史", "History")}</span>
                 </Button>
+                <Link href="/bank" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "gap-1.5")}>
+                  <Library className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">{tr("题库", "Bank")}</span>
+                </Link>
                 <Button
                   variant="ghost"
                   size="sm"

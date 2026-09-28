@@ -48,6 +48,7 @@ app/
     PricingCards.tsx                # Subscription plan cards
     ProblemGenerator.tsx            # Generate problems by grade/difficulty/domain
     StepPane.tsx                    # Proof step list with status badges
+  bank/page.tsx                     # Question bank page: banks + category tree, item list/editor, import wizard, generate panel
   auth/
     signin/page.tsx                 # Sign-in page (credentials + OAuth)
     signout/page.tsx                # Sign-out confirmation page
@@ -59,6 +60,7 @@ app/
     auth/[...nextauth]/route.ts     # NextAuth handler
     autoformalize/route.ts          # NL → Lean theorem (5-layer validation)
     enumerate/route.ts              # Enumerate proof methods
+    banks/…                         # Question banks: CRUD, imports (draft → review → commit), items, categories, profile, generate, generations (adopt), export, assets
     figure/route.ts                 # Figure for a session's problem (generate → solve coordinates → check claims; cached on the session)
     evaluate/route.ts               # Multi-agent method scoring
     generate-problem/route.ts       # Problem generation by params
@@ -104,6 +106,16 @@ lib/
     generate.ts                     # LLM → FigureSpec → solve/check → one repair round; keyword pre-filter
     logic.ts                        # Logic-puzzle diagrams: grid (matching), Venn (2–3 sets), ordering (row/circle), tree — exhaustive solve, uniqueness + answer checks
     logic-render.ts                 # SVG for logic diagrams (✓/✗ grid, Venn regions, seats, tree + leaf list)
+  bank/                             # Customer question banks (试题库), stored per account under .data/banks/<owner>/<bank>/
+    types.ts                        # Zod types: Bank, Item, Category (manual | filter | style template), ImportBatch/DraftItem, TemplateProfile, Generation/Candidate
+    store.ts                        # Storage: one SQLite file per bank (better-sqlite3), JSONL fallback; owner isolation; BankError
+    similarity.ts                   # Stem normalisation, fingerprints, BM25 near-duplicate search
+    query.ts                        # Item filters, category membership
+    vocab.ts                        # Built-in knowledge-point vocabularies (Australian Curriculum, 课标) + bank's own
+    import/                         # Importers → draft batch: pdf.ts (unpdf text + question splitter + optional model tidy with verbatim check), tabular.ts (CSV/Excel column mapping), text.ts (Markdown/TXT), fields.ts, checks.ts (duplicates, missing fields)
+    profile.ts                      # Template profile of a class (programmatic + model summary), exemplar selection
+    generate.ts                     # Same-type generation (同类创编) from a category, picked items or style template; checks: format, independent answer, novelty vs bank, fit
+    http.ts                         # bankRoute(): owner from NextAuth session (else "local"), request language, error mapping
   pipeline/
     theorem-pipeline.ts             # Theorem pipeline shared by /api/solve and /api/solve-stream
   prover/
@@ -218,6 +230,7 @@ components/ui/                      # 16 shadcn/ui primitives (+avatar, dropdown
 - **Budget-aware LLM calls**: `expectedLatencyMs(role)` (EMA of observed call latencies, timeouts included) gates every repair round, goal-search expansion and sketch round — a call that cannot finish in the remaining budget is skipped rather than aborted (aborted calls still bill their tokens); tactic-step calls use `reasoningEffort: "low"` on reasoning models
 - **Retrieval before generation**: `buildProverContext` (premises for the initial goal + verified proofs of similar theorems) feeds the whole-proof, sketch and goal-search prompts; goal search re-retrieves per node; unknown identifiers get "similar declarations" from the local index
 - **Figures are computed, not drawn by the model**: the model writes a `FigureSpec` (what to construct and which conditions hold); `lib/figure` computes coordinates, checks every condition numerically and renders SVG. A figure whose conditions fail is shown as a sketch ("示意图"), never as accurate; figure checks are separate from Lean verification. Logic puzzles use `FigureSpec.logic` (grid/venn/ordering/tree): the program solves the puzzle exhaustively and checks uniqueness and the stated answer
+- **Question banks**: imports never go straight in — every file becomes a draft batch that is reviewed (with a rights confirmation) before commit; the model only restructures PDF text and anything it rewrites is rejected in favour of the original. Generated questions are candidates with four checks (format, independent re-solve, novelty vs the bank, fit) and enter the bank only when adopted by hand, marked origin "generated"
 - **Formalization reliability**: several sampled statements vote by elaborated signature (α-normalised); the winner must survive `decide`/`plausible` counterexample search (layer 6) before any LLM validation layer or proof search is spent on it
 - **Roles + metrics**: `chatJson`/`sampleText` take `role: "prover" | "planner"`; endpoint chains come from `LLM_PROVER_*` / `LLM_PLANNER_*`; every solve runs in `withUsageScope`, and `verifyLeanSource` records itself, so responses/sessions carry `metrics` (calls, tokens, cost, verifications, wall time)
 - **Sorry degradation**: unprovable steps get `sorry` annotations, pipeline continues
