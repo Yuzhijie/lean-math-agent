@@ -114,7 +114,9 @@ response and session carries `metrics`: LLM calls/tokens by role and model, an e
 
 `/bank` keeps each customer's own questions locally, per signed-in account (`.data/banks/`). Import
 PDF (text PDFs), JSON/JSONL, CSV, Excel or Markdown: the file becomes a draft batch you review and
-edit before committing, with duplicates flagged. Organise questions in categories — a manual group,
+edit before committing, with duplicates flagged. The model decides each question's place in the category
+tree (e.g. Number › Fractions), its grade, knowledge points and difficulty; missing categories are created
+on commit, and "AI classify" does the same for questions already in a bank. Organise questions in categories — a manual group,
 a saved filter, or a style template that describes a type of question without source questions
 (e.g. ICAS-style) — then generate new questions of the same type. Each candidate is checked (format,
 an independent re-solve of the answer, similarity to the bank, fit to the type) and is added to the

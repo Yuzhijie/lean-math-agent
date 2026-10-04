@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronLeft, ChevronRight, FolderInput, Palette, Search, SearchX, Sparkles, Trash2, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, FolderInput, FolderTree, Palette, Search, SearchX, Sparkles, Trash2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -52,7 +52,7 @@ export function ItemList(props: Props) {
   const { bankId, detail, categories, activeCategory, filters, onFiltersChange, result, loading, page, selection, onSelectionChange } = props;
   const [assignTo, setAssignTo] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [busy, setBusy] = useState<"assign" | "delete" | null>(null);
+  const [busy, setBusy] = useState<"assign" | "delete" | "classify" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -95,6 +95,31 @@ export function ItemList(props: Props) {
     } catch (e) {
       setError(errMsg(e, tr("操作失败", "Action failed")));
       props.onChanged();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** Let the model decide catalogue place, grade, knowledge points and difficulty for the selected questions. */
+  async function classifySelected() {
+    setBusy("classify");
+    setError(null);
+    setNotice(null);
+    try {
+      const r = await api<{ classified: number; failed: number; categories_created: number }>(bankUrl(bankId, "/classify"), {
+        method: "POST",
+        json: { item_ids: selected.map((it) => it.id) },
+      });
+      setNotice(
+        tr(
+          `模型已分类 ${r.classified} 道题${r.categories_created ? `，新建 ${r.categories_created} 个分类` : ""}${r.failed ? `；${r.failed} 道未能分类` : ""}`,
+          `The model classified ${r.classified} question(s)${r.categories_created ? ` and created ${r.categories_created} categories` : ""}${r.failed ? `; ${r.failed} could not be classified` : ""}`,
+        ),
+      );
+      onSelectionChange(new Map());
+      props.onChanged();
+    } catch (e) {
+      setError(errMsg(e, tr("模型分类失败", "Model classification failed")));
     } finally {
       setBusy(null);
     }
@@ -213,7 +238,7 @@ export function ItemList(props: Props) {
                   <option value="">{tr("加入分类…", "Assign to…")}</option>
                   {manualCats.map((c) => (
                     <option key={c.id} value={c.id}>
-                      {c.name}
+                      {pathName(c, categories)}
                     </option>
                   ))}
                 </NativeSelect>
@@ -222,6 +247,19 @@ export function ItemList(props: Props) {
                   {tr("加入", "Assign")}
                 </Button>
               </div>
+            )}
+            {detail.bank.allow_model && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 gap-1"
+                loading={busy === "classify"}
+                title={tr("由模型决定所选题目的目录、年级、知识点和难度（已有的年级、难度、知识点保留）", "Let the model decide category, grade, knowledge points and difficulty for the selected questions (existing grade, difficulty and knowledge points are kept)")}
+                onClick={() => void classifySelected()}
+              >
+                <FolderTree className="h-3.5 w-3.5" />
+                {tr("AI 分类", "AI classify")}
+              </Button>
             )}
             <Button
               size="sm"
@@ -361,4 +399,17 @@ export function ItemList(props: Props) {
       </Modal>
     </div>
   );
+}
+
+/** "Parent › Child" name of a category, so same-named categories under different parents can be told apart. */
+function pathName(c: { name: string; parent_id: string | null }, all: Array<{ id: string; name: string; parent_id: string | null }>): string {
+  const names = [c.name];
+  let parent = c.parent_id;
+  for (let i = 0; parent && i < 5; i++) {
+    const p = all.find((x) => x.id === parent);
+    if (!p) break;
+    names.unshift(p.name);
+    parent = p.parent_id;
+  }
+  return names.join(" › ");
 }

@@ -10,7 +10,8 @@
  * Formats: json / jsonl, csv (tsv), xlsx, markdown / text, pdf (text layer only).
  */
 import { lt } from "@/lib/llm/output-locale";
-import { addItems, BankError, getBank, getBatch, getCategory, listItems, putBatch, saveAsset } from "../store";
+import { addItems, BankError, ensureCategoryPath, getBank, getBatch, getCategory, listCategories, listItems, putBatch, saveAsset } from "../store";
+import { applyClassification, classifyFailedIssue, classifyQuestions } from "../classify";
 import { draftItemSchema, IMPORT_FORMATS, type DraftItem, type ImportBatch, type ImportFormat, type Item } from "../types";
 import { checkDrafts, EMPTY_STEM, fieldsOf, isCheckIssue, reportOf, type WorkingDraft } from "./checks";
 import { clampStr, recordToFields, type ParsedQuestion } from "./fields";
@@ -129,6 +130,8 @@ export async function parseImport(args: {
   format?: ImportFormat;
   columnMap?: Record<string, string>;
   useModel?: boolean;
+  /** Let the model decide catalogue place, grade, knowledge points and difficulty (default true). */
+  classify?: boolean;
 }): Promise<ImportBatch> {
   const { owner, bankId, fileName, data } = args;
   const bank = getBank(owner, bankId);
@@ -162,6 +165,19 @@ export async function parseImport(args: {
   }
   if (!questions.length) throw new BankError(lt("文件中没有找到题目", "No questions were found in the file"), 422);
   if (questions.length > MAX_DRAFTS) throw new BankError(lt(`一次最多导入 ${MAX_DRAFTS} 道题，请拆分文件`, `At most ${MAX_DRAFTS} questions per import; split the file`), 413);
+
+  // The model decides the catalogue place, grade, knowledge points and difficulty (kept editable in review).
+  if (args.classify !== false && bank.allow_model && process.env.LLM_API_KEY) {
+    try {
+      const result = await classifyQuestions(
+        questions.map((q) => q.fields),
+        { bank, categories: listCategories(owner, bankId) },
+      );
+      questions = questions.map((q, i) => (result[i] ? { ...q, fields: applyClassification(q.fields, result[i]) } : { ...q, issues: [...q.issues, classifyFailedIssue()] }));
+    } catch {
+      questions = questions.map((q) => ({ ...q, issues: [...q.issues, classifyFailedIssue()] }));
+    }
+  }
 
   const file = clampStr(fileName, 300);
   const working: WorkingDraft[] = questions.map((q) => ({
@@ -237,7 +253,13 @@ export function commitBatch(owner: string, bankId: string, batchId: string, opts
     ? addItems(
         owner,
         bankId,
-        chosen.map((d) => ({ fields: fieldsOf(d), origin: "imported" as const, category_ids: opts.categoryId ? [opts.categoryId] : [] })),
+        chosen.map((d) => {
+          const { category_path, ...fields } = fieldsOf(d);
+          // The model's (or the reviewer's) catalogue place: create the categories if missing.
+          const leaf = category_path?.length ? ensureCategoryPath(owner, bankId, category_path) : undefined;
+          const category_ids = [...new Set([opts.categoryId, leaf].filter((x): x is string => !!x))];
+          return { fields, origin: "imported" as const, category_ids };
+        }),
       )
     : [];
   const saved = putBatch(owner, bankId, {

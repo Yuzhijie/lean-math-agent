@@ -16,7 +16,8 @@ export const GET = bankRoute<P>(async ({ owner, params }) => ({
 
 /**
  * Upload a file (multipart field "file") → draft batch for review.
- * Optional fields: format, column_map (JSON), use_model ("false" to skip the model step).
+ * Optional fields: format, column_map (JSON), use_model ("false" to skip the model tidy-up of PDF text),
+ * classify ("false" to skip model classification: catalogue place, grade, knowledge points, difficulty).
  * ?preview=columns → only the CSV/Excel header preview and suggested column mapping.
  */
 export const POST = bankRoute<P>(async ({ req, owner, params }) => {
@@ -48,6 +49,6 @@ export const POST = bankRoute<P>(async ({ req, owner, params }) => {
       throw new BankError(lt("column_map 不是有效的 JSON", "column_map is not valid JSON"), 400);
     }
   }
-  const batch = await parseImport({ owner, bankId: params.id, fileName: file.name, data, format, columnMap, useModel: form.get("use_model") !== "false" });
+  const batch = await parseImport({ owner, bankId: params.id, fileName: file.name, data, format, columnMap, useModel: form.get("use_model") !== "false", classify: form.get("classify") !== "false" });
   return { batch };
 });

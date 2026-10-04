@@ -24,7 +24,7 @@ import {
   type ImportBatch,
   type QuestionType,
 } from "./api";
-import { CheckboxField, ErrorNote, FieldLabel, NativeSelect, splitList, statusLabel, statusVariant, typeLabel, useElapsed } from "./ui";
+import { CheckboxField, ClassificationLine, ErrorNote, FieldLabel, NativeSelect, splitList, statusLabel, statusVariant, typeLabel, useElapsed } from "./ui";
 
 const ACCEPT = ".pdf,.json,.jsonl,.csv,.xlsx,.md,.txt";
 const MAP_FIELDS = ["stem", "type", "options", "answer", "solution", "grade", "difficulty", "knowledge_points", "tags", "label"] as const;
@@ -51,6 +51,8 @@ export function ImportWizard({ bank, categories, open, onOpenChange, resumeBatch
   const [step, setStep] = useState<Step>(1);
   const [file, setFile] = useState<File | null>(null);
   const [useModel, setUseModel] = useState(bank.allow_model);
+  // The model decides catalogue place, grade, knowledge points and difficulty (editable in review).
+  const [classify, setClassify] = useState(bank.allow_model);
   const [preview, setPreview] = useState<ColumnPreview | null>(null);
   const [columnMap, setColumnMap] = useState<Record<string, string>>({});
   const [batch, setBatch] = useState<ImportBatch | null>(null);
@@ -124,6 +126,7 @@ export function ImportWizard({ bank, categories, open, onOpenChange, resumeBatch
     const fd = new FormData();
     fd.append("file", file);
     if (!useModel || !bank.allow_model) fd.append("use_model", "false");
+    if (!classify || !bank.allow_model) fd.append("classify", "false");
     if (preview) {
       const cm = Object.fromEntries(Object.entries(columnMap).filter(([, f]) => f && f !== "ignore"));
       fd.append("column_map", JSON.stringify(cm));
@@ -289,7 +292,19 @@ export function ImportWizard({ bank, categories, open, onOpenChange, resumeBatch
               >
                 {tr("用模型整理 PDF", "Use the model to tidy PDF questions")}
               </CheckboxField>
-              {busy === "upload" && <Progress elapsed={elapsed} slow={pdfTidy && useModel && bank.allow_model} />}
+              <CheckboxField
+                checked={classify && bank.allow_model}
+                onChange={setClassify}
+                disabled={!bank.allow_model}
+                hint={
+                  bank.allow_model
+                    ? tr("模型为每道题确定目录位置（如“数与代数 › 分数”）、年级、知识点和难度；缺少的分类在提交时自动创建，审核时可修改。", "The model decides each question's place in the catalogue (e.g. Number › Fractions), grade, knowledge points and difficulty; missing categories are created on commit, and you can change everything in review.")
+                    : tr("此题库不允许发送给模型。", "This bank does not allow sending content to the model.")
+                }
+              >
+                {tr("由模型决定目录、分类和难度", "Let the model decide category, classification and difficulty")}
+              </CheckboxField>
+              {busy === "upload" && <Progress elapsed={elapsed} slow={((pdfTidy && useModel) || classify) && bank.allow_model} />}
             </div>
           )}
 
@@ -388,6 +403,7 @@ export function ImportWizard({ bank, categories, open, onOpenChange, resumeBatch
                           <div className={cn("break-words text-sm leading-relaxed", !open && "line-clamp-2")}>
                             <MathText text={d.stem} />
                           </div>
+                          <ClassificationLine fields={d} />
                           {d.issues.length > 0 && (
                             <ul className="space-y-0.5 text-xs text-warning">
                               {d.issues.map((x, i) => (
@@ -664,6 +680,24 @@ function DraftEditor({ draft, onChange }: { draft: DraftItem; onChange: (p: Part
         <div className="space-y-1">
           <FieldLabel>{tr("答案", "Answer")}</FieldLabel>
           <Input value={draft.answer ?? ""} onChange={(e) => onChange({ answer: e.target.value })} className="h-8 text-sm" />
+        </div>
+        <div className="grid grid-cols-[2fr_1fr] gap-2">
+          <div className="space-y-1">
+            <FieldLabel>{tr("目录（用 > 分隔层级）", "Category (levels separated by >)")}</FieldLabel>
+            <Input
+              defaultValue={(draft.category_path ?? []).join(" > ")}
+              placeholder={tr("如：数与代数 > 分数", "e.g. Number > Fractions")}
+              onBlur={(e) => {
+                const next = e.target.value.split(/\s*[>›/]\s*/).map((x) => x.trim()).filter(Boolean).slice(0, 4);
+                if (next.join("\n") !== (draft.category_path ?? []).join("\n")) onChange({ category_path: next.length ? next : undefined });
+              }}
+              className="h-8 text-sm"
+            />
+          </div>
+          <div className="space-y-1">
+            <FieldLabel>{tr("年级", "Grade")}</FieldLabel>
+            <Input value={draft.grade ?? ""} onChange={(e) => onChange({ grade: e.target.value || undefined })} className="h-8 text-sm" />
+          </div>
         </div>
         <div className="space-y-1">
           <FieldLabel>{tr("知识点（逗号分隔）", "Knowledge points (comma-separated)")}</FieldLabel>

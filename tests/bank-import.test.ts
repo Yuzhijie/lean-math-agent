@@ -474,7 +474,7 @@ describe("PDF", () => {
         );
       });
       vi.stubGlobal("fetch", fetchMock);
-      const batch = await parseImport({ owner: OWNER, bankId: newBank(), fileName: "paper.pdf", data: buildPdf(PDF_PAGES) });
+      const batch = await parseImport({ owner: OWNER, bankId: newBank(), fileName: "paper.pdf", data: buildPdf(PDF_PAGES), classify: false });
       expect(fetchMock).toHaveBeenCalledTimes(1);
       const d = batch.drafts;
       expect(d[0]).toMatchObject({ stem: "Which number is a multiple of 7?", status: "ok" });
@@ -489,7 +489,7 @@ describe("PDF", () => {
 
     it("falls back to the heuristics when the model call fails", async () => {
       vi.stubGlobal("fetch", vi.fn(async () => new Response("boom", { status: 400 })));
-      const batch = await parseImport({ owner: OWNER, bankId: newBank(), fileName: "paper.pdf", data: buildPdf(PDF_PAGES) });
+      const batch = await parseImport({ owner: OWNER, bankId: newBank(), fileName: "paper.pdf", data: buildPdf(PDF_PAGES), classify: false });
       expect(batch.drafts).toHaveLength(3);
       expect(batch.drafts[0].options).toEqual(["12", "21", "25", "30"]);
       expect(batch.drafts.every((x) => x.status === "needs_review" && x.issues.some((i) => /模型整理失败/.test(i)))).toBe(true);

@@ -45,6 +45,13 @@ export const itemFieldsSchema = z.object({
   images: z.array(assetRefSchema).max(20).default([]),
   source: itemSourceSchema.optional(),
   language: z.enum(["zh", "en"]).optional(),
+  /** Set when the model decided the classification (grade, knowledge points, difficulty, catalogue place). */
+  classified: z.object({ by: z.literal("model"), reason: z.string().max(300).optional() }).optional(),
+  /**
+   * Drafts only: place in the category tree, top level first (e.g. ["Number", "Fractions"]).
+   * The categories are created on commit and the item is filed under the last one.
+   */
+  category_path: z.array(z.string().min(1).max(100)).min(1).max(4).optional(),
 });
 export type ItemFields = z.infer<typeof itemFieldsSchema>;
 

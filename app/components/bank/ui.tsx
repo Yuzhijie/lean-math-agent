@@ -2,13 +2,13 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { AlertCircle, ChevronDown, ChevronRight, Plus, X } from "lucide-react";
+import { AlertCircle, ChevronDown, ChevronRight, FolderTree, Plus, Sparkles, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
-import type { DraftItem, Item, QuestionType } from "./api";
+import type { DraftItem, Item, ItemFields, QuestionType } from "./api";
 
 export type Tr = (zh: string, en: string) => string;
 
@@ -332,4 +332,45 @@ export function useElapsed(since: number | null): number {
     return () => clearInterval(t);
   }, [since]);
   return since ? Math.max(0, Math.floor((now - since) / 1000)) : 0;
+}
+
+// ── Classification ──────────────────────────────────────────────────
+
+/**
+ * One line with a question's classification: catalogue place, grade,
+ * difficulty, knowledge points; an "AI" badge (with the model's reason on
+ * hover) when the model decided it.
+ */
+export function ClassificationLine({ fields, path }: { fields: Partial<ItemFields>; path?: string[] }) {
+  const { tr } = useI18n();
+  const catPath = path ?? fields.category_path;
+  const kp = fields.knowledge_points ?? [];
+  if (!catPath?.length && !fields.grade && !fields.difficulty && !kp.length && !fields.classified) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+      {fields.classified?.by === "model" && (
+        <span
+          className="inline-flex items-center gap-0.5 rounded border border-primary/40 bg-primary/10 px-1 py-px text-[10px] font-medium text-primary"
+          title={fields.classified.reason ? tr(`模型分类：${fields.classified.reason}`, `Classified by the model: ${fields.classified.reason}`) : tr("由模型分类", "Classified by the model")}
+        >
+          <Sparkles className="h-3 w-3" />
+          AI
+        </span>
+      )}
+      {catPath?.length ? (
+        <span className="inline-flex items-center gap-1 text-foreground/80">
+          <FolderTree className="h-3 w-3" />
+          {catPath.join(" › ")}
+        </span>
+      ) : null}
+      {fields.grade && <span>· {fields.grade}</span>}
+      {fields.difficulty ? (
+        <span className="text-warning" title={tr(`难度 ${fields.difficulty}/5`, `Difficulty ${fields.difficulty}/5`)}>
+          · {"★".repeat(fields.difficulty)}
+          <span className="opacity-30">{"★".repeat(5 - fields.difficulty)}</span>
+        </span>
+      ) : null}
+      {kp.length > 0 && <span>· {kp.join(", ")}</span>}
+    </div>
+  );
 }

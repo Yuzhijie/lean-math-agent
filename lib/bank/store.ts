@@ -287,6 +287,13 @@ export function getItem(owner: string, bankId: string, itemId: string): Item {
   return it;
 }
 
+/** category_path only applies to drafts (it becomes category_ids on commit). */
+function withoutDraftOnly<T extends { category_path?: unknown }>(f: T): Omit<T, "category_path"> {
+  const { category_path: _drop, ...rest } = f;
+  void _drop;
+  return rest;
+}
+
 export function addItems(
   owner: string,
   bankId: string,
@@ -297,7 +304,7 @@ export function addItems(
   const t = now();
   const out = entries.map((e, i) =>
     d.put("item", {
-      ...e.fields,
+      ...withoutDraftOnly(e.fields),
       id: newId(),
       bank_id: bankId,
       category_ids: e.category_ids ?? [],
@@ -315,7 +322,7 @@ export function addItems(
 
 export function updateItem(owner: string, bankId: string, itemId: string, patch: Partial<ItemFields> & { category_ids?: string[] }): Item {
   const it = getItem(owner, bankId, itemId);
-  const next = { ...it, ...patch, id: it.id, bank_id: it.bank_id, updated_at: now() };
+  const next = withoutDraftOnly({ ...it, ...patch, id: it.id, bank_id: it.bank_id, updated_at: now() });
   next.fingerprint = fingerprint(next.stem);
   const saved = db(owner, bankId).put("item", next);
   touch(owner, bankId);
@@ -350,6 +357,30 @@ export function putCategory(owner: string, bankId: string, fields: Omit<Category
   if (fields.parent_id && !d.get("category", fields.parent_id)) throw new BankError("parent category not found", 400);
   const t = now();
   return d.put("category", { ...prev, ...fields, id: prev?.id ?? newId(), bank_id: bankId, created_at: prev?.created_at ?? t, updated_at: t });
+}
+
+/**
+ * Find or create the manual categories along a path (top level first) and
+ * return the id of the last one. Names match case-insensitively among
+ * siblings, so the same path always lands in the same category.
+ */
+export function ensureCategoryPath(owner: string, bankId: string, path: string[]): string | undefined {
+  const names = path.map((n) => n.trim()).filter(Boolean).slice(0, 4);
+  if (!names.length) return undefined;
+  const key = (s: string) => s.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+  let parent: string | null = null;
+  let all = listCategories(owner, bankId);
+  for (const name of names) {
+    const found = all.find((c) => c.kind === "manual" && (c.parent_id ?? null) === parent && key(c.name) === key(name));
+    if (found) {
+      parent = found.id;
+      continue;
+    }
+    const created = putCategory(owner, bankId, { name: name.slice(0, 100), parent_id: parent, kind: "manual" });
+    all = [...all, created];
+    parent = created.id;
+  }
+  return parent ?? undefined;
 }
 
 export function deleteCategory(owner: string, bankId: string, categoryId: string) {

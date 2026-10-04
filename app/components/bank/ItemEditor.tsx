@@ -147,6 +147,13 @@ export function ItemEditor({ bankId, item, detail, categories, onSaved, onDelete
         </div>
       </div>
 
+      {item.classified?.by === "model" && (
+        <p className="rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1.5 text-xs text-muted-foreground">
+          <span className="font-medium text-primary">{tr("由模型分类", "Classified by the model")}</span>
+          {item.classified.reason ? tr(`：${item.classified.reason}`, `: ${item.classified.reason}`) : ""}
+          {tr("。修改后以你的设置为准。", ". Your edits take precedence.")}
+        </p>
+      )}
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5">
           <FieldLabel>{tr("题型", "Type")}</FieldLabel>
