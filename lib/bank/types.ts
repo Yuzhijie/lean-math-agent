@@ -214,6 +214,15 @@ export const templateRefSchema = z.object({
   category_id: id.optional(),
   item_ids: z.array(id).max(10).optional(),
   style: styleTemplateSchema.optional(),
+  /** Level / difficulty / topic chosen in the problem generator (lib/bank/select.ts). */
+  selection: z
+    .object({
+      grade: z.string().max(40).optional(),
+      difficulty: z.number().int().min(1).max(5).optional(),
+      category_id: id.optional(),
+      knowledge_point: z.string().max(80).optional(),
+    })
+    .optional(),
 });
 export type TemplateRef = z.infer<typeof templateRefSchema>;
 
@@ -224,6 +233,10 @@ export const generationSchema = z.object({
   template_label: z.string().max(200),
   mode: z.enum(["same_type"]),
   requested: z.number().int(),
+  /** Note shown with the results, e.g. which selection criteria were relaxed. */
+  note: z.string().max(500).optional(),
+  /** Number of bank questions that served as the template class. */
+  matched: z.number().int().optional(),
   candidates: z.array(candidateSchema),
   created_at: ts,
 });

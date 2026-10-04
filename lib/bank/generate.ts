@@ -20,6 +20,7 @@ import { extractArithmetic, verifyAnswer } from "../llm/answer-verifier";
 import type { GeneratedProblem } from "../types";
 import { describeItem, detectLanguage, getProfile, inBankLanguage, LETTERS, pickExemplars, styleProfile, typeName, usesFigure, deriveProfile } from "./profile";
 import { categoryMembers, itemsHash } from "./query";
+import { relaxationNote, selectTemplateItems } from "./select";
 import { StemIndex, TOO_CLOSE } from "./similarity";
 import { addItems, BankError, getBank, getCategory, getGeneration, getItem, listCategories, listItems, putGeneration } from "./store";
 import { QUESTION_TYPES, type Candidate, type Check, type Generation, type Item, type QuestionType, type TemplateProfile, type TemplateRef } from "./types";
@@ -34,8 +35,32 @@ const newId = () => randomUUID().replace(/-/g, "").slice(0, 20);
 
 // ── Template resolution ─────────────────────────────────────────────
 
-export async function resolveTemplate(owner: string, bankId: string, ref: TemplateRef): Promise<{ label: string; profile: TemplateProfile; exemplars: Item[] }> {
+export async function resolveTemplate(
+  owner: string,
+  bankId: string,
+  ref: TemplateRef,
+): Promise<{ label: string; profile: TemplateProfile; exemplars: Item[]; note?: string; matched?: number }> {
   const bank = getBank(owner, bankId);
+  if (ref.selection) {
+    // Level / difficulty / topic from the problem generator: matching bank questions are the template.
+    const sel = ref.selection;
+    const categories = listCategories(owner, bankId);
+    if (sel.category_id) getCategory(owner, bankId, sel.category_id);
+    const { items, relaxed, label } = selectTemplateItems(listItems(owner, bankId), categories, sel);
+    if (!items.length) {
+      throw new BankError(lt(`题库中没有“${label}”的题目，请换一个主题或使用内置出题`, `The bank has no questions for "${label}"; choose another topic or use built-in generation`), 404);
+    }
+    const body = await deriveProfile(items, { vocab: vocabFor(bank), model: bank.allow_model, bank });
+    // New questions target what was chosen, even when the templates had to be widened.
+    const profile: TemplateProfile = {
+      ...body,
+      grade: sel.grade ?? body.grade,
+      difficulty_range: sel.difficulty ? [sel.difficulty, sel.difficulty] : body.difficulty_range,
+      items_hash: itemsHash(items),
+      computed_at: Date.now(),
+    };
+    return { label, profile, exemplars: pickExemplars(items, EXEMPLARS), note: relaxationNote(sel, relaxed, items.length), matched: items.length };
+  }
   if (ref.category_id) {
     const category = getCategory(owner, bankId, ref.category_id);
     const profile = await getProfile(owner, bankId, category.id);
@@ -335,7 +360,7 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
   if (!bank.allow_model) throw new BankError(lt("该题库不允许将内容发送给模型服务", "this bank does not allow sending its content to the model service"), 403);
   const count = Math.min(MAX_COUNT, Math.max(1, Math.floor(Number(args.count) || 1)));
   const ask = Math.ceil(count * 1.5);
-  const { label, profile, exemplars } = await resolveTemplate(owner, bankId, template);
+  const { label, profile, exemplars, note, matched } = await resolveTemplate(owner, bankId, template);
   const inLang = <T>(fn: () => Promise<T>) => inBankLanguage(bank, fn);
 
   // 1. Write candidates.
@@ -405,7 +430,7 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
   // 4. Passed first (at most `count`), then the failed ones so the UI can show why.
   const passed = candidates.filter((c) => c.passed).slice(0, count);
   const failed = candidates.filter((c) => !c.passed);
-  return putGeneration(owner, bankId, { template, template_label: clip(label, 200), mode: "same_type", requested: count, candidates: [...passed, ...failed] });
+  return putGeneration(owner, bankId, { template, template_label: clip(label, 200), mode: "same_type", requested: count, note, matched, candidates: [...passed, ...failed] });
 }
 
 // ── Adoption ────────────────────────────────────────────────────────
@@ -417,7 +442,9 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
  */
 export function adoptCandidates(owner: string, bankId: string, generationId: string, candidateIds: string[], opts?: { categoryId?: string }): Item[] {
   const g = getGeneration(owner, bankId, generationId);
-  if (opts?.categoryId) getCategory(owner, bankId, opts.categoryId);
+  // Only manual categories hold assigned questions (filters and style templates do not).
+  const target = opts?.categoryId ? getCategory(owner, bankId, opts.categoryId) : undefined;
+  const categoryIds = target && target.kind === "manual" ? [target.id] : [];
   const byId = new Map(g.candidates.map((c) => [c.id, c]));
   const picked: Candidate[] = [];
   for (const id of new Set(candidateIds)) {
@@ -432,7 +459,7 @@ export function adoptCandidates(owner: string, bankId: string, generationId: str
     picked.map((c) => ({
       origin: "generated" as const,
       generated_from: { generation_id: g.id, template_label: g.template_label },
-      category_ids: opts?.categoryId ? [opts.categoryId] : [],
+      category_ids: categoryIds,
       fields: {
         stem: clip(c.stem, 20_000),
         type: c.type,

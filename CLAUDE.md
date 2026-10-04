@@ -46,7 +46,8 @@ app/
     MethodDetail.tsx                # Method inspiration + pros/cons
     MethodList.tsx                  # Scrollable method list with confidence
     PricingCards.tsx                # Subscription plan cards
-    ProblemGenerator.tsx            # Generate problems by grade/difficulty/domain
+    ProblemGenerator.tsx            # Problem generator: method 1 (default when a bank has questions) = local bank as template — Level/Difficulty/Topic pick bank questions sent to the model as the template, results with checks + "Add to bank"; method 2 = built-in by grade/difficulty/domain
+    BankTemplateControls.tsx        # Level / Difficulty / Topic pickers from the bank (template-options), live count of matching template questions
     StepPane.tsx                    # Proof step list with status badges
   bank/page.tsx                     # Question bank page: banks + category tree, item list/editor, import wizard, generate panel
   auth/
@@ -63,7 +64,7 @@ app/
     banks/…                         # Question banks: CRUD, imports (draft → review → commit), items, categories, profile, generate, generations (adopt), export, assets
     figure/route.ts                 # Figure for a session's problem (generate → solve coordinates → check claims; cached on the session)
     evaluate/route.ts               # Multi-agent method scoring
-    generate-problem/route.ts       # Problem generation by params
+    generate-problem/route.ts       # Problem generation: source "bank" (local bank as template) or built-in by params
     intuition/route.ts              # Post-proof learning review
     knowledge/search/route.ts       # Knowledge graph search
     knowledge/graph/route.ts        # Knowledge graph subgraph
@@ -116,6 +117,8 @@ lib/
     classify.ts                     # Model classification: catalogue path (2 levels, reuses existing categories), grade, knowledge points (snapped to vocab), difficulty 1–5; runs on import and via reclassify.ts (/api/banks/:id/classify)
     profile.ts                      # Template profile of a class (programmatic + model summary), exemplar selection
     generate.ts                     # Same-type generation (同类创编) from a category, picked items or style template; checks: format, independent answer, novelty vs bank, fit
+    select.ts                       # Template selection by level/difficulty/topic (category incl. sub-categories, or knowledge point); widens difficulty ±1 → any → level any, never the topic; generator pickers (template-options)
+    generator-bridge.ts             # /api/generate-problem source "bank": generation from a selection → GeneratedProblem cards with bank meta (checks, generation id)
     http.ts                         # bankRoute(): owner from NextAuth session (else "local"), request language, error mapping
   pipeline/
     theorem-pipeline.ts             # Theorem pipeline shared by /api/solve and /api/solve-stream

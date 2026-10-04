@@ -341,4 +341,29 @@ export interface GeneratedProblem {
   source_inspiration: string;
   estimated_solve_time: string;
   diagram_svg?: string;
+  /** Set when the problem was generated from the local question bank (bank questions as the template). */
+  bank?: BankProblemMeta;
+}
+
+/** Where a bank-templated problem came from and how its checks went (problem generator, "local bank" mode). */
+export interface BankProblemMeta {
+  bank_id: string;
+  generation_id: string;
+  candidate_id: string;
+  /** All checks passed (format, independent answer, novelty vs the bank, fit to the template). */
+  passed: boolean;
+  checks: Record<"format" | "answer" | "novelty" | "fit", { ok: boolean; detail: string; skipped?: boolean }>;
+  /** "Year 4 · Number › Fractions · difficulty 2" */
+  template_label: string;
+  /** e.g. which selection criteria were relaxed to find template questions */
+  note?: string;
+  /** Number of bank questions in the template class. */
+  matched?: number;
+  question_type: string;
+  options?: string[];
+  grade?: string;
+  difficulty?: number;
+  knowledge_points: string[];
+  /** Topic category, used as the default category when the problem is added to the bank. */
+  topic_category_id?: string;
 }

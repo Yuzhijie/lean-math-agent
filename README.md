@@ -122,6 +122,12 @@ a saved filter, or a style template that describes a type of question without so
 an independent re-solve of the answer, similarity to the bank, fit to the type) and is added to the
 bank only when you adopt it. Export writes JSONL that imports back.
 
+The problem generator on the main page uses the bank first: pick Level, Difficulty and Topic (the
+bank's own levels, categories and knowledge points) and the matching bank questions are sent to
+the model as the template for new questions. If nothing matches exactly, the difficulty and then
+the level are widened within the topic (and the result says so). "Built-in" is the original
+generator by school level, difficulty and domain.
+
 Third-party papers (e.g. ICAS) may only be imported with the publisher's permission; the import
 wizard asks for that confirmation.
 
