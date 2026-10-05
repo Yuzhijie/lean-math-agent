@@ -116,6 +116,7 @@ lib/
     vocab.ts                        # Built-in knowledge-point vocabularies (Australian Curriculum, 课标) + bank's own
     import/                         # Importers → draft batch: pdf.ts (unpdf text + question splitter + optional model tidy with verbatim check), tabular.ts (CSV/Excel column mapping), text.ts (Markdown/TXT), fields.ts, checks.ts (duplicates, missing fields)
                                     #   ocr.ts — scans/photos: page image → vision model (role "vision") transcribes verbatim (LaTeX maths, figure boxes) → same splitter; figures cropped and attached, source.page_image kept, every draft needs review
+                                    #   "使用此题" on a bank item carries its figures: /?problem=…&bank=<id>&fig=<asset>… → shown under the problem (UsedProblemFigure.images)
                                     #   images.ts — image detection (HEIC refused), sharp loaded at run time if present (orient/scale/crop), scanned-PDF page scans from embedded images (unpdf extractImages), JS PNG encoder/scale/crop fallback
     classify.ts                     # Model classification: catalogue path (2 levels, reuses existing categories), grade, knowledge points (snapped to vocab), difficulty 1–5; runs on import and via reclassify.ts (/api/banks/:id/classify)
     profile.ts                      # Template profile of a class (programmatic + model summary), exemplar selection

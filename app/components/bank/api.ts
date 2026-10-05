@@ -73,6 +73,19 @@ export const errMsg = (e: unknown, fallback: string) => (e instanceof Error && e
 export const letter = (i: number) => String.fromCharCode(65 + i);
 
 /** A question as solver input: stem plus "A. …" option lines. */
+/**
+ * Main-page link that loads a question: ?problem=<text>, plus its figures
+ * (bank assets) as ?bank=<id>&fig=<asset>… so they are shown with it.
+ */
+export function problemHref(q: { stem: string; options?: string[]; images?: Array<{ asset: string }> }, bankId?: string): string {
+  const params = new URLSearchParams({ problem: problemText(q) });
+  if (bankId && q.images?.length) {
+    params.set("bank", bankId);
+    for (const im of q.images.slice(0, 6)) params.append("fig", im.asset);
+  }
+  return `/?${params.toString()}`;
+}
+
 export function problemText(q: { stem: string; options?: string[] }): string {
   const opts = q.options?.length ? "\n" + q.options.map((o, i) => `${letter(i)}. ${o}`).join("\n") : "";
   return q.stem + opts;

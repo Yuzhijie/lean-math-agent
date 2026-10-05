@@ -300,3 +300,17 @@ describe("POST /api/banks/:id/imports with several files", () => {
     expect(bad.status).toBe(400);
   });
 });
+
+describe("using a bank question with figures", () => {
+  it("links to the main page with the question's figures", async () => {
+    const { problemHref } = await import("@/app/components/bank/api");
+    const href = problemHref({ stem: "What is the perimeter?", options: ["10", "20"], images: [{ asset: "ab".repeat(16) + ".png" }] }, "bank1");
+    const u = new URL(href, "http://x");
+    expect(u.pathname).toBe("/");
+    expect(u.searchParams.get("problem")).toBe("What is the perimeter?\nA. 10\nB. 20");
+    expect(u.searchParams.get("bank")).toBe("bank1");
+    expect(u.searchParams.getAll("fig")).toEqual(["ab".repeat(16) + ".png"]);
+    // No figures: only the text.
+    expect(problemHref({ stem: "x" }, "bank1")).toBe("/?problem=x");
+  });
+});

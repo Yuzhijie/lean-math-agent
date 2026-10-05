@@ -53,6 +53,8 @@ import {
 export interface UsedProblemFigure {
   figure?: SolvedFigure;
   fallbackSvg?: string;
+  /** Figures of a question bank item (images cut from the original page), shown as they are. */
+  images?: Array<{ url: string; caption?: string }>;
 }
 
 type Props = {

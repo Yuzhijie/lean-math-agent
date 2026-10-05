@@ -10,7 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { MathText } from "../MathText";
-import { api, bankUrl, errMsg, letter, problemText, QUESTION_TYPE_LIST, type BankDetail, type CategoryWithCount, type Item, type QuestionType } from "./api";
+import { api, bankUrl, errMsg, letter, QUESTION_TYPE_LIST, problemHref, type BankDetail, type CategoryWithCount, type Item, type QuestionType } from "./api";
 import { AssetImages, assetUrl, CheckboxField, ErrorNote, FieldLabel, KnowledgePointInput, Modal, NativeSelect, originLabel, originVariant, splitList, typeLabel } from "./ui";
 
 type Props = {
@@ -303,7 +303,7 @@ export function ItemEditor({ bankId, item, detail, categories, onSaved, onDelete
           {tr("保存", "Save")}
         </Button>
         {saved && !dirty && <span className="text-xs text-success">{tr("已保存", "Saved")}</span>}
-        <Button size="sm" variant="outline" className="gap-1.5" onClick={() => router.push(`/?problem=${encodeURIComponent(problemText(item))}`)}>
+        <Button size="sm" variant="outline" className="gap-1.5" onClick={() => router.push(problemHref(item, bankId))}>
           <ArrowRight className="h-3.5 w-3.5" />
           {tr("使用此题", "Use this problem")}
         </Button>

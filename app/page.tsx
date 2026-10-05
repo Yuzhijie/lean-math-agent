@@ -122,7 +122,8 @@ export default function Home() {
     setUsedFigure(figure ? { ...figure, text } : null);
   };
 
-  // "使用此题" from the question bank (/bank) arrives as ?problem=<text>.
+  // "使用此题" from the question bank (/bank) arrives as ?problem=<text>, with the question's
+  // figures as ?bank=<id>&fig=<asset>… (images cut from the original page).
   const applyProblemFromBank = useProblemFromGenerator;
   const problemParamHandled = useRef(false);
   useEffect(() => {
@@ -132,8 +133,17 @@ export default function Home() {
     const text = url.searchParams.get("problem");
     if (!text?.trim()) return;
     dispatch({ type: "SET_PROBLEM_TEXT", text });
-    applyProblemFromBank(text);
+    const bankId = url.searchParams.get("bank");
+    const figs = url.searchParams.getAll("fig").filter((a) => /^[a-f0-9]{16,64}\.(png|jpe?g|gif|webp)$/.test(a));
+    applyProblemFromBank(
+      text,
+      bankId && figs.length
+        ? { images: figs.map((a, i) => ({ url: `/api/banks/${encodeURIComponent(bankId)}/assets/${encodeURIComponent(a)}`, caption: tr(`题目图形 ${i + 1}`, `Figure ${i + 1}`) })) }
+        : undefined,
+    );
     url.searchParams.delete("problem");
+    url.searchParams.delete("bank");
+    url.searchParams.delete("fig");
     window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
     // Runs once on mount; the handler only needs the text.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -313,6 +323,15 @@ export default function Home() {
                         <FigurePanel problemText={problemText} initialFigure={usedFigure.figure} />
                       ) : usedFigure.fallbackSvg ? (
                         <DiagramSvg svg={usedFigure.fallbackSvg} />
+                      ) : usedFigure.images?.length ? (
+                        <div className="flex flex-wrap gap-3" data-testid="problem-images">
+                          {usedFigure.images.map((im) => (
+                            <a key={im.url} href={im.url} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-md border border-border/60 bg-white" title={tr("查看大图", "Open full size")}>
+                              {/* eslint-disable-next-line @next/next/no-img-element -- bank assets are served by our API */}
+                              <img src={im.url} alt={im.caption ?? ""} className="block max-h-72 max-w-full object-contain" />
+                            </a>
+                          ))}
+                        </div>
                       ) : null}
                     </div>
                   )}
