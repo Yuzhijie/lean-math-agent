@@ -124,6 +124,7 @@ lib/
     select.ts                       # Template selection by level/difficulty/topic (category incl. sub-categories, or knowledge point); widens difficulty ±1 → any → level any, never the topic; generator pickers (template-options)
     generator-bridge.ts             # /api/generate-problem source "bank": generation from a selection → GeneratedProblem cards with bank meta (checks, generation id)
     http.ts                         # bankRoute(): owner from NextAuth session (else "local"), request language, error mapping
+    problem-figures.ts              # Figures sent with a problem (bank images, `figures: [{bank_id, asset}]` on /api/solve-stream, /api/solve, /api/enumerate): read once by the vision model into a description appended to problem_text (session.figure_description); failures fall back to text-only with a note
   pipeline/
     theorem-pipeline.ts             # Theorem pipeline shared by /api/solve and /api/solve-stream
     lean-attempt.ts                 # Lean formalization attempt for non-theorem problems; solves skip it unless `options.lean_attempt: true` (the UI starts it from the Lean tab)
@@ -244,6 +245,7 @@ components/ui/                      # 16 shadcn/ui primitives (+avatar, dropdown
 - **Roles + metrics**: `chatJson`/`sampleText` take `role: "prover" | "planner"`; endpoint chains come from `LLM_PROVER_*` / `LLM_PLANNER_*`; every solve runs in `withUsageScope`, and `verifyLeanSource` records itself, so responses/sessions carry `metrics` (calls, tokens, cost, verifications, wall time)
 - **Sorry degradation**: unprovable steps get `sorry` annotations, pipeline continues
 - **Trusted verification**: every source is sanitized (no `#eval`/`elab`/`unsafe`/`axiom`…); a complete proof counts only if Lean reports no errors, no `sorry` (textually AND via `#print axioms` — catches `admit`), only `propext`/`Classical.choice`/`Quot.sound`, and the proved statement's `#check` signature equals the one recorded when autoformalization was accepted (statement lock — the planner cannot change the theorem)
+- **Problem figures**: the solving pipeline is text-only; a bank question's figures are read once by the vision model (stage `reading_figure`) and the description is appended to the problem text, so every later step (classification, equation setup, NL solution, autoformalization, provers) has it; the UI shows what was read
 - **4 problem types**: computational | theorem | optimization | find_all_values
 - **Dual solve paths**: `/api/solve` classifies and dispatches; individual endpoints for step-by-step control
 - **Dark theme UI**: Chinese-first, LaTeX via KaTeX, warm academic color palette

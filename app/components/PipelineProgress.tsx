@@ -13,6 +13,7 @@ type Props = {
 
 function getStageLabels(tr: (zh: string, en: string) => string): Record<string, string> {
   return {
+    reading_figure: tr("读取题目图形", "Read the figure"),
     classifying: tr("分析问题", "Analyze problem"),
     extracting: tr("提取结构", "Extract structure"),
     optimizing: tr("搜索最优解", "Search for optimum"),

@@ -22,10 +22,14 @@ import type {
   Session,
 } from "@/lib/types";
 import { lt, withRequestLocale } from "@/lib/llm/output-locale";
+import { requestOwner } from "@/lib/bank/http";
+import { describeProblemFigures, figureRefsSchema, problemWithFigure, type FigureRef } from "@/lib/bank/problem-figures";
 
 interface SolveRequest {
   problem_text?: string;
   session_id?: string;
+  /** Figures of the problem (question bank images): read by the vision model and appended to the text before solving. */
+  figures?: FigureRef[];
   options?: TheoremPipelineOptions & {
     /** Run the Lean formalization step automatically (default: no — started by hand via /api/lean-attempt). */
     lean_attempt?: boolean;
@@ -63,9 +67,14 @@ async function handlePOST(req: Request) {
     );
   }
 
+  const figs = figureRefsSchema.safeParse(body.figures ?? []);
+  if (!figs.success) return NextResponse.json({ error: "invalid figures" }, { status: 400 });
+  const figures = body.session_id ? [] : figs.data;
+  const owner = figures.length ? await requestOwner() : "";
+
   const opts = body.options ?? {};
   const useMathlib = opts.use_mathlib ?? true;
-  const sess: Session = session;
+  let sess: Session = session;
 
   // Create a TransformStream for SSE
   const encoder = new TextEncoder();
@@ -79,6 +88,20 @@ async function handlePOST(req: Request) {
       // attributed to it and reported as `metrics` in the result frame.
       await withUsageScope(async (metrics) => {
         try {
+          // ── Figures: read once by the vision model, appended to the problem text ──
+          let figureDescription: string | undefined;
+          if (figures.length) {
+            emit({ type: "progress", stage: "reading_figure", detail: lt("模型正在读取题目图形...", "The model is reading the problem's figure...") });
+            const fig = await describeProblemFigures({ owner, problemText: sess.problem_text, figures });
+            if (fig.description) {
+              figureDescription = fig.description;
+              sess = updateSession(sess.id, { problem_text: problemWithFigure(sess.problem_text, fig.description), figure_description: fig.description });
+              emit({ type: "progress", stage: "reading_figure", detail: lt(`✅ 已读取图形：${fig.description.slice(0, 80)}…`, `✅ Figure read: ${fig.description.slice(0, 80)}…`) });
+            } else if (fig.note) {
+              emit({ type: "progress", stage: "reading_figure", detail: `⚠️ ${fig.note}` });
+            }
+          }
+
           // ── Stage 0: Classify ────────────────────────────────────────
           emit({ type: "progress", stage: "classifying", detail: lt("正在分析问题类型...", "Analyzing the problem type...") });
 
@@ -109,7 +132,7 @@ async function handlePOST(req: Request) {
           await saveSessionToDisk(sess.id);
 
           // Emit final result
-          emit({ type: "result", data: { ...resultData, metrics: m } });
+          emit({ type: "result", data: { ...resultData, ...(figureDescription ? { figure_description: figureDescription } : {}), metrics: m } });
         } catch (e) {
           updateSession(sess.id, { pipeline_stage: "failed", metrics: metrics() });
           await saveSessionToDisk(sess.id);

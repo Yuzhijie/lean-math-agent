@@ -118,6 +118,8 @@ export default function Home() {
   const [usedFigure, setUsedFigure] = useState<(UsedProblemFigure & { text: string }) | null>(null);
   const useProblemFromGenerator = (text: string, figure?: UsedProblemFigure) => {
     useGeneratedProblem(text);
+    // Only question bank figures are sent to the model when solving (generator figures are drawn from the text).
+    dispatch({ type: "SET_PROBLEM_FIGURES", figures: null });
     setInputHidden(true);
     setUsedFigure(figure ? { ...figure, text } : null);
   };
@@ -141,6 +143,8 @@ export default function Home() {
         ? { images: figs.map((a, i) => ({ url: `/api/banks/${encodeURIComponent(bankId)}/assets/${encodeURIComponent(a)}`, caption: tr(`题目图形 ${i + 1}`, `Figure ${i + 1}`) })) }
         : undefined,
     );
+    // Solving sends these figures to the vision model, which reads them into the problem text.
+    if (bankId && figs.length) dispatch({ type: "SET_PROBLEM_FIGURES", figures: { refs: figs.map((asset) => ({ bank_id: bankId, asset })), text } });
     url.searchParams.delete("problem");
     url.searchParams.delete("bank");
     url.searchParams.delete("fig");
@@ -332,6 +336,20 @@ export default function Home() {
                             </a>
                           ))}
                         </div>
+                      ) : null}
+                      {usedFigure.images?.length && state.figureDescription ? (
+                        <details className="mt-2 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs" open data-testid="figure-description">
+                          <summary className="cursor-pointer select-none font-medium text-primary">
+                            {tr("模型读取的图形信息（已加入题目，用于求解）", "The figure as read by the model (added to the problem for solving)")}
+                          </summary>
+                          <div className="mt-1.5 whitespace-pre-wrap leading-relaxed text-muted-foreground">
+                            <MathText text={state.figureDescription} />
+                          </div>
+                        </details>
+                      ) : usedFigure.images?.length ? (
+                        <p className="mt-2 text-[11px] text-muted-foreground">
+                          {tr("求解时会先让能读图片的模型读取图形，并把读到的信息加入题目。", "When solving, a model that reads images first reads the figure and adds what it sees to the problem.")}
+                        </p>
                       ) : null}
                     </div>
                   )}

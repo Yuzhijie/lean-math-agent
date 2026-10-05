@@ -234,6 +234,8 @@ export interface Session {
   /** Figure for the problem (computed coordinates + checked conditions), see lib/figure. */
   figure?: import("./figure/spec").SolvedFigure;
   lean_proof_attempt?: LeanProofAttempt;
+  /** The problem's figures as read by the vision model (appended to problem_text before solving). */
+  figure_description?: string;
   /** What the last solve run consumed (LLM calls/tokens by role, Lean verifications, wall time). */
   metrics?: RunMetrics;
   created_at: number;

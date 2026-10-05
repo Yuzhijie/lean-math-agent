@@ -43,6 +43,9 @@ export function useProofActions(
 
   // ── Enumerate ────────────────────────────────────────────────────
 
+  // Figures go along only while the problem text is the one they belong to.
+  const figures = state.problemFigures && state.problemFigures.text === state.problemText ? state.problemFigures.refs : undefined;
+
   const enumerate = useCallback(async () => {
     lastActionRef.current = enumerate;
     dispatch({ type: "RESET_ALL" });
@@ -53,11 +56,12 @@ export function useProofActions(
         methods: MethodOption[];
         comparison_summary?: string;
         out_of_domain_warning?: string | null;
+        figure_description?: string;
       }>(
         await fetch("/api/enumerate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ problem_text: state.problemText }),
+          body: JSON.stringify({ problem_text: state.problemText, ...(figures ? { figures } : {}) }),
         }),
       );
       dispatch({
@@ -66,6 +70,7 @@ export function useProofActions(
         methods: data.methods,
         comparisonSummary: data.comparison_summary,
         outOfDomainWarning: data.out_of_domain_warning ?? null,
+        figureDescription: data.figure_description,
       });
     } catch (e) {
       dispatch({
@@ -73,7 +78,7 @@ export function useProofActions(
         message: e instanceof Error ? e.message : tr("枚举失败", "Failed to enumerate methods"),
       });
     }
-  }, [dispatch, state.problemText, tr]);
+  }, [dispatch, state.problemText, figures, tr]);
 
   // ── Plan method ──────────────────────────────────────────────────
 
@@ -253,7 +258,7 @@ export function useProofActions(
       const res = await fetch("/api/solve-stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ problem_text: state.problemText }),
+        body: JSON.stringify({ problem_text: state.problemText, ...(figures ? { figures } : {}) }),
       });
 
       // Non-SSE response (error before stream starts)
@@ -345,6 +350,7 @@ export function useProofActions(
                 buildLog: data.build_log as string | undefined,
                 solveEvents: (data.pipeline_events as Array<{ stage: string; detail: string }> | undefined) ?? [],
                 metrics: data.metrics as RunMetrics | undefined,
+                figureDescription: data.figure_description as string | undefined,
               });
             } else if (event.type === "error") {
               throw new Error((event.error as string) ?? "solve pipeline failed");
@@ -362,7 +368,7 @@ export function useProofActions(
         message: e instanceof Error ? e.message : tr("求解失败", "Failed to solve"),
       });
     }
-  }, [dispatch, state.problemText, tr]);
+  }, [dispatch, state.problemText, figures, tr]);
 
   // ── Switch method ────────────────────────────────────────────────
 

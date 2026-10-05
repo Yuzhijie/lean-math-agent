@@ -3,13 +3,20 @@ import { enumerateMethods } from "@/lib/llm/enumerate";
 import { createSession, updateSession } from "@/lib/session-store";
 import { LlmError } from "@/lib/llm/client";
 import { withRequestLocale } from "@/lib/llm/output-locale";
+import { requestOwner } from "@/lib/bank/http";
+import { describeProblemFigures, figureRefsSchema, problemWithFigure } from "@/lib/bank/problem-figures";
 
 async function handlePOST(req: Request) {
-  const body = (await req.json()) as { problem_text?: string };
+  const body = (await req.json()) as { problem_text?: string; figures?: unknown };
   if (!body.problem_text?.trim()) {
     return NextResponse.json({ error: "problem_text required" }, { status: 400 });
   }
-  const session = createSession(body.problem_text.trim());
+  // Figures (question bank images) are read by the vision model and appended to the problem text.
+  const figs = figureRefsSchema.safeParse(body.figures ?? []);
+  if (!figs.success) return NextResponse.json({ error: "invalid figures" }, { status: 400 });
+  const fig = figs.data.length ? await describeProblemFigures({ owner: await requestOwner(), problemText: body.problem_text.trim(), figures: figs.data }) : {};
+  const session = createSession(fig.description ? problemWithFigure(body.problem_text, fig.description) : body.problem_text.trim());
+  if (fig.description) updateSession(session.id, { figure_description: fig.description });
   try {
     const result = await enumerateMethods(session.problem_text);
     const updated = updateSession(session.id, {
@@ -22,6 +29,8 @@ async function handlePOST(req: Request) {
       methods: updated.methods,
       comparison_summary: updated.comparison_summary,
       out_of_domain_warning: updated.out_of_domain_warning ?? null,
+      ...(fig.description ? { figure_description: fig.description } : {}),
+      ...(fig.note ? { figure_note: fig.note } : {}),
     });
   } catch (e) {
     const msg = e instanceof LlmError ? e.message : "enumerate failed";

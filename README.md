@@ -118,7 +118,10 @@ edit before committing, with duplicates flagged. Scanned PDFs and images (PNG, J
 photos at once for the pages of one paper) are read page by page by a vision model (`LLM_VISION_MODEL`,
 otherwise the general model, which then must accept images): the text is transcribed verbatim with maths
 in LaTeX, figures are cut out and attached to their question, and every question keeps its page image so
-the reviewer can compare. This needs a bank that allows sending content to the model. The model decides each question's place in the category
+the reviewer can compare. This needs a bank that allows sending content to the model. "Use this
+problem" on a bank question takes its figures to the solving page; when solving, the vision model
+reads them once and its description (shown under the figure) is added to the problem text, so every
+solving step has the figure's information. The model decides each question's place in the category
 tree (e.g. Number › Fractions), its grade, knowledge points and difficulty; missing categories are created
 on commit, and "AI classify" does the same for questions already in a bank. Organise questions in categories — a manual group,
 a saved filter, or a style template that describes a type of question without source questions

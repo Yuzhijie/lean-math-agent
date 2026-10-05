@@ -44,6 +44,15 @@ export interface ProofSessionState {
   /** What the last solve run consumed (LLM calls/tokens, Lean verifications, wall time). */
   runMetrics: RunMetrics | null;
 
+  /**
+   * Figures that belong to the problem (question bank images), sent with
+   * solve / enumerate while the text is still `text`; the server has the
+   * vision model read them and appends the description to the problem.
+   */
+  problemFigures: { refs: Array<{ bank_id: string; asset: string }>; text: string } | null;
+  /** The figures as read by the model in the last run (shown under the problem). */
+  figureDescription: string | null;
+
   // autoformalize failure detail
   autoformalizeDetail: string | null;
   validationResults: Array<{ layer: number; pass: boolean; detail: string }> | null;
@@ -67,6 +76,7 @@ export type Action =
 
   // input
   | { type: "SET_PROBLEM_TEXT"; text: string }
+  | { type: "SET_PROBLEM_FIGURES"; figures: ProofSessionState["problemFigures"] }
   | { type: "TOGGLE_GENERATOR" }
 
   // async lifecycle
@@ -82,6 +92,7 @@ export type Action =
       methods: MethodOption[];
       comparisonSummary?: string;
       outOfDomainWarning?: string | null;
+      figureDescription?: string;
     }
 
   // plan
@@ -130,6 +141,7 @@ export type Action =
       buildLog?: string;
       solveEvents: Array<{ stage: string; detail: string }>;
       metrics?: RunMetrics;
+      figureDescription?: string;
     }
 
   // solve progress (streaming)
@@ -189,6 +201,8 @@ export const INITIAL_STATE: ProofSessionState = {
   solvedProblemType: null,
   solveEvents: [],
   runMetrics: null,
+  problemFigures: null,
+  figureDescription: null,
   autoformalizeDetail: null,
   validationResults: null,
   busy: null,
@@ -237,6 +251,8 @@ function reducer(
       return {
         ...INITIAL_STATE,
         problemText: action.problemText ?? state.problemText,
+        // A new run of the same problem keeps its figures.
+        problemFigures: state.problemFigures,
       };
 
     case "RESET_METHOD":
@@ -276,6 +292,9 @@ function reducer(
     case "SET_PROBLEM_TEXT":
       return { ...state, problemText: action.text };
 
+    case "SET_PROBLEM_FIGURES":
+      return { ...state, problemFigures: action.figures, figureDescription: null };
+
     case "TOGGLE_GENERATOR":
       return { ...state, showGenerator: !state.showGenerator };
 
@@ -306,6 +325,7 @@ function reducer(
         methods: action.methods,
         comparisonSummary: action.comparisonSummary ?? null,
         outOfDomainWarning: action.outOfDomainWarning ?? null,
+        figureDescription: action.figureDescription ?? null,
         busy: null,
       };
 
@@ -377,6 +397,7 @@ function reducer(
         buildStatus: action.buildStatus ?? "idle",
         buildLog: action.buildLog ?? "",
         runMetrics: action.metrics ?? null,
+        figureDescription: action.figureDescription ?? null,
         busy: null,
       };
     }
