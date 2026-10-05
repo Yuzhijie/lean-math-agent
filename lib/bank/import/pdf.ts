@@ -73,16 +73,12 @@ export function looksScanned(pages: string[]): boolean {
   return chars < Math.max(40, 25 * pages.length);
 }
 
-export async function parsePdf(data: Buffer): Promise<ParsedQuestion[]> {
+/** Questions from a PDF's text layer; `scanned` when it has (almost) no text — read it with ocrPages instead. */
+export async function parsePdf(data: Buffer): Promise<{ questions: ParsedQuestion[]; scanned: false } | { questions: []; scanned: true }> {
   const pages = await extractPdfPages(data);
-  if (!pages.length || looksScanned(pages)) {
-    throw new BankError(
-      lt("这个 PDF 几乎没有可提取的文字（可能是扫描件）。暂不支持扫描版 PDF（计划在第三阶段支持），请上传含文字的 PDF 或 Word/Excel 文件。", "This PDF has almost no extractable text (probably a scan). Scanned PDFs are not supported yet (planned for phase 3); upload a PDF with text, or a Word/Excel file."),
-      422,
-    );
-  }
+  if (!pages.length || looksScanned(pages)) return { questions: [], scanned: true };
   const lines: SourceLine[] = cleanPages(pages).flatMap((ls, p) => ls.map((text) => ({ text, page: p + 1 })));
-  return splitQuestions(lines, { joinLines: true, figureCheck: true });
+  return { questions: splitQuestions(lines, { joinLines: true, figureCheck: true }), scanned: false };
 }
 
 // ── Model restructuring ──────────────────────────────────────────────

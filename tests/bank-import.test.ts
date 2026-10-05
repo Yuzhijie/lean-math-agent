@@ -438,7 +438,7 @@ describe("PDF", () => {
     expect(d[1].options?.[3]).toBe("$34");
   });
 
-  it("refuses scanned PDFs", async () => {
+  it("refuses scanned PDFs when no model is configured", async () => {
     const data = buildPdf([["1"], ["2"]]);
     await expect(parseImport({ owner: OWNER, bankId: newBank(), fileName: "scan.pdf", data, useModel: false })).rejects.toThrow(/扫描/);
   });

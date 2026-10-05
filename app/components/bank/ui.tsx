@@ -374,3 +374,46 @@ export function ClassificationLine({ fields, path }: { fields: Partial<ItemField
     </div>
   );
 }
+
+/** URL of a bank asset (original file, page image, figure). */
+export function assetUrl(bankId: string, asset: string): string {
+  return `/api/banks/${encodeURIComponent(bankId)}/assets/${encodeURIComponent(asset)}`;
+}
+
+/** Thumbnails of a question's figures; click opens the full image. Optional remove button per figure. */
+export function AssetImages({
+  bankId,
+  images,
+  onRemove,
+  size = "md",
+}: {
+  bankId: string;
+  images: Array<{ asset: string; caption?: string }>;
+  onRemove?: (index: number) => void;
+  size?: "sm" | "md";
+}) {
+  const { tr } = useI18n();
+  if (!images.length) return null;
+  return (
+    <div className="flex flex-wrap gap-2" data-testid="question-images">
+      {images.map((im, i) => (
+        <figure key={im.asset + i} className="group relative overflow-hidden rounded-md border border-border/60 bg-white">
+          <a href={assetUrl(bankId, im.asset)} target="_blank" rel="noreferrer" title={im.caption ?? tr("查看大图", "Open full size")}>
+            {/* eslint-disable-next-line @next/next/no-img-element -- bank assets are served by our API, not optimisable statically */}
+            <img src={assetUrl(bankId, im.asset)} alt={im.caption ?? tr(`图 ${i + 1}`, `Figure ${i + 1}`)} className={cn("block object-contain", size === "sm" ? "max-h-16 max-w-[8rem]" : "max-h-40 max-w-[16rem]")} />
+          </a>
+          {onRemove && (
+            <button
+              type="button"
+              onClick={() => onRemove(i)}
+              className="absolute right-1 top-1 rounded bg-black/60 p-0.5 text-white opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100"
+              aria-label={tr("移除这张图", "Remove this image")}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </figure>
+      ))}
+    </div>
+  );
+}

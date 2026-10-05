@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { CheckCircle2, ChevronDown, ChevronRight, FileUp, Loader2, Save, Trash2, Upload } from "lucide-react";
+import { CheckCircle2, ChevronDown, ChevronRight, FileUp, ImageIcon, Info, Loader2, Save, ScanText, Trash2, Upload } from "lucide-react";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,9 +24,9 @@ import {
   type ImportBatch,
   type QuestionType,
 } from "./api";
-import { CheckboxField, ClassificationLine, ErrorNote, FieldLabel, NativeSelect, splitList, statusLabel, statusVariant, typeLabel, useElapsed } from "./ui";
+import { AssetImages, assetUrl, CheckboxField, ClassificationLine, ErrorNote, FieldLabel, NativeSelect, splitList, statusLabel, statusVariant, typeLabel, useElapsed } from "./ui";
 
-const ACCEPT = ".pdf,.json,.jsonl,.csv,.xlsx,.md,.txt";
+const ACCEPT = ".pdf,.json,.jsonl,.csv,.xlsx,.md,.txt,.png,.jpg,.jpeg,.webp,.gif,.heic,image/*";
 const MAP_FIELDS = ["stem", "type", "options", "answer", "solution", "grade", "difficulty", "knowledge_points", "tags", "label"] as const;
 
 type Step = 1 | 2 | 3 | 4;
@@ -45,11 +45,17 @@ type Props = {
 
 const isTabular = (name: string) => /\.(csv|xlsx)$/i.test(name);
 const isPdf = (name: string) => /\.pdf$/i.test(name);
+const isImage = (f: File) => /\.(png|jpe?g|webp|gif|heic|heif)$/i.test(f.name) || f.type.startsWith("image/");
+/** Pages of one paper in file-name order ("page 2" before "page 10"). */
+const byName = (a: File, b: File) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
 
 export function ImportWizard({ bank, categories, open, onOpenChange, resumeBatchId, onFinished }: Props) {
   const { tr } = useI18n();
   const [step, setStep] = useState<Step>(1);
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
+  const file = files[0] ?? null;
+  const images = files.length > 0 && files.every(isImage);
+  const mixed = files.length > 1 && !images;
   const [useModel, setUseModel] = useState(bank.allow_model);
   // The model decides catalogue place, grade, knowledge points and difficulty (editable in review).
   const [classify, setClassify] = useState(bank.allow_model);
@@ -106,7 +112,7 @@ export function ImportWizard({ bank, categories, open, onOpenChange, resumeBatch
   };
 
   async function next() {
-    if (!file) return;
+    if (!file || mixed) return;
     if (isTabular(file.name)) {
       const fd = new FormData();
       fd.append("file", file);
@@ -124,7 +130,7 @@ export function ImportWizard({ bank, categories, open, onOpenChange, resumeBatch
   async function upload() {
     if (!file) return;
     const fd = new FormData();
-    fd.append("file", file);
+    for (const f of files) fd.append("file", f);
     if (!useModel || !bank.allow_model) fd.append("use_model", "false");
     if (!classify || !bank.allow_model) fd.append("classify", "false");
     if (preview) {
@@ -210,7 +216,13 @@ export function ImportWizard({ bank, categories, open, onOpenChange, resumeBatch
   }, [drafts]);
   const shown = statusFilter === "all" ? drafts : drafts.filter((d) => d.status === statusFilter);
   const toCommit = drafts.filter((d) => d.include && d.status !== "error" && d.status !== "duplicate").length;
-  const pdfTidy = !!file && isPdf(file.name);
+  const pdfTidy = !!file && (isPdf(file.name) || images);
+  const chooseFiles = (list: FileList | null | undefined) => {
+    const all = Array.from(list ?? []);
+    setFiles(all.length > 1 && all.every(isImage) ? all.sort(byName) : all);
+    setPreview(null);
+    setError(null);
+  };
 
   const steps: Array<{ n: Step; label: string }> = [
     { n: 1, label: tr("选择文件", "Choose file") },
@@ -259,38 +271,72 @@ export function ImportWizard({ bank, categories, open, onOpenChange, resumeBatch
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => {
                   e.preventDefault();
-                  const f = e.dataTransfer.files[0];
-                  if (f) setFile(f);
+                  chooseFiles(e.dataTransfer.files);
                 }}
               >
-                <Upload className="h-6 w-6 text-muted-foreground" />
-                <p className="text-sm">{file ? file.name : tr("点击选择或拖入文件", "Click to choose or drop a file")}</p>
+                {images ? <ImageIcon className="h-6 w-6 text-muted-foreground" /> : <Upload className="h-6 w-6 text-muted-foreground" />}
+                <p className="text-sm">
+                  {files.length > 1
+                    ? images
+                      ? tr(`${files.length} 张图片（按文件名排序作为第 1–${files.length} 页）`, `${files.length} images (pages 1–${files.length} in file-name order)`)
+                      : tr(`${files.length} 个文件`, `${files.length} files`)
+                    : file
+                      ? file.name
+                      : tr("点击选择或拖入文件", "Click to choose or drop a file")}
+                </p>
                 <p className="text-xs text-muted-foreground">
-                  {file ? `${(file.size / 1024).toFixed(1)} KB` : "PDF · JSON · JSONL · CSV · Excel (.xlsx) · Markdown · TXT"}
+                  {file
+                    ? `${(files.reduce((n, f) => n + f.size, 0) / 1024).toFixed(1)} KB`
+                    : tr("PDF（含扫描件）· 图片 / 照片 · JSON · CSV · Excel (.xlsx) · Markdown · TXT", "PDF (incl. scans) · images / photos · JSON · CSV · Excel (.xlsx) · Markdown · TXT")}
                 </p>
                 <input
                   ref={fileInput}
                   type="file"
                   accept={ACCEPT}
+                  multiple
                   className="hidden"
                   data-testid="import-file"
-                  onChange={(e) => {
-                    setFile(e.target.files?.[0] ?? null);
-                    setPreview(null);
-                  }}
+                  onChange={(e) => chooseFiles(e.target.files)}
                 />
               </div>
+              {files.length > 1 && images && (
+                <ol className="max-h-32 list-inside list-decimal overflow-y-auto rounded-md border border-border/60 bg-white/[0.02] px-3 py-2 text-xs text-muted-foreground">
+                  {files.map((f) => (
+                    <li key={f.name + f.size} className="truncate">
+                      {f.name}
+                    </li>
+                  ))}
+                </ol>
+              )}
+              {mixed && (
+                <p className="text-xs text-destructive">
+                  {tr("一次只能选一个文件；多选只适用于图片（同一份试卷的多页照片）。", "Choose one file at a time; several files are only accepted as images (pages of the same paper).")}
+                </p>
+              )}
+              {images && (
+                <div className={cn("flex items-start gap-2 rounded-md border px-3 py-2 text-xs", bank.allow_model ? "border-primary/20 bg-primary/5 text-muted-foreground" : "border-warning/30 bg-warning/5 text-warning")}>
+                  <ScanText className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    {bank.allow_model
+                      ? tr(
+                          "图片会逐页发送给模型识别文字、公式和图形；图形会裁剪后附在对应题目上。识别结果都需要对照原图复核。HEIC 照片请先导出为 JPEG。",
+                          "Each image is sent to the model, which reads the text, formulas and figures; figures are cut out and attached to their question. Everything read from images must be checked against the original in review. Export HEIC photos as JPEG first.",
+                        )
+                      : tr("识别图片需要把图片发送给模型，而此题库不允许发送给模型。", "Reading images means sending them to the model, and this bank does not allow that.")}
+                  </span>
+                </div>
+              )}
               <CheckboxField
                 checked={useModel && bank.allow_model}
                 onChange={setUseModel}
                 disabled={!bank.allow_model}
                 hint={
                   bank.allow_model
-                    ? tr("仅对 PDF 生效：模型会修正断行、公式和选项识别。", "PDF only: the model fixes broken lines, formulas and option detection.")
+                    ? tr("对 PDF 和图片生效：模型会修正断行、公式和选项识别。", "PDF and images: the model fixes broken lines, formulas and option detection.")
                     : tr("此题库不允许发送给模型。", "This bank does not allow sending content to the model.")
                 }
               >
-                {tr("用模型整理 PDF", "Use the model to tidy PDF questions")}
+                {tr("用模型整理 PDF / 图片中的题目", "Use the model to tidy PDF / image questions")}
               </CheckboxField>
               <CheckboxField
                 checked={classify && bank.allow_model}
@@ -304,7 +350,7 @@ export function ImportWizard({ bank, categories, open, onOpenChange, resumeBatch
               >
                 {tr("由模型决定目录、分类和难度", "Let the model decide category, classification and difficulty")}
               </CheckboxField>
-              {busy === "upload" && <Progress elapsed={elapsed} slow={((pdfTidy && useModel) || classify) && bank.allow_model} />}
+              {busy === "upload" && <Progress elapsed={elapsed} slow={((pdfTidy && useModel) || classify || images) && bank.allow_model} ocr={images} />}
             </div>
           )}
 
@@ -368,6 +414,27 @@ export function ImportWizard({ bank, categories, open, onOpenChange, resumeBatch
                   </FilterChip>
                 ))}
               </div>
+              {batch.ocr && (
+                <div className="flex items-start gap-2 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
+                  <ScanText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+                  <span>
+                    {tr(
+                      "这些题目是由模型从图片识别的，可能有错字、漏字或公式错误。展开每道题可对照原页面图像修改；图形已尽量裁剪并附在题目上。",
+                      "These questions were read from images by the model and may contain misread words or formulas. Expand a question to compare it with its page image; figures were cut out and attached where possible.",
+                    )}
+                  </span>
+                </div>
+              )}
+              {(batch.notes?.length ?? 0) > 0 && (
+                <ul className="space-y-0.5 rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning" data-testid="batch-notes">
+                  {batch.notes!.map((n, i) => (
+                    <li key={i} className="flex items-start gap-1.5">
+                      <Info className="mt-0.5 h-3 w-3 shrink-0" />
+                      {n}
+                    </li>
+                  ))}
+                </ul>
+              )}
               <p className="text-xs text-muted-foreground">
                 {tr(
                   `文件：${batch.file_name}。“重复”和“错误”的题不会入库；可修改后保存，服务器会重新检查。`,
@@ -399,11 +466,18 @@ export function ImportWizard({ bank, categories, open, onOpenChange, resumeBatch
                             </Badge>
                             {d.answer && <span className="text-[10px] text-muted-foreground">{tr("答案", "Answer")}: {d.answer}</span>}
                             {d.source?.page && <span className="text-[10px] text-muted-foreground">{tr(`第 ${d.source.page} 页`, `p. ${d.source.page}`)}</span>}
+                          {d.source?.page_image && (
+                            <a href={assetUrl(bank.id, d.source.page_image)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-[10px] text-primary hover:underline">
+                              <ImageIcon className="h-3 w-3" />
+                              {tr("原图", "Page image")}
+                            </a>
+                          )}
                           </div>
                           <div className={cn("break-words text-sm leading-relaxed", !open && "line-clamp-2")}>
                             <MathText text={d.stem} />
                           </div>
                           <ClassificationLine fields={d} />
+                          {!open && <AssetImages bankId={bank.id} images={d.images} size="sm" />}
                           {d.issues.length > 0 && (
                             <ul className="space-y-0.5 text-xs text-warning">
                               {d.issues.map((x, i) => (
@@ -427,7 +501,7 @@ export function ImportWizard({ bank, categories, open, onOpenChange, resumeBatch
                           {open ? tr("收起", "Collapse") : tr("编辑", "Edit")}
                         </Button>
                       </div>
-                      {open && <DraftEditor key={d.knowledge_points.join("|")} draft={d} onChange={(p) => updateDraft(d.draft_id, p)} />}
+                      {open && <DraftEditor key={d.knowledge_points.join("|")} bankId={bank.id} draft={d} onChange={(p) => updateDraft(d.draft_id, p)} />}
                     </li>
                   );
                 })}
@@ -579,7 +653,7 @@ function fieldLabel(f: (typeof MAP_FIELDS)[number], tr: (zh: string, en: string)
   return m[f];
 }
 
-function Progress({ elapsed, slow }: { elapsed: number; slow: boolean }) {
+function Progress({ elapsed, slow, ocr }: { elapsed: number; slow: boolean; ocr?: boolean }) {
   const { tr } = useI18n();
   return (
     <div className="flex items-start gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2.5 text-sm">
@@ -588,7 +662,13 @@ function Progress({ elapsed, slow }: { elapsed: number; slow: boolean }) {
         <p>
           {tr("正在解析文件…", "Parsing the file…")} <span className="tabular-nums text-muted-foreground">{elapsed}s</span>
         </p>
-        {slow && <p className="text-xs text-muted-foreground">{tr("PDF 经模型整理可能需要几分钟，请勿关闭。", "Tidying a PDF with the model can take a few minutes; keep this open.")}</p>}
+        {slow && (
+          <p className="text-xs text-muted-foreground">
+            {ocr
+              ? tr("模型正在逐页识别图片，每页约需 10–40 秒，请勿关闭。", "The model is reading the images page by page (about 10–40 s per page); keep this open.")
+              : tr("经模型整理可能需要几分钟（扫描版 PDF 会逐页识别），请勿关闭。", "Tidying with the model can take a few minutes (scanned PDFs are read page by page); keep this open.")}
+          </p>
+        )}
       </div>
     </div>
   );
@@ -618,15 +698,31 @@ function Stat({ label, value, tone }: { label: string; value: number; tone?: "su
   );
 }
 
-function DraftEditor({ draft, onChange }: { draft: DraftItem; onChange: (p: Partial<DraftItem>) => void }) {
+function DraftEditor({ bankId, draft, onChange }: { bankId: string; draft: DraftItem; onChange: (p: Partial<DraftItem>) => void }) {
   const { tr } = useI18n();
+  const pageImage = draft.source?.page_image;
   return (
     <div className="grid gap-3 border-t border-border/40 p-3 md:grid-cols-2">
       <div className="space-y-1.5">
-        <FieldLabel>{tr("原文", "Original text")}</FieldLabel>
+        {pageImage && (
+          <>
+            <FieldLabel>{tr(`原图（第 ${draft.source?.page ?? "?"} 页）`, `Page image (page ${draft.source?.page ?? "?"})`)}</FieldLabel>
+            <a href={assetUrl(bankId, pageImage)} target="_blank" rel="noreferrer" className="block max-h-[28rem] overflow-auto rounded-md border border-border/60 bg-white" title={tr("在新窗口打开原图", "Open the page image in a new window")}>
+              {/* eslint-disable-next-line @next/next/no-img-element -- bank assets are served by our API */}
+              <img src={assetUrl(bankId, pageImage)} alt={tr("原页面", "Original page")} className="block w-full" data-testid="page-image" />
+            </a>
+          </>
+        )}
+        <FieldLabel>{pageImage ? tr("识别出的文字", "Text read from the image") : tr("原文", "Original text")}</FieldLabel>
         <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/60 bg-code-bg p-2.5 font-mono text-xs leading-relaxed text-muted-foreground">
           {draft.raw || tr("（无）", "(none)")}
         </pre>
+        {draft.images.length > 0 && (
+          <>
+            <FieldLabel>{tr("题目图形（悬停可移除错配的图）", "Figures (hover to remove a wrong one)")}</FieldLabel>
+            <AssetImages bankId={bankId} images={draft.images} onRemove={(i) => onChange({ images: draft.images.filter((_, k) => k !== i) })} />
+          </>
+        )}
       </div>
       <div className="space-y-2.5">
         <div className="space-y-1">

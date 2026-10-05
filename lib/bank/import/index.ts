@@ -7,7 +7,9 @@
  *   recheckBatch  after the user edits drafts: validate + check again
  *   commitBatch   the user confirmed the rights → selected drafts become items
  *
- * Formats: json / jsonl, csv (tsv), xlsx, markdown / text, pdf (text layer only).
+ * Formats: json / jsonl, csv (tsv), xlsx, markdown / text, pdf (text layer;
+ * scanned PDFs are read page by page by the vision model), image (one or
+ * more photos / screenshots of pages, read by the vision model — ocr.ts).
  */
 import { lt } from "@/lib/llm/output-locale";
 import { addItems, BankError, ensureCategoryPath, getBank, getBatch, getCategory, listCategories, listItems, putBatch, saveAsset } from "../store";
@@ -15,6 +17,8 @@ import { applyClassification, classifyFailedIssue, classifyQuestions } from "../
 import { draftItemSchema, IMPORT_FORMATS, type DraftItem, type ImportBatch, type ImportFormat, type Item } from "../types";
 import { checkDrafts, EMPTY_STEM, fieldsOf, isCheckIssue, reportOf, type WorkingDraft } from "./checks";
 import { clampStr, recordToFields, type ParsedQuestion } from "./fields";
+import { detectImage, IMAGE_EXT, IMAGE_FILE, preparePhoto, scannedPdfPages, type PageImage } from "./images";
+import { maxOcrPages, ocrPages } from "./ocr";
 import { parsePdf, refineWithModel } from "./pdf";
 import { decodeText, previewTable, readRows, rowsToQuestions } from "./tabular";
 import { splitText } from "./text";
@@ -36,9 +40,16 @@ const EXT_FORMAT: Record<string, ImportFormat> = {
   txt: "text",
   text: "text",
   pdf: "pdf",
+  png: "image",
+  jpg: "image",
+  jpeg: "image",
+  webp: "image",
+  gif: "image",
+  heic: "image",
+  heif: "image",
 };
 
-const ASSET_EXT: Record<ImportFormat, string> = { json: "json", jsonl: "jsonl", csv: "csv", xlsx: "xlsx", markdown: "md", text: "txt", pdf: "pdf" };
+const ASSET_EXT: Record<ImportFormat, string> = { json: "json", jsonl: "jsonl", csv: "csv", xlsx: "xlsx", markdown: "md", text: "txt", pdf: "pdf", image: "png" };
 
 export function detectFormat(fileName: string, data: Buffer): ImportFormat {
   const ext = /\.([A-Za-z0-9]+)$/.exec(fileName.trim())?.[1]?.toLowerCase();
@@ -47,6 +58,7 @@ export function detectFormat(fileName: string, data: Buffer): ImportFormat {
     throw new BankError(lt(`暂不支持 .${ext} 文件，请另存为 .xlsx、.csv、.pdf 或文本`, `.${ext} files are not supported yet; save as .xlsx, .csv, .pdf or text`), 415);
   }
   if (data.subarray(0, 5).toString("latin1") === "%PDF-") return "pdf";
+  if (detectImage(data)) return "image";
   if (data[0] === 0x50 && data[1] === 0x4b && data[2] === 0x03 && data[3] === 0x04) return "xlsx";
   const head = decodeText(data.subarray(0, 64 * 1024)).trimStart();
   if (head.startsWith("[")) return "json";
@@ -132,6 +144,8 @@ export async function parseImport(args: {
   useModel?: boolean;
   /** Let the model decide catalogue place, grade, knowledge points and difficulty (default true). */
   classify?: boolean;
+  /** More page images after the first file (photos of a multi-page paper), read as one batch in this order. */
+  moreImages?: Array<{ fileName: string; data: Buffer }>;
 }): Promise<ImportBatch> {
   const { owner, bankId, fileName, data } = args;
   const bank = getBank(owner, bankId);
@@ -141,6 +155,9 @@ export async function parseImport(args: {
 
   let questions: ParsedQuestion[];
   let columnMap: Record<string, string> | undefined;
+  let notes: string[] = [];
+  let ocrAssets: string[] = [];
+  let ocr = false;
   switch (format) {
     case "json":
     case "jsonl":
@@ -158,10 +175,34 @@ export async function parseImport(args: {
     case "text":
       questions = splitText(decodeText(data));
       break;
-    case "pdf":
-      questions = await parsePdf(data);
+    case "pdf": {
+      const pdf = await parsePdf(data);
+      if (pdf.scanned) {
+        requireVision(bank.allow_model, "pdf");
+        const pages = await scannedPdfPages(data, { maxPages: maxOcrPages() });
+        if (!pages.length) throw new BankError(lt("这个 PDF 既没有文字也没有可识别的页面图像", "This PDF has neither text nor page images to read"), 422);
+        ({ questions, notes, ocrAssets } = await readScans(owner, bankId, pages, notes));
+        ocr = true;
+      } else questions = pdf.questions;
       if (args.useModel !== false && bank.allow_model && process.env.LLM_API_KEY && questions.length) questions = await refineWithModel(questions);
       break;
+    }
+    case "image": {
+      requireVision(bank.allow_model, "image");
+      const files = [{ fileName, data }, ...(args.moreImages ?? [])];
+      if (files.length > maxOcrPages()) {
+        throw new BankError(lt(`一次最多识别 ${maxOcrPages()} 张图片，请分批导入`, `At most ${maxOcrPages()} images per import; import them in parts`), 413);
+      }
+      const pages: PageImage[] = [];
+      for (const [i, f] of files.entries()) {
+        if (!detectImage(f.data) && !IMAGE_FILE.test(f.fileName)) throw new BankError(lt(`${f.fileName} 不是图片`, `${f.fileName} is not an image`), 415);
+        pages.push(await preparePhoto(f.data, i + 1));
+      }
+      ({ questions, notes, ocrAssets } = await readScans(owner, bankId, pages, notes));
+      ocr = true;
+      if (args.useModel !== false && questions.length) questions = await refineWithModel(questions);
+      break;
+    }
   }
   if (!questions.length) throw new BankError(lt("文件中没有找到题目", "No questions were found in the file"), 422);
   if (questions.length > MAX_DRAFTS) throw new BankError(lt(`一次最多导入 ${MAX_DRAFTS} 道题，请拆分文件`, `At most ${MAX_DRAFTS} questions per import; split the file`), 413);
@@ -186,17 +227,38 @@ export async function parseImport(args: {
     issues: q.issues,
   }));
   const drafts = checkDrafts(working, listItems(owner, bankId));
-  const asset = saveAsset(owner, bankId, data, ASSET_EXT[format]);
+  // The original file is kept; for images the page images saved by the OCR step are the originals (scaled).
+  const originals = format === "image" ? [] : [saveAsset(owner, bankId, data, ASSET_EXT[format])];
+  const more = args.moreImages?.length ?? 0;
   return putBatch(owner, bankId, {
-    file_name: file,
+    file_name: more ? clampStr(lt(`${file} 等 ${more + 1} 张图片`, `${file} and ${more} more image${more === 1 ? "" : "s"}`), 300) : file,
     format,
     status: "draft",
     rights_confirmed: false,
     column_map: columnMap,
     drafts,
-    assets: [asset],
+    assets: [...originals, ...ocrAssets],
+    ...(notes.length ? { notes } : {}),
+    ...(ocr ? { ocr: true } : {}),
     report: reportOf(drafts),
   });
+}
+
+/** Reading scans needs the model: the bank must allow sending content to it and a model must be configured. */
+function requireVision(allowModel: boolean, kind: "pdf" | "image") {
+  const what = kind === "pdf" ? lt("这个 PDF 没有可提取的文字（扫描件），", "This PDF has no extractable text (a scan); ") : "";
+  if (!allowModel) {
+    throw new BankError(
+      lt(`${what}识别图片需要把页面图像发送给模型，而此题库设置为不允许发送给模型。`, `${what}reading images means sending the page images to the model, and this bank does not allow sending content to the model.`),
+      422,
+    );
+  }
+  if (!process.env.LLM_API_KEY) throw new BankError(lt(`${what}识别图片需要配置模型（LLM_API_KEY）。`, `${what}reading images needs a configured model (LLM_API_KEY).`), 422);
+}
+
+async function readScans(owner: string, bankId: string, pages: PageImage[], notes: string[]): Promise<{ questions: ParsedQuestion[]; notes: string[]; ocrAssets: string[] }> {
+  const res = await ocrPages(owner, bankId, pages);
+  return { questions: res.questions, notes: [...notes, ...res.notes], ocrAssets: res.assets };
 }
 
 const contentKey = (d: Partial<DraftItem>) => JSON.stringify([d.stem, d.type, d.options ?? [], d.answer ?? "", d.solution ?? ""]);

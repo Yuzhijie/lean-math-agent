@@ -2,15 +2,16 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, ExternalLink, FileText, Plus, Save, Trash2, X } from "lucide-react";
+import { ArrowRight, ExternalLink, FileText, ImageIcon, Plus, Save, Trash2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useI18n } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
 import { MathText } from "../MathText";
 import { api, bankUrl, errMsg, letter, problemText, QUESTION_TYPE_LIST, type BankDetail, type CategoryWithCount, type Item, type QuestionType } from "./api";
-import { CheckboxField, ErrorNote, FieldLabel, KnowledgePointInput, Modal, NativeSelect, originLabel, originVariant, splitList, typeLabel } from "./ui";
+import { AssetImages, assetUrl, CheckboxField, ErrorNote, FieldLabel, KnowledgePointInput, Modal, NativeSelect, originLabel, originVariant, splitList, typeLabel } from "./ui";
 
 type Props = {
   bankId: string;
@@ -274,12 +275,24 @@ export function ItemEditor({ bankId, item, detail, categories, onSaved, onDelete
             {item.source.page ? tr(`，第 ${item.source.page} 页`, `, page ${item.source.page}`) : ""}
             {item.source.label ? tr(`，第 ${item.source.label} 题`, `, question ${item.source.label}`) : ""}
           </span>
+          {item.source.page_image && (
+            <a href={assetUrl(bankId, item.source.page_image)} target="_blank" rel="noreferrer" className="ml-auto flex items-center gap-1 text-primary hover:underline">
+              <ImageIcon className="h-3 w-3" />
+              {tr("查看原图", "Open page image")}
+            </a>
+          )}
           {link && (
-            <a href={link} target="_blank" rel="noreferrer" className="ml-auto flex items-center gap-1 text-primary hover:underline">
+            <a href={link} target="_blank" rel="noreferrer" className={cn("flex items-center gap-1 text-primary hover:underline", !item.source.page_image && "ml-auto")}>
               <ExternalLink className="h-3 w-3" />
               {tr("查看原文件", "Open original")}
             </a>
           )}
+        </div>
+      )}
+      {item.images.length > 0 && (
+        <div className="space-y-1.5">
+          <FieldLabel>{tr("题目图形", "Figures")}</FieldLabel>
+          <AssetImages bankId={bankId} images={item.images} />
         </div>
       )}
 

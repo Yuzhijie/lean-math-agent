@@ -28,6 +28,8 @@ export const itemSourceSchema = z.object({
   page: z.number().int().positive().optional(),
   /** Question number / label in the source, e.g. "12" or "例3". */
   label: z.string().max(40).optional(),
+  /** Scans and photos: the page image (bank asset) the question was read from. */
+  page_image: z.string().max(200).optional(),
 });
 
 /** Fields a question has, before it is stored (drafts, candidates, manual entry). */
@@ -165,7 +167,7 @@ export const draftItemSchema = itemFieldsSchema.extend({
 });
 export type DraftItem = z.infer<typeof draftItemSchema>;
 
-export const IMPORT_FORMATS = ["json", "jsonl", "csv", "xlsx", "markdown", "text", "pdf"] as const;
+export const IMPORT_FORMATS = ["json", "jsonl", "csv", "xlsx", "markdown", "text", "pdf", "image"] as const;
 export type ImportFormat = (typeof IMPORT_FORMATS)[number];
 
 export const importBatchSchema = z.object({
@@ -181,6 +183,10 @@ export const importBatchSchema = z.object({
   drafts: z.array(draftItemSchema),
   /** Asset files saved for this batch (page images, embedded images). */
   assets: z.array(z.string()).default([]),
+  /** Notes for the reviewer about the whole batch (e.g. pages of a scan that could not be read). */
+  notes: z.array(z.string().max(500)).max(100).optional(),
+  /** Scans and photos: the questions were read from page images by the model. */
+  ocr: z.boolean().optional(),
   report: z
     .object({ total: z.number(), ok: z.number(), needs_review: z.number(), duplicate: z.number(), error: z.number(), committed: z.number().optional() })
     .optional(),

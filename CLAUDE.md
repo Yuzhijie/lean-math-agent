@@ -15,7 +15,7 @@ AI-powered Lean 4 math theorem prover + problem solver. Single-page Next.js app.
 |-------|------|
 | Frontend | Next.js 16, React 19, Tailwind v4, shadcn/ui (Radix), KaTeX, Lucide icons |
 | Backend | Next.js API Routes (TypeScript), Zod validation |
-| LLM | OpenAI-compatible API (configurable via env), role routing (general / prover / planner), sampling, fallback chain, LRU cache, per-run metrics |
+| LLM | OpenAI-compatible API (configurable via env), role routing (general / prover / planner / vision), image input, sampling, fallback chain, LRU cache, per-run metrics |
 | Lean | Lean 4 + Mathlib v4.33.1 + Batteries + Aesop; verification via persistent `leanprover-community/repl` workers (env reuse, sorry goals, tactic mode, axiom + statement checks), `lake env lean` fallback |
 | Compute | Python SymPy HTTP microservice (9 endpoints) |
 | State | In-memory Map + JSON disk persistence |
@@ -115,6 +115,8 @@ lib/
     query.ts                        # Item filters, category membership
     vocab.ts                        # Built-in knowledge-point vocabularies (Australian Curriculum, 课标) + bank's own
     import/                         # Importers → draft batch: pdf.ts (unpdf text + question splitter + optional model tidy with verbatim check), tabular.ts (CSV/Excel column mapping), text.ts (Markdown/TXT), fields.ts, checks.ts (duplicates, missing fields)
+                                    #   ocr.ts — scans/photos: page image → vision model (role "vision") transcribes verbatim (LaTeX maths, figure boxes) → same splitter; figures cropped and attached, source.page_image kept, every draft needs review
+                                    #   images.ts — image detection (HEIC refused), sharp loaded at run time if present (orient/scale/crop), scanned-PDF page scans from embedded images (unpdf extractImages), JS PNG encoder/scale/crop fallback
     classify.ts                     # Model classification: catalogue path (2 levels, reuses existing categories), grade, knowledge points (snapped to vocab), difficulty 1–5; runs on import and via reclassify.ts (/api/banks/:id/classify)
     profile.ts                      # Template profile of a class (programmatic + model summary), exemplar selection
     generate.ts                     # Same-type generation (同类创编) from a category, picked items or style template; checks: format, independent answer, novelty vs bank, fit
@@ -236,7 +238,7 @@ components/ui/                      # 16 shadcn/ui primitives (+avatar, dropdown
 - **Budget-aware LLM calls**: `expectedLatencyMs(role)` (EMA of observed call latencies, timeouts included) gates every repair round, goal-search expansion and sketch round — a call that cannot finish in the remaining budget is skipped rather than aborted (aborted calls still bill their tokens); tactic-step calls use `reasoningEffort: "low"` on reasoning models
 - **Retrieval before generation**: `buildProverContext` (premises for the initial goal + verified proofs of similar theorems) feeds the whole-proof, sketch and goal-search prompts; goal search re-retrieves per node; unknown identifiers get "similar declarations" from the local index
 - **Figures are computed, not drawn by the model**: the model writes a `FigureSpec` (what to construct and which conditions hold); `lib/figure` computes coordinates, checks every condition numerically and renders SVG. A figure whose conditions fail is shown as a sketch ("示意图"), never as accurate; figure checks are separate from Lean verification. Logic puzzles use `FigureSpec.logic` (grid/venn/ordering/tree): the program solves the puzzle exhaustively and checks uniqueness and the stated answer
-- **Question banks**: imports never go straight in — every file becomes a draft batch that is reviewed (with a rights confirmation) before commit; the model only restructures PDF text and anything it rewrites is rejected in favour of the original. Generated questions are candidates with four checks (format, independent re-solve, novelty vs the bank, fit) and enter the bank only when adopted by hand, marked origin "generated". On import the model decides each question's catalogue place, grade, knowledge points and difficulty (`classified: {by: "model"}`); values present in the file are kept, everything stays editable in review, and missing categories are created on commit
+- **Question banks**: imports never go straight in — every file becomes a draft batch that is reviewed (with a rights confirmation) before commit; the model only restructures PDF text and anything it rewrites is rejected in favour of the original. Scans and photos are transcribed by the vision model; nothing read from an image is trusted — every such draft is marked for review and shown next to its page image. Generated questions are candidates with four checks (format, independent re-solve, novelty vs the bank, fit) and enter the bank only when adopted by hand, marked origin "generated". On import the model decides each question's catalogue place, grade, knowledge points and difficulty (`classified: {by: "model"}`); values present in the file are kept, everything stays editable in review, and missing categories are created on commit
 - **Formalization reliability**: several sampled statements vote by elaborated signature (α-normalised); the winner must survive `decide`/`plausible` counterexample search (layer 6) before any LLM validation layer or proof search is spent on it
 - **Roles + metrics**: `chatJson`/`sampleText` take `role: "prover" | "planner"`; endpoint chains come from `LLM_PROVER_*` / `LLM_PLANNER_*`; every solve runs in `withUsageScope`, and `verifyLeanSource` records itself, so responses/sessions carry `metrics` (calls, tokens, cost, verifications, wall time)
 - **Sorry degradation**: unprovable steps get `sorry` annotations, pipeline continues
@@ -250,7 +252,7 @@ components/ui/                      # 16 shadcn/ui primitives (+avatar, dropdown
 See `.env.example`:
 - `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` — LLM configuration
 - `LLM_FALLBACK_*` — Fallback model configuration
-- `LLM_PROVER_*` (incl. `LLM_PROVER_STEPWISE`), `LLM_PLANNER_*`, `LLM_PRICES` — role endpoints and cost table
+- `LLM_PROVER_*` (incl. `LLM_PROVER_STEPWISE`), `LLM_PLANNER_*`, `LLM_VISION_*`, `LLM_PRICES` — role endpoints and cost table (vision: reads scans/photos imported into banks; `BANK_OCR_MAX_PAGES` caps pages per import)
 - `LLM_REASONING_EFFORT`, `LLM_<ROLE>_REASONING_EFFORT`, `LLM_REASONING_TOKEN_BUDGET`, `LLM_SAMPLING_PARAMS`, `LLM_MAX_TOKENS_PARAM`, `LLM_REASONING_PARAM` — OpenAI reasoning-model dialect (GPT-5.x/GPT-6/o-series auto-detected: no temperature/top_p, `max_completion_tokens`, `reasoning_effort`; on openrouter.ai `max_tokens` + `reasoning: { effort }`)
 - `WHOLE_PROOF_*`, `LEAN_SUGGEST_TIMEOUT_MS`, `LOOGLE_URL` — whole-proof loop, library search
 - `PROOF_BUDGET`, `LEAN_TACTIC_TIMEOUT_MS`, `LEAN_HAMMER_BUDGET_MS`, `GOAL_SEARCH_*`, `SKETCH_*` — budgets, hammer, goal-level search, sketch-and-fill

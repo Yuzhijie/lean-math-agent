@@ -24,29 +24,47 @@ export interface CallOptions {
   noCache?: boolean;
   /** Reasoning effort for this call (reasoning models only; overrides LLM_*_REASONING_EFFORT). */
   reasoningEffort?: ReasoningEffort;
+  /**
+   * Leave the prompt as written regardless of the UI language (no English
+   * switch): for transcription, where the output must be in the source's language.
+   */
+  keepLanguage?: boolean;
 }
 
 // ── Message types for multi-turn conversations ────────────────────────
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
+  /** Images sent with a user message, as data URLs (data:image/png;base64,…). Needs a vision model. */
+  images?: string[];
+}
+
+/** OpenAI chat format: a message with images becomes text + image_url parts. */
+function wireMessage(m: ChatMessage): Record<string, unknown> {
+  if (!m.images?.length) return { role: m.role, content: m.content };
+  return {
+    role: m.role,
+    content: [{ type: "text", text: m.content }, ...m.images.map((url) => ({ type: "image_url", image_url: { url } }))],
+  };
 }
 
 // ── Single-turn convenience (backward compatible) ─────────────────────
 export async function chatJson<T>(args: CallOptions & {
   system: string;
   user: string;
+  /** Images sent with the user message (data URLs); needs a model that reads images (role "vision"). */
+  images?: string[];
   schema: z.ZodType<T, z.ZodTypeDef, unknown>;
   schemaName: string;
   /** Max Zod-validation retries (default 1). Set 0 for time-sensitive calls. */
   maxRetries?: number;
 }): Promise<T> {
-  const { system, user, ...rest } = args;
+  const { system, user, images, ...rest } = args;
   return chatJsonMultiTurn({
     ...rest,
     messages: [
       { role: "system", content: system },
-      { role: "user", content: user },
+      { role: "user", content: user, ...(images?.length ? { images } : {}) },
     ],
   });
 }
@@ -258,7 +276,7 @@ export function buildRequestBody(
 
   return {
     model: endpoint.model,
-    messages,
+    messages: messages.map(wireMessage),
     ...(sendSampling && options.temperature !== undefined ? { temperature: options.temperature } : {}),
     ...(sendSampling && options.topP !== undefined ? { top_p: options.topP } : {}),
     ...(maxTokens !== undefined ? { [maxTokensKey]: maxTokens } : {}),
@@ -282,7 +300,7 @@ async function rawChatMessages(
   options: CallOptions = {},
 ): Promise<string> {
   // Write user-facing text in the UI language (see output-locale.ts).
-  const messages = localizeMessages(inputMessages, await outputLocale(), { minimal: options.role === "prover" });
+  const messages = options.keepLanguage ? inputMessages : localizeMessages(inputMessages, await outputLocale(), { minimal: options.role === "prover" });
   let config: LlmConfig;
   try {
     config = loadConfig();

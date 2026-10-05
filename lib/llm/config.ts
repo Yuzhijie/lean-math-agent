@@ -21,12 +21,15 @@ export type LogLevel = "silent" | "error" | "info" | "debug";
  *   prover  — LLM_PROVER_MODEL (+ LLM_PROVER_BASE_URL / LLM_PROVER_API_KEY);
  *             falls back to the general chain unless
  *             LLM_PROVER_FALLBACK_TO_GENERAL=false
+ *   vision  — LLM_VISION_MODEL: reads page images (scanned / photographed
+ *             questions imported into a bank); defaults to the general chain,
+ *             which then must accept images
  *   planner — LLM_PLANNER_MODEL (reasoning model for formalization /
  *             method enumeration / planning); defaults to the general chain
  */
-export type ModelRole = "general" | "prover" | "planner";
+export type ModelRole = "general" | "prover" | "planner" | "vision";
 
-export const MODEL_ROLES: readonly ModelRole[] = ["general", "prover", "planner"];
+export const MODEL_ROLES: readonly ModelRole[] = ["general", "prover", "planner", "vision"];
 
 /** Price per 1M tokens (any currency), keyed by model name. */
 export type ModelPrices = Record<string, { input: number; output: number }>;
@@ -151,6 +154,7 @@ export function loadConfig(): LlmConfig {
   const proverChain = roleChain("PROVER", baseUrl, apiKey ?? "");
   const proverFallsBack = process.env.LLM_PROVER_FALLBACK_TO_GENERAL !== "false";
   const plannerChain = roleChain("PLANNER", baseUrl, apiKey ?? "");
+  const visionChain = roleChain("VISION", baseUrl, apiKey ?? "");
 
   return {
     primary,
@@ -159,6 +163,8 @@ export function loadConfig(): LlmConfig {
       general,
       prover: proverChain.length ? (proverFallsBack ? [...proverChain, ...general] : proverChain) : general,
       planner: plannerChain.length ? [...plannerChain, ...general] : general,
+      // A text-only general model cannot read images: no fallback to it when a vision model is set.
+      vision: visionChain.length ? visionChain : general,
     },
     prices: parsePrices(process.env.LLM_PRICES),
     maxHttpRetries: parseNonNegativeInt(process.env.LLM_MAX_HTTP_RETRIES, 3),
@@ -173,6 +179,7 @@ export function loadConfig(): LlmConfig {
     roleReasoningEffort: {
       prover: parseEffort(process.env.LLM_PROVER_REASONING_EFFORT),
       planner: parseEffort(process.env.LLM_PLANNER_REASONING_EFFORT),
+      vision: parseEffort(process.env.LLM_VISION_REASONING_EFFORT),
     },
     samplingParams: parseChoice(process.env.LLM_SAMPLING_PARAMS, ["auto", "always", "never"] as const, "auto"),
     maxTokensParam: parseChoice(

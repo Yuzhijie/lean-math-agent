@@ -113,8 +113,12 @@ response and session carries `metrics`: LLM calls/tokens by role and model, an e
 ### Question banks (试题库)
 
 `/bank` keeps each customer's own questions locally, per signed-in account (`.data/banks/`). Import
-PDF (text PDFs), JSON/JSONL, CSV, Excel or Markdown: the file becomes a draft batch you review and
-edit before committing, with duplicates flagged. The model decides each question's place in the category
+PDF, JSON/JSONL, CSV, Excel or Markdown, or scans and photos: the file becomes a draft batch you review and
+edit before committing, with duplicates flagged. Scanned PDFs and images (PNG, JPEG, WebP, GIF; several
+photos at once for the pages of one paper) are read page by page by a vision model (`LLM_VISION_MODEL`,
+otherwise the general model, which then must accept images): the text is transcribed verbatim with maths
+in LaTeX, figures are cut out and attached to their question, and every question keeps its page image so
+the reviewer can compare. This needs a bank that allows sending content to the model. The model decides each question's place in the category
 tree (e.g. Number › Fractions), its grade, knowledge points and difficulty; missing categories are created
 on commit, and "AI classify" does the same for questions already in a bank. Organise questions in categories — a manual group,
 a saved filter, or a style template that describes a type of question without source questions
