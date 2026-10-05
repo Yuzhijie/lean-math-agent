@@ -21,12 +21,15 @@ import type {
   NaturalLanguageSolution,
   Session,
 } from "@/lib/types";
+import { manualLeanAttempt, shouldAutoAttemptLean } from "@/lib/pipeline/lean-attempt";
 import { lt, withRequestLocale } from "@/lib/llm/output-locale";
 
 interface SolveRequest {
   problem_text?: string;
   session_id?: string;
   options?: TheoremPipelineOptions & {
+    /** Run the Lean formalization step automatically (default: no — started by hand via /api/lean-attempt). */
+    lean_attempt?: boolean;
     skip_lean_attempt?: boolean;
     force_type?: "computational" | "theorem" | "optimization" | "find_all_values";
     skip_cross_validation?: boolean;
@@ -170,12 +173,10 @@ async function handleComputationalProblem(
   // Step 3: Attempt Lean 4 formal proof (or explain why not)
   let leanProofAttempt: LeanProofAttempt;
 
-  if (opts.skip_lean_attempt) {
-    leanProofAttempt = {
-      attempted: false,
-      success: false,
-      failure_reason: lt("用户选择跳过 Lean 形式化尝试", "Lean formalization skipped at the user's request"),
-    };
+  if (!shouldAutoAttemptLean(opts)) {
+    // The last step is started by hand (POST /api/lean-attempt).
+    leanProofAttempt = manualLeanAttempt();
+    updateSession(session.id, { lean_proof_attempt: leanProofAttempt });
   } else {
     updateSession(session.id, { pipeline_stage: "lean_attempting" });
     events.push({ stage: "lean_attempting", detail: lt("尝试 Lean 4 形式化证明...", "Attempting a Lean 4 formal proof...") });

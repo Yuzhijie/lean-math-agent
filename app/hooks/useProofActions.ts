@@ -379,6 +379,28 @@ export function useProofActions(
     [dispatch],
   );
 
+  // ── Lean formalization (last solving step, started by hand) ─────
+
+  const attemptLean = useCallback(async () => {
+    if (!state.sessionId) return;
+    lastActionRef.current = attemptLean;
+    dispatch({ type: "REQUEST", operation: "lean-attempt" });
+    try {
+      const res = await fetch("/api/lean-attempt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: state.sessionId }),
+      });
+      const data = await readJson<{ lean_proof_attempt: LeanProofAttempt }>(res);
+      dispatch({ type: "LEAN_ATTEMPT_OK", leanProofAttempt: data.lean_proof_attempt });
+    } catch (e) {
+      dispatch({
+        type: "REQUEST_ERROR",
+        message: e instanceof Error ? e.message : tr("形式化证明失败", "Formalization failed"),
+      });
+    }
+  }, [dispatch, state.sessionId, tr]);
+
   // ── Load session from history ────────────────────────────────────
 
   const loadSession = useCallback(
@@ -452,6 +474,7 @@ export function useProofActions(
     proveAll,
     verify,
     solveAll,
+    attemptLean,
     switchMethod,
     useGeneratedProblem,
     loadSession,

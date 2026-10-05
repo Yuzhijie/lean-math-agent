@@ -6,7 +6,7 @@ AI-powered Lean 4 math theorem prover + problem solver. Single-page Next.js app.
 - User inputs a math problem in natural language (Chinese or English; UI and generated content follow the UI language)
 - System classifies problem type → dispatches to appropriate solver pipeline
 - Theorem problems: autoformalize (candidate voting + counterexample search) → premise retrieval + proof memory → hammer → whole-proof prover loop (sample → verify → repair with Lean feedback) → sketch-and-fill (holes closed by hammer / goal-level tactic search) → enumerate methods → plan steps → best-first proof search → Lean 4 verify
-- Computational problems: equation setup → SymPy solve → cross-validate → NL explanation
+- Computational problems: equation setup → SymPy solve → cross-validate → NL explanation; the Lean formalization step is started by hand from the Lean tab (`/api/lean-attempt`)
 - Also handles: optimization (deterministic search), find-all-values (systematic enumeration)
 
 ## Tech Stack
@@ -66,6 +66,7 @@ app/
     evaluate/route.ts               # Multi-agent method scoring
     generate-problem/route.ts       # Problem generation: source "bank" (local bank as template) or built-in by params
     intuition/route.ts              # Post-proof learning review
+    lean-attempt/route.ts           # Last solving step, started by hand: Lean 4 formalization of a solved computational / optimization / find-all problem
     knowledge/search/route.ts       # Knowledge graph search
     knowledge/graph/route.ts        # Knowledge graph subgraph
     knowledge/stats/route.ts        # Knowledge graph statistics
@@ -122,6 +123,7 @@ lib/
     http.ts                         # bankRoute(): owner from NextAuth session (else "local"), request language, error mapping
   pipeline/
     theorem-pipeline.ts             # Theorem pipeline shared by /api/solve and /api/solve-stream
+    lean-attempt.ts                 # Lean formalization attempt for non-theorem problems; solves skip it unless `options.lean_attempt: true` (the UI starts it from the Lean tab)
   prover/
     whole-proof.ts                  # Whole-proof loop: sample k proofs → verify → repair with feedback + suggestions
     sketch.ts                       # Sketch-and-fill: skeleton with `have … := by sorry` holes → each hole closed by hammer/goal search → splice → strict verify

@@ -111,6 +111,9 @@ export type Action =
       leanProofAttempt?: LeanProofAttempt;
     }
 
+  // manual Lean formalization (last solving step)
+  | { type: "LEAN_ATTEMPT_OK"; leanProofAttempt: LeanProofAttempt }
+
   // solve-all
   | {
       type: "SOLVE_OK";
@@ -348,6 +351,10 @@ function reducer(
         leanProofAttempt: action.leanProofAttempt ?? state.leanProofAttempt,
         busy: null,
       };
+
+    // ── Manual Lean formalization ──────────────────────────────────
+    case "LEAN_ATTEMPT_OK":
+      return { ...state, leanProofAttempt: action.leanProofAttempt, busy: null };
 
     // ── Solve-all ──────────────────────────────────────────────────
     case "SOLVE_OK": {

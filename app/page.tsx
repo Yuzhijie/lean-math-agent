@@ -79,6 +79,7 @@ export default function Home() {
     proveAll,
     verify,
     solveAll,
+    attemptLean,
     switchMethod,
     useGeneratedProblem,
     loadSession,
@@ -264,7 +265,7 @@ export default function Home() {
                 {busy && (
                   <Badge variant="info" className="gap-1.5 animate-pulse-soft">
                     <span className="h-1.5 w-1.5 rounded-full bg-primary animate-spin" />
-                    {tr("工作中：", "Working: ")}{busy}
+                    {tr("工作中：", "Working: ")}{busy === "lean-attempt" ? tr("形式化证明", "formal proof") : busy}
                   </Badge>
                 )}
               </div>
@@ -677,7 +678,7 @@ export default function Home() {
                           }
                         >
                           {!leanProofAttempt.attempted
-                            ? tr("未尝试", "Not attempted")
+                            ? tr("未开始", "Not started")
                             : leanProofAttempt.success
                               ? tr("✅ 证明成功", "✅ Proof succeeded")
                               : tr("⚠️ 未能完成", "⚠️ Incomplete")}
@@ -685,6 +686,25 @@ export default function Home() {
                       </div>
                     </CardHeader>
                     <CardContent className="space-y-4">
+                      {!leanProofAttempt.attempted && (
+                        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-primary/20 bg-primary/5 px-4 py-3">
+                          <p className="text-sm text-muted-foreground">
+                            {tr(
+                              "形式化证明是求解的最后一步，需要手动开始，可能需要几分钟。",
+                              "The formal proof is the last solving step. Start it by hand; it can take a few minutes.",
+                            )}
+                          </p>
+                          <Button
+                            size="sm"
+                            onClick={() => void attemptLean()}
+                            disabled={!!busy || !state.sessionId}
+                            loading={busy === "lean-attempt"}
+                          >
+                            <Play className="h-3.5 w-3.5" />
+                            {busy === "lean-attempt" ? tr("形式化中…", "Formalizing…") : tr("开始形式化证明", "Start formal proof")}
+                          </Button>
+                        </div>
+                      )}
                       {leanProofAttempt.attempted && leanProofAttempt.success && (
                         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                           <Badge variant="secondary">
