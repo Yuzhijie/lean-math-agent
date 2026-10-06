@@ -23,13 +23,15 @@ import type {
 } from "@/lib/types";
 import { lt, withRequestLocale } from "@/lib/llm/output-locale";
 import { requestOwner } from "@/lib/bank/http";
-import { describeProblemFigures, figureRefsSchema, problemWithFigure, type FigureRef } from "@/lib/bank/problem-figures";
+import { describeProblemFigures, figureRefsSchema, figureTextOf, problemWithFigure, type FigureRef } from "@/lib/bank/problem-figures";
 
 interface SolveRequest {
   problem_text?: string;
   session_id?: string;
   /** Figures of the problem (question bank images): read by the vision model and appended to the text before solving. */
   figures?: FigureRef[];
+  /** The figure's description when it is already known (a generated question's figure): appended as is. */
+  figure_text?: string;
   options?: TheoremPipelineOptions & {
     /** Run the Lean formalization step automatically (default: no — started by hand via /api/lean-attempt). */
     lean_attempt?: boolean;
@@ -90,7 +92,11 @@ async function handlePOST(req: Request) {
         try {
           // ── Figures: read once by the vision model, appended to the problem text ──
           let figureDescription: string | undefined;
-          if (figures.length) {
+          const knownFigure = body.session_id ? undefined : figureTextOf(body.figure_text);
+          if (knownFigure) {
+            figureDescription = knownFigure;
+            sess = updateSession(sess.id, { problem_text: problemWithFigure(sess.problem_text, knownFigure), figure_description: knownFigure });
+          } else if (figures.length) {
             emit({ type: "progress", stage: "reading_figure", detail: lt("模型正在读取题目图形...", "The model is reading the problem's figure...") });
             const fig = await describeProblemFigures({ owner, problemText: sess.problem_text, figures });
             if (fig.description) {

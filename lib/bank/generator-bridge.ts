@@ -67,6 +67,7 @@ export async function generateProblemsFromBank(args: {
       difficulty: c.difficulty ?? args.selection.difficulty,
       knowledge_points: c.knowledge_points,
       topic_category_id: args.selection.category_id,
+      ...(c.figure ? { figure: { svg: c.figure.svg, description: c.figure.description, source: c.figure.source, verified: c.figure.verified } } : {}),
     };
     return {
       id: c.id,

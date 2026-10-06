@@ -9,6 +9,7 @@ import type {
 } from "@/lib/types";
 import { GRADE_LEVELS, DIFFICULTY_LEVELS, COMPETITION_DOMAINS } from "@/lib/types";
 import { MathText } from "./MathText";
+import { QuestionFigure } from "./QuestionFigure";
 import { FigurePanel } from "./FigurePanel";
 import { BankTemplateControls, MatchHint, useBanks, type BankTemplateValue } from "./BankTemplateControls";
 import type { SolvedFigure } from "@/lib/figure/spec";
@@ -53,6 +54,8 @@ import {
 export interface UsedProblemFigure {
   figure?: SolvedFigure;
   fallbackSvg?: string;
+  /** Exact description of the figure (generated questions): added to the problem text when solving. */
+  description?: string;
   /** Figures of a question bank item (images cut from the original page), shown as they are. */
   images?: Array<{ url: string; caption?: string }>;
 }
@@ -435,11 +438,12 @@ function ProblemCard({
       setAdopt({ state: "error", message: e instanceof Error ? e.message : String(e) });
     }
   }
-  const checkNames: Record<keyof NonNullable<typeof bank>["checks"], string> = {
+  const checkNames: Record<"format" | "answer" | "novelty" | "fit" | "figure", string> = {
     format: tr("格式", "Format"),
     answer: tr("答案", "Answer"),
     novelty: tr("查重", "Duplicate"),
     fit: tr("贴合模板", "Fit"),
+    figure: tr("图形", "Figure"),
   };
 
   return (
@@ -505,14 +509,18 @@ function ProblemCard({
 
         {/* Diagram */}
         {/* Computed + checked figure; the model's own SVG is only a fallback. */}
-        <FigurePanel key={problem.id} problemText={problem.statement} fallbackSvg={problem.diagram_svg} onFigure={setFigure} />
+        {bank?.figure ? (
+          <QuestionFigure svg={bank.figure.svg} source={bank.figure.source} verified={bank.figure.verified} />
+        ) : (
+          <FigurePanel key={problem.id} problemText={problem.statement} fallbackSvg={problem.diagram_svg} onFigure={setFigure} />
+        )}
 
         {/* Bank checks: format, independent answer, duplicate vs the bank, fit to the template */}
         {bank && (
           <div className="space-y-1.5">
             <div className="flex flex-wrap items-center gap-1.5">
-              {(Object.keys(checkNames) as Array<keyof typeof checkNames>).map((k) => {
-                const c = bank.checks[k];
+              {(Object.keys(checkNames) as Array<keyof typeof checkNames>).filter((k) => bank.checks[k]).map((k) => {
+                const c = bank.checks[k]!;
                 return (
                   <span
                     key={k}
@@ -532,9 +540,9 @@ function ProblemCard({
             </div>
             {showChecks && (
               <ul className="space-y-0.5 rounded-md border border-border/50 p-2 text-xs text-muted-foreground">
-                {(Object.keys(checkNames) as Array<keyof typeof checkNames>).map((k) => (
+                {(Object.keys(checkNames) as Array<keyof typeof checkNames>).filter((k) => bank.checks[k]).map((k) => (
                   <li key={k}>
-                    <span className="font-medium text-foreground/80">{checkNames[k]}</span>: {bank.checks[k].detail}
+                    <span className="font-medium text-foreground/80">{checkNames[k]}</span>: {bank.checks[k]!.detail}
                   </li>
                 ))}
               </ul>
@@ -571,7 +579,15 @@ function ProblemCard({
         <div className="flex flex-wrap items-center gap-2 pt-1">
           <Button
             size="sm"
-            onClick={() => onUse(figure || problem.diagram_svg ? { figure, fallbackSvg: problem.diagram_svg } : undefined)}
+            onClick={() =>
+              onUse(
+                bank?.figure
+                  ? { fallbackSvg: bank.figure.svg, description: bank.figure.description }
+                  : figure || problem.diagram_svg
+                    ? { figure, fallbackSvg: problem.diagram_svg }
+                    : undefined,
+              )
+            }
             disabled={disabled}
             className="gap-1.5"
           >

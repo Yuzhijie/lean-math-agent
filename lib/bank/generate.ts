@@ -10,6 +10,11 @@
  *              answers) plus programmatic arithmetic where it applies
  *   novelty  — not too close to any bank question or earlier candidate
  *   fit      — a model judge scores fit with the profile (1–5, ≥ 3 passes)
+ *   figure   — when the template has figures: each question comes with a
+ *              figure spec the program draws in the template's style
+ *              (lib/figure/visual.ts); the re-solve and the judge see an
+ *              exact description of the drawn figure; a model-drawn SVG
+ *              (fallback) is re-read by the vision model
  * Candidates are stored as a Generation; the user adopts the ones they want.
  */
 import { randomUUID } from "node:crypto";
@@ -25,6 +30,11 @@ import { StemIndex, TOO_CLOSE } from "./similarity";
 import { addItems, BankError, getBank, getCategory, getGeneration, getItem, listCategories, listItems, putGeneration } from "./store";
 import { QUESTION_TYPES, type Candidate, type Check, type Generation, type Item, type QuestionType, type TemplateProfile, type TemplateRef } from "./types";
 import { vocabFor } from "./vocab";
+import { buildVisual, DEFAULT_STYLE, VISUAL_GUIDE, visualSpecSchema, type FigureStyle } from "../figure/visual";
+import { loadSharp } from "./import/images";
+import { saveAsset } from "./store";
+import { hasTemplateImages, readTemplateVisuals, type TemplateVisuals } from "./template-visual";
+import type { CandidateFigure } from "./types";
 
 const MAX_COUNT = 10;
 const EXEMPLARS = 5;
@@ -184,6 +194,14 @@ Rules:
 Write Chinese for stems, options, solutions and hints.
 Return JSON only: {"questions": [{"stem": string, "type": "multiple_choice"|"numeric"|"short_answer"|"proof"|"other", "options"?: string[], "answer": string, "solution": string, "hints"?: string[], "difficulty"?: 1-5, "knowledge_points"?: string[]}]}`;
 
+const FIGURE_RULE = "- Never refer to a figure, table or picture that is not there. If the profile needs a figure, describe the figure precisely in words in the stem (shapes, labels, lengths, positions) so that it can be drawn from the text.";
+const FIGURE_RULE_WITH_SPECS =
+  '- Questions with a figure: put it in "figure" as a figure spec (see FIGURES below); the program draws it in the template\'s style. The stem refers to the figure the way the examples do and must not repeat information that only the figure should give. Copy the layout of the examples\' figures (e.g. the same number of cards with the same kind of picture), never their pictures, logos or brand names.';
+
+const FIGURE_CHECK_SYSTEM = `You check a figure drawn for a maths question. You get the question, the description the figure should match, and the figure image.
+Say whether the image shows exactly what the description says (every number, label, time, value and shape) and whether it fits the question. List concrete problems.
+Return JSON only: {"ok": true|false, "problems": "…"}`;
+
 const RESOLVE_SYSTEM = `You solve math questions independently and carefully. For each question, work it out and give only the final answer.
 - Multiple choice: the letter of the correct option (A, B, C, …).
 - Numeric: the number, with a unit if the question asks for one.
@@ -208,6 +226,7 @@ const generatedSchema = z.object({
         hints: z.array(z.string()).optional().nullable(),
         difficulty: z.coerce.number().optional().nullable().catch(undefined),
         knowledge_points: z.array(z.string()).optional().nullable(),
+        figure: z.unknown().optional().nullable(),
       }),
     )
     .min(1),
@@ -215,7 +234,16 @@ const generatedSchema = z.object({
 const resolveSchema = z.object({ answers: z.array(z.object({ n: z.coerce.number(), answer: str })) });
 const judgeSchema = z.object({ scores: z.array(z.object({ n: z.coerce.number(), score: z.coerce.number(), reason: z.string().optional().default("") })) });
 
-function profileText(p: TemplateProfile): string {
+/** How the template's figures are to be handled in this generation. */
+interface FigurePlan {
+  /** New questions get figure specs drawn by the program. */
+  on: boolean;
+  style: FigureStyle;
+  kinds: string[];
+  layout?: string;
+}
+
+function profileText(p: TemplateProfile, figures?: FigurePlan): string {
   const lines = [
     `Summary: ${p.summary}`,
     `Question type: ${p.type}${p.option_count ? ` with exactly ${p.option_count} options` : ""}`,
@@ -224,7 +252,11 @@ function profileText(p: TemplateProfile): string {
     p.answer_form ? `Answer form: ${p.answer_form}` : "",
     p.stem_structure ? `Stem structure: ${p.stem_structure}` : "",
     p.knowledge_points.length ? `Knowledge points: ${p.knowledge_points.join("; ")}` : "",
-    p.needs_figure ? "Figure: these questions use a figure — describe it precisely in words in the stem." : "Figure: none — do not refer to any figure.",
+    figures?.on
+      ? `Figure: these questions come with a figure${figures.kinds.length ? ` (kinds: ${figures.kinds.join(", ")})` : ""}${figures.layout ? `; layout: ${figures.layout}` : ""}. Give each new question a figure of the same kind and layout in "figure".`
+      : p.needs_figure
+        ? "Figure: these questions use a figure — describe it precisely in words in the stem."
+        : "Figure: none — do not refer to any figure.",
     p.language ? `Source questions are written in ${p.language === "zh" ? "Chinese" : "English"}.` : "",
   ];
   return lines.filter(Boolean).join("\n");
@@ -237,9 +269,30 @@ function toType(t: string | undefined, fallback: QuestionType): QuestionType {
   return (QUESTION_TYPES as readonly string[]).includes(v) ? (v as QuestionType) : fallback;
 }
 
-type Draft = Omit<Candidate, "checks" | "passed" | "adopted_item_id">;
+type Draft = Omit<Candidate, "checks" | "passed" | "adopted_item_id"> & { figureIssue?: string };
 
-function toDraft(q: z.infer<typeof generatedSchema>["questions"][number], p: TemplateProfile): Draft {
+/** Draw a question's figure spec; an unusable spec becomes `figureIssue`. */
+function drawFigure(raw: unknown, style: FigureStyle): { figure?: CandidateFigure; figureIssue?: string } {
+  if (raw === undefined || raw === null) return {};
+  const parsed = visualSpecSchema.safeParse(raw);
+  if (!parsed.success) {
+    const i = parsed.error.issues[0];
+    return { figureIssue: lt(`图形描述无效：${i?.path.join(".")} ${i?.message}`, `invalid figure spec: ${i?.path.join(".")} ${i?.message}`) };
+  }
+  try {
+    const v = buildVisual(parsed.data, style);
+    return { figure: { spec: parsed.data, svg: v.svg, description: v.description, source: v.source, verified: v.verified }, ...(v.issues.length ? { figureIssue: v.issues.join(lt("；", "; ")) } : {}) };
+  } catch (e) {
+    return { figureIssue: lt(`无法绘制图形：${errText(e)}`, `the figure could not be drawn: ${errText(e)}`) };
+  }
+}
+
+/** The question as a solver or judge sees it: stem plus the exact description of its figure. */
+function withFigureText<T extends { stem: string; figure?: CandidateFigure }>(d: T): T {
+  return d.figure ? { ...d, stem: `${d.stem}\n[Figure: ${d.figure.description}]` } : d;
+}
+
+function toDraft(q: z.infer<typeof generatedSchema>["questions"][number], p: TemplateProfile, style: FigureStyle = DEFAULT_STYLE): Draft {
   const type = toType(q.type ?? undefined, p.type);
   const options = q.options?.length ? q.options.map((o) => o.replace(LETTER_PREFIX, "").trim()) : undefined;
   let answer = q.answer.trim();
@@ -257,6 +310,7 @@ function toDraft(q: z.infer<typeof generatedSchema>["questions"][number], p: Tem
     grade: p.grade,
     difficulty: d ?? (p.difficulty_range ? Math.round((p.difficulty_range[0] + p.difficulty_range[1]) / 2) : undefined),
     knowledge_points: (kps.length ? kps : p.knowledge_points).slice(0, 20),
+    ...drawFigure(q.figure, style),
   };
 }
 
@@ -281,7 +335,7 @@ export function formatCheck(c: Draft, p: TemplateProfile): Check {
   } else if (c.type === "numeric") {
     if (c.answer.trim() && parseNumber(c.answer) === null) issues.push(lt(`答案“${c.answer}”不是一个数`, `answer "${c.answer}" is not a number`));
   }
-  if (!p.needs_figure && usesFigure({ stem: c.stem })) issues.push(lt("题干引用了不存在的图", "the stem refers to a figure that is not there"));
+  if (!p.needs_figure && !c.figure && usesFigure({ stem: c.stem })) issues.push(lt("题干引用了不存在的图", "the stem refers to a figure that is not there"));
   return issues.length ? check(false, issues.join(lt("；", "; "))) : check(true, lt("格式正确", "format ok"));
 }
 
@@ -346,6 +400,57 @@ function noveltyChecks(drafts: Draft[], bankItems: Item[]): Check[] {
   });
 }
 
+function figureCheck(d: Draft, svgCheck: Check | undefined): Check {
+  if (d.figureIssue && !d.figure) return check(false, d.figureIssue);
+  if (!d.figure) {
+    return usesFigure({ stem: d.stem })
+      ? check(false, lt("题干引用了图形，但没有给出图形", "the stem refers to a figure but none was given"))
+      : check(true, lt("此题不需要图形", "this question has no figure"), true);
+  }
+  if (d.figure.source === "program") {
+    return d.figure.verified && !d.figureIssue
+      ? check(true, lt("图形由程序按题目数据绘制", "the figure was drawn by the program from the question's data"))
+      : check(false, lt(`图形条件不成立：${d.figureIssue ?? ""}`, `the figure's conditions do not hold: ${d.figureIssue ?? ""}`));
+  }
+  return svgCheck ?? check(true, lt("图形由模型绘制，未经校验，请人工核对", "the figure was drawn by the model and is not checked; please review"), true);
+}
+
+/** Re-read model-drawn SVG figures with the vision model (needs sharp to rasterise). Keyed by draft index. */
+async function checkModelFigures(drafts: Draft[]): Promise<Map<number, Check>> {
+  const out = new Map<number, Check>();
+  const todo = drafts.map((d, i) => ({ d, i })).filter(({ d }) => d.figure?.source === "model");
+  if (!todo.length) return out;
+  const sharp = await loadSharp();
+  if (!sharp) return out;
+  await Promise.all(
+    todo.map(async ({ d, i }) => {
+      try {
+        const png = await sharp(Buffer.from(d.figure!.svg)).png().toBuffer();
+        const res = await chatJson({
+          role: "vision",
+          system: FIGURE_CHECK_SYSTEM,
+          user: `Question:\n${clip(d.stem, 2000)}\n\nThe figure should show: ${d.figure!.description}`,
+          images: [`data:image/png;base64,${png.toString("base64")}`],
+          schema: z.object({ ok: z.boolean(), problems: z.string().optional().default("") }),
+          schemaName: "FigureCheck",
+          temperature: 0,
+          maxRetries: 1,
+          keepLanguage: true,
+        });
+        out.set(
+          i,
+          res.ok
+            ? check(true, lt("模型绘制的图形经视觉模型核对与描述一致", "the model-drawn figure matches its description (checked by the vision model)"))
+            : check(false, lt(`模型绘制的图形与描述不符：${res.problems}`, `the model-drawn figure does not match its description: ${res.problems}`)),
+        );
+      } catch (e) {
+        out.set(i, check(true, lt(`图形核对未完成：${errText(e)}`, `figure check failed: ${errText(e)}`), true));
+      }
+    }),
+  );
+  return out;
+}
+
 function listForModel(drafts: Draft[], withAnswer: boolean): string {
   return drafts.map((d, i) => describeItem(d, i + 1, withAnswer)).join("\n\n");
 }
@@ -360,21 +465,41 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
   if (!bank.allow_model) throw new BankError(lt("该题库不允许将内容发送给模型服务", "this bank does not allow sending its content to the model service"), 403);
   const count = Math.min(MAX_COUNT, Math.max(1, Math.floor(Number(args.count) || 1)));
   const ask = Math.ceil(count * 1.5);
-  const { label, profile, exemplars, note, matched } = await resolveTemplate(owner, bankId, template);
+  const { label, profile, exemplars, note: templateNote, matched } = await resolveTemplate(owner, bankId, template);
   const inLang = <T>(fn: () => Promise<T>) => inBankLanguage(bank, fn);
+
+  // 0. Template figures (scans / photos): the vision model reads what they show and their style.
+  let visuals: TemplateVisuals | undefined;
+  if (hasTemplateImages(exemplars)) visuals = await readTemplateVisuals(owner, bankId, exemplars);
+  const figures: FigurePlan = {
+    on: !!visuals?.descriptions.size,
+    style: visuals?.style ?? DEFAULT_STYLE,
+    kinds: visuals?.kinds ?? [],
+    layout: visuals?.layout,
+  };
+  const figureNote = visuals?.note ? lt(`未能读取模板图形（${visuals.note}），新题按文字出`, `the template's figures could not be read (${visuals.note}); questions were written from the text`) : undefined;
+  const note = [templateNote, figureNote].filter(Boolean).join(lt("；", "; ")) || undefined;
 
   // 1. Write candidates.
   const exemplarText = exemplars.length
-    ? `EXAMPLES — for the type only, do NOT copy (new context, new numbers, new wording; same skill and difficulty):\n\n${exemplars.map((e, i) => describeItem({ ...e, stem: clip(e.stem, 1500) }, i + 1)).join("\n\n")}`
+    ? `EXAMPLES — for the type only, do NOT copy (new context, new numbers, new wording; same skill and difficulty):\n\n${exemplars
+        .map((e, i) => {
+          const fig = visuals?.descriptions.get(e.id);
+          return describeItem({ ...e, stem: clip(e.stem, 1500) }, i + 1) + (fig ? `\nFigure of example ${i + 1}: ${fig}` : "");
+        })
+        .join("\n\n")}`
     : "No example questions: follow the profile.";
-  const user = [`PROFILE\n${profileText(profile)}`, exemplarText, `Write ${ask} new question(s) of this type.`].join("\n\n");
+  const user = [`PROFILE\n${profileText(profile, figures)}`, exemplarText, `Write ${ask} new question(s) of this type.`].join("\n\n");
+  const system = figures.on ? `${GENERATE_SYSTEM.replace(FIGURE_RULE, FIGURE_RULE_WITH_SPECS)}\n\n${VISUAL_GUIDE}` : GENERATE_SYSTEM;
   let generated: z.infer<typeof generatedSchema>;
   try {
-    generated = await inLang(() => chatJson({ system: GENERATE_SYSTEM, user, schema: generatedSchema, schemaName: "SameTypeQuestions", temperature: 0.8, noCache: true }));
+    generated = await inLang(() => chatJson({ system, user, schema: generatedSchema, schemaName: "SameTypeQuestions", temperature: 0.8, noCache: true, ...(figures.on ? { maxTokens: 12000 } : {}) }));
   } catch (e) {
     throw new BankError(lt(`生成失败：${errText(e)}`, `generation failed: ${errText(e)}`), 502);
   }
-  const drafts = generated.questions.slice(0, ask * 2).map((q) => toDraft(q, profile));
+  const drafts = generated.questions.slice(0, ask * 2).map((q) => toDraft(q, profile, figures.style));
+  // Model-drawn figures (no kind fitted): the vision model checks them against their description.
+  const svgChecks = figures.on ? await checkModelFigures(drafts) : new Map<number, Check>();
 
   // 2. Independent re-solve and fit judge (in parallel; neither sees the other).
   const solvable = drafts.map((d, i) => ({ d, n: i + 1 })).filter(({ d }) => d.type === "multiple_choice" || d.type === "numeric");
@@ -382,7 +507,7 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
     ? inLang(() =>
         chatJson({
           system: RESOLVE_SYSTEM,
-          user: `Questions:\n\n${solvable.map(({ d, n }) => describeItem(d, n, false)).join("\n\n")}`,
+          user: `Questions:\n\n${solvable.map(({ d, n }) => describeItem(withFigureText(d), n, false)).join("\n\n")}`,
           schema: resolveSchema,
           schemaName: "IndependentAnswers",
           temperature: 0,
@@ -393,7 +518,7 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
   const judgeP = inLang(() =>
     chatJson({
       system: JUDGE_SYSTEM,
-      user: `PROFILE\n${profileText(profile)}\n\nGenerated questions:\n\n${listForModel(drafts, true)}`,
+      user: `PROFILE\n${profileText(profile, figures)}\n\nGenerated questions:\n\n${listForModel(drafts.map(withFigureText), true)}`,
       schema: judgeSchema,
       schemaName: "FitScores",
       temperature: 0,
@@ -417,14 +542,18 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
         : !fitScore
           ? check(true, lt("评审没有给出这道题的分数", "the review gave no score for this question"), true)
           : check(fitScore.score >= JUDGE_PASS, `${lt("匹配度", "fit")} ${fitScore.score}/5${fitScore.reason ? ` — ${fitScore.reason}` : ""}`);
+    const figure = figures.on || d.figure || d.figureIssue ? figureCheck(d, svgChecks.get(i)) : undefined;
     const checks = {
       format: formatCheck(d, profile),
       answer: answerCheck(d, answers.get(n), resolved.status === "rejected" ? errText(resolved.reason) : undefined),
       novelty: novelty[i],
       fit,
+      ...(figure ? { figure } : {}),
     };
     const passed = Object.values(checks).every((c) => c.skipped || c.ok);
-    return { ...d, checks, passed };
+    const { figureIssue: _issue, ...candidate } = d;
+    void _issue;
+    return { ...candidate, checks, passed };
   });
 
   // 4. Passed first (at most `count`), then the failed ones so the UI can show why.
@@ -440,7 +569,20 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
  * adopted candidates are skipped; failed candidates may be adopted (the
  * user's choice) and are tagged "unchecked".
  */
-export function adoptCandidates(owner: string, bankId: string, generationId: string, candidateIds: string[], opts?: { categoryId?: string }): Item[] {
+/** Store a candidate's figure as a bank asset: PNG when sharp can rasterise it, else the SVG. */
+async function saveFigureAsset(owner: string, bankId: string, fig: CandidateFigure): Promise<string> {
+  const sharp = await loadSharp();
+  if (sharp) {
+    try {
+      return saveAsset(owner, bankId, await sharp(Buffer.from(fig.svg)).png().toBuffer(), "png");
+    } catch {
+      /* fall through to the SVG */
+    }
+  }
+  return saveAsset(owner, bankId, Buffer.from(fig.svg, "utf8"), "svg");
+}
+
+export async function adoptCandidates(owner: string, bankId: string, generationId: string, candidateIds: string[], opts?: { categoryId?: string }): Promise<Item[]> {
   const g = getGeneration(owner, bankId, generationId);
   // Only manual categories hold assigned questions (filters and style templates do not).
   const target = opts?.categoryId ? getCategory(owner, bankId, opts.categoryId) : undefined;
@@ -453,10 +595,11 @@ export function adoptCandidates(owner: string, bankId: string, generationId: str
     if (!c.adopted_item_id) picked.push(c);
   }
   if (!picked.length) return [];
+  const figureAssets = await Promise.all(picked.map((c) => (c.figure ? saveFigureAsset(owner, bankId, c.figure) : Promise.resolve(undefined))));
   const items = addItems(
     owner,
     bankId,
-    picked.map((c) => ({
+    picked.map((c, i) => ({
       origin: "generated" as const,
       generated_from: { generation_id: g.id, template_label: g.template_label },
       category_ids: categoryIds,
@@ -470,7 +613,7 @@ export function adoptCandidates(owner: string, bankId: string, generationId: str
         difficulty: c.difficulty,
         knowledge_points: c.knowledge_points.slice(0, 20).map((k) => clip(k, 80)),
         tags: c.passed ? ["generated"] : ["generated", "unchecked"],
-        images: [],
+        images: figureAssets[i] ? [{ asset: figureAssets[i]!, caption: c.figure?.source === "model" ? lt("模型绘制的图形", "figure drawn by the model") : lt("题目图形", "figure") }] : [],
         language: detectLanguage(c.stem),
       },
     })),

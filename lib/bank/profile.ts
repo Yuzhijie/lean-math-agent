@@ -49,7 +49,7 @@ export function detectLanguage(text: string): "zh" | "en" | undefined {
   return cjk >= words * 0.5 ? "zh" : "en";
 }
 
-const FIGURE_WORDS = /如图|见图|下图|右图|左图|图中|图\s*\d|示意图|figure|diagram|shown below|pictured|the graph|the picture|grid below/i;
+const FIGURE_WORDS = /如图|见图|下图|右图|左图|图中|图\s*\d|示意图|看图|观察下面|下面的(?:钟|时钟|数轴|统计|表格?|卡片|图形)|figure|diagram|shown below|pictured|the graph|the picture|grid below|\b(?:look at|in|on|from|using) the (?:clocks?|number line|bar (?:chart|graph)|pictograph|tally chart|table|chart|cards?|shapes?|grid|spinner)\b|\bthe (?:clocks?|number line|chart|table|cards?|shapes?) (?:below|above|shown)\b/i;
 
 /** Whether a stem relies on a figure (images attached, or it refers to one). */
 export function usesFigure(it: Pick<Item, "stem"> & { images?: Item["images"] }): boolean {

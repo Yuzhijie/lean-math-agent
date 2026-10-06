@@ -49,7 +49,7 @@ export interface ProofSessionState {
    * solve / enumerate while the text is still `text`; the server has the
    * vision model read them and appends the description to the problem.
    */
-  problemFigures: { refs: Array<{ bank_id: string; asset: string }>; text: string } | null;
+  problemFigures: { refs: Array<{ bank_id: string; asset: string }>; text: string; description?: string } | null;
   /** The figures as read by the model in the last run (shown under the problem). */
   figureDescription: string | null;
 

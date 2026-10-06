@@ -80,6 +80,11 @@ export async function describeProblemFigures(args: {
   }
 }
 
+/** A description supplied with the problem (a generated question's figure, drawn from known data): used as is. */
+export function figureTextOf(v: unknown): string | undefined {
+  return typeof v === "string" && v.trim() ? v.trim().slice(0, 4000) : undefined;
+}
+
 /** Problem text with the figure description appended, as every solving step will see it. */
 export function problemWithFigure(problemText: string, description: string): string {
   return `${problemText.trim()}\n\n${lt("【题目图形（由模型从图中读取）】", "[Figure, as read from the image by the model]")}\n${description}`;

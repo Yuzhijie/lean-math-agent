@@ -44,7 +44,9 @@ export function useProofActions(
   // ── Enumerate ────────────────────────────────────────────────────
 
   // Figures go along only while the problem text is the one they belong to.
-  const figures = state.problemFigures && state.problemFigures.text === state.problemText ? state.problemFigures.refs : undefined;
+  const current = state.problemFigures && state.problemFigures.text === state.problemText ? state.problemFigures : null;
+  const figures = current?.refs.length ? current.refs : undefined;
+  const figureText = current?.description;
 
   const enumerate = useCallback(async () => {
     lastActionRef.current = enumerate;
@@ -61,7 +63,7 @@ export function useProofActions(
         await fetch("/api/enumerate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ problem_text: state.problemText, ...(figures ? { figures } : {}) }),
+          body: JSON.stringify({ problem_text: state.problemText, ...(figures ? { figures } : {}), ...(figureText ? { figure_text: figureText } : {}) }),
         }),
       );
       dispatch({
@@ -78,7 +80,7 @@ export function useProofActions(
         message: e instanceof Error ? e.message : tr("枚举失败", "Failed to enumerate methods"),
       });
     }
-  }, [dispatch, state.problemText, figures, tr]);
+  }, [dispatch, state.problemText, figures, figureText, tr]);
 
   // ── Plan method ──────────────────────────────────────────────────
 
@@ -258,7 +260,7 @@ export function useProofActions(
       const res = await fetch("/api/solve-stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ problem_text: state.problemText, ...(figures ? { figures } : {}) }),
+        body: JSON.stringify({ problem_text: state.problemText, ...(figures ? { figures } : {}), ...(figureText ? { figure_text: figureText } : {}) }),
       });
 
       // Non-SSE response (error before stream starts)
@@ -368,7 +370,7 @@ export function useProofActions(
         message: e instanceof Error ? e.message : tr("求解失败", "Failed to solve"),
       });
     }
-  }, [dispatch, state.problemText, figures, tr]);
+  }, [dispatch, state.problemText, figures, figureText, tr]);
 
   // ── Switch method ────────────────────────────────────────────────
 

@@ -118,8 +118,9 @@ export default function Home() {
   const [usedFigure, setUsedFigure] = useState<(UsedProblemFigure & { text: string }) | null>(null);
   const useProblemFromGenerator = (text: string, figure?: UsedProblemFigure) => {
     useGeneratedProblem(text);
-    // Only question bank figures are sent to the model when solving (generator figures are drawn from the text).
-    dispatch({ type: "SET_PROBLEM_FIGURES", figures: null });
+    // A generated question's figure comes with its exact description, which is added to the problem when solving;
+    // bank figures (images) are registered by the caller and read by the vision model.
+    dispatch({ type: "SET_PROBLEM_FIGURES", figures: figure?.description ? { refs: [], text, description: figure.description } : null });
     setInputHidden(true);
     setUsedFigure(figure ? { ...figure, text } : null);
   };

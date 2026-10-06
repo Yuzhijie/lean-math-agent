@@ -24,13 +24,15 @@ import type {
 import { manualLeanAttempt, shouldAutoAttemptLean } from "@/lib/pipeline/lean-attempt";
 import { lt, withRequestLocale } from "@/lib/llm/output-locale";
 import { requestOwner } from "@/lib/bank/http";
-import { describeProblemFigures, figureRefsSchema, problemWithFigure, type FigureRef } from "@/lib/bank/problem-figures";
+import { describeProblemFigures, figureRefsSchema, figureTextOf, problemWithFigure, type FigureRef } from "@/lib/bank/problem-figures";
 
 interface SolveRequest {
   problem_text?: string;
   session_id?: string;
   /** Figures of the problem (question bank images): read by the vision model and appended to the text. */
   figures?: FigureRef[];
+  /** The figure's description when it is already known (a generated question's figure). */
+  figure_text?: string;
   options?: TheoremPipelineOptions & {
     /** Run the Lean formalization step automatically (default: no — started by hand via /api/lean-attempt). */
     lean_attempt?: boolean;
@@ -54,7 +56,8 @@ async function handlePOST(req: Request) {
   } else if (body.problem_text?.trim()) {
     const figs = figureRefsSchema.safeParse(body.figures ?? []);
     if (!figs.success) return NextResponse.json({ error: "invalid figures" }, { status: 400 });
-    const fig = figs.data.length ? await describeProblemFigures({ owner: await requestOwner(), problemText: body.problem_text.trim(), figures: figs.data }) : {};
+    const known = figureTextOf(body.figure_text);
+    const fig = known ? { description: known } : figs.data.length ? await describeProblemFigures({ owner: await requestOwner(), problemText: body.problem_text.trim(), figures: figs.data }) : {};
     session = createSession(fig.description ? problemWithFigure(body.problem_text, fig.description) : body.problem_text.trim());
     if (fig.description) session = updateSession(session.id, { figure_description: fig.description });
   } else {

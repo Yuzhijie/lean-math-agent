@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { MathText } from "../MathText";
+import { QuestionFigure } from "../QuestionFigure";
 import { api, bankUrl, errMsg, letter, problemText, type Bank, type Candidate, type CategoryWithCount, type Generation, type Item, type TemplateProfile } from "./api";
 import { KindIcon } from "./CategoryTree";
 import { ErrorNote, FieldLabel, NativeSelect, typeLabel, useElapsed, type Tr } from "./ui";
@@ -25,10 +26,10 @@ type Props = {
 };
 
 type CheckName = keyof Candidate["checks"];
-const CHECKS: CheckName[] = ["format", "answer", "novelty", "fit"];
+const CHECKS: CheckName[] = ["format", "answer", "novelty", "fit", "figure"];
 
 function checkLabel(c: CheckName, tr: Tr) {
-  return c === "format" ? tr("格式", "Format") : c === "answer" ? tr("答案", "Answer") : c === "novelty" ? tr("新颖", "Novelty") : tr("契合", "Fit");
+  return c === "format" ? tr("格式", "Format") : c === "answer" ? tr("答案", "Answer") : c === "novelty" ? tr("新颖", "Novelty") : c === "figure" ? tr("图形", "Figure") : tr("契合", "Fit");
 }
 
 export function GeneratePanel({ bank, template, categories, open, onOpenChange, onAdopted }: Props) {
@@ -324,6 +325,7 @@ function CandidateCard({
       <div className="break-words text-sm leading-relaxed">
         <MathText text={c.stem} />
       </div>
+      {c.figure && <QuestionFigure svg={c.figure.svg} source={c.figure.source} verified={c.figure.verified} />}
       {c.options && c.options.length > 0 && (
         <ol className="space-y-0.5 text-sm">
           {c.options.map((o, i) => (
@@ -355,8 +357,8 @@ function CandidateCard({
       {/* Checks */}
       <div className="space-y-1.5">
         <div className="flex flex-wrap items-center gap-1.5">
-          {CHECKS.map((k) => {
-            const ch = c.checks[k];
+          {CHECKS.filter((k) => c.checks[k]).map((k) => {
+            const ch = c.checks[k]!;
             const state = ch.skipped ? "skipped" : ch.ok ? "ok" : "fail";
             return (
               <button
@@ -382,12 +384,12 @@ function CandidateCard({
         </div>
         {showChecks && (
           <ul className="space-y-1 rounded-md border border-border/60 bg-muted/20 p-2.5 text-xs">
-            {CHECKS.map((k) => (
+            {CHECKS.filter((k) => c.checks[k]).map((k) => (
               <li key={k}>
                 <span className="font-semibold">{checkLabel(k, tr)}</span>
-                {c.checks[k].skipped && <span className="text-muted-foreground">{tr("（已跳过）", " (skipped)")}</span>}
+                {c.checks[k]!.skipped && <span className="text-muted-foreground">{tr("（已跳过）", " (skipped)")}</span>}
                 {tr("：", ": ")}
-                <span className="text-muted-foreground">{c.checks[k].detail}</span>
+                <span className="text-muted-foreground">{c.checks[k]!.detail}</span>
               </li>
             ))}
           </ul>

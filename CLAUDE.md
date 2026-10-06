@@ -108,6 +108,7 @@ lib/
     generate.ts                     # LLM → FigureSpec → solve/check → one repair round; keyword pre-filter
     logic.ts                        # Logic-puzzle diagrams: grid (matching), Venn (2–3 sets), ordering (row/circle), tree — exhaustive solve, uniqueness + answer checks
     logic-render.ts                 # SVG for logic diagrams (✓/✗ grid, Venn regions, seats, tree + leaf list)
+    visual.ts                       # Figures for generated questions: VisualSpec (clock, number_line, bar_chart, pictograph, table, grid_shape, fraction, groups, geometry, cards layout; "svg" = model-drawn fallback) → program-drawn SVG in a FigureStyle (colour/accent/fill/font/stroke/frame from the template) + exact text description; sanitizeSvg; VISUAL_GUIDE for prompts
   bank/                             # Customer question banks (试题库), stored per account under .data/banks/<owner>/<bank>/
     types.ts                        # Zod types: Bank, Item, Category (manual | filter | style template), ImportBatch/DraftItem, TemplateProfile, Generation/Candidate
     store.ts                        # Storage: one SQLite file per bank (better-sqlite3), JSONL fallback; owner isolation; BankError
@@ -124,6 +125,7 @@ lib/
     select.ts                       # Template selection by level/difficulty/topic (category incl. sub-categories, or knowledge point); widens difficulty ±1 → any → level any, never the topic; generator pickers (template-options)
     generator-bridge.ts             # /api/generate-problem source "bank": generation from a selection → GeneratedProblem cards with bank meta (checks, generation id)
     http.ts                         # bankRoute(): owner from NextAuth session (else "local"), request language, error mapping
+    template-visual.ts              # Template figures (scans/photos: item images or page image) read by the vision model before generation: per-example figure description + kind, style (FigureStyle), layout; never imitates illustrations/logos
     problem-figures.ts              # Figures sent with a problem (bank images, `figures: [{bank_id, asset}]` on /api/solve-stream, /api/solve, /api/enumerate): read once by the vision model into a description appended to problem_text (session.figure_description); failures fall back to text-only with a note
   pipeline/
     theorem-pipeline.ts             # Theorem pipeline shared by /api/solve and /api/solve-stream
@@ -245,6 +247,7 @@ components/ui/                      # 16 shadcn/ui primitives (+avatar, dropdown
 - **Roles + metrics**: `chatJson`/`sampleText` take `role: "prover" | "planner"`; endpoint chains come from `LLM_PROVER_*` / `LLM_PLANNER_*`; every solve runs in `withUsageScope`, and `verifyLeanSource` records itself, so responses/sessions carry `metrics` (calls, tokens, cost, verifications, wall time)
 - **Sorry degradation**: unprovable steps get `sorry` annotations, pipeline continues
 - **Trusted verification**: every source is sanitized (no `#eval`/`elab`/`unsafe`/`axiom`…); a complete proof counts only if Lean reports no errors, no `sorry` (textually AND via `#print axioms` — catches `admit`), only `propext`/`Classical.choice`/`Quot.sound`, and the proved statement's `#check` signature equals the one recorded when autoformalization was accepted (statement lock — the planner cannot change the theorem)
+- **Generated figures**: when template questions have images, generation reads them with the vision model (descriptions + style), the writer returns a figure spec per question, the program draws it in the template's style, and the re-solve/judge see `[Figure: exact description]`; a 5th check `figure` (program-drawn & geometry conditions hold; model-drawn SVG re-read by the vision model, else skipped); adopting saves the figure (PNG via sharp, else SVG) as the item's image; "使用此题" sends the description as `figure_text`
 - **Problem figures**: the solving pipeline is text-only; a bank question's figures are read once by the vision model (stage `reading_figure`) and the description is appended to the problem text, so every later step (classification, equation setup, NL solution, autoformalization, provers) has it; the UI shows what was read
 - **4 problem types**: computational | theorem | optimization | find_all_values
 - **Dual solve paths**: `/api/solve` classifies and dispatches; individual endpoints for step-by-step control

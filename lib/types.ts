@@ -354,7 +354,9 @@ export interface BankProblemMeta {
   candidate_id: string;
   /** All checks passed (format, independent answer, novelty vs the bank, fit to the template). */
   passed: boolean;
-  checks: Record<"format" | "answer" | "novelty" | "fit", { ok: boolean; detail: string; skipped?: boolean }>;
+  checks: Record<"format" | "answer" | "novelty" | "fit", { ok: boolean; detail: string; skipped?: boolean }> & { figure?: { ok: boolean; detail: string; skipped?: boolean } };
+  /** The question's figure, drawn in the template's style (lib/figure/visual.ts). */
+  figure?: { svg: string; description: string; source: "program" | "model"; verified: boolean };
   /** "Year 4 · Number › Fractions · difficulty 2" */
   template_label: string;
   /** e.g. which selection criteria were relaxed to find template questions */

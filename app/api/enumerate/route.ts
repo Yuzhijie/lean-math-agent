@@ -4,17 +4,18 @@ import { createSession, updateSession } from "@/lib/session-store";
 import { LlmError } from "@/lib/llm/client";
 import { withRequestLocale } from "@/lib/llm/output-locale";
 import { requestOwner } from "@/lib/bank/http";
-import { describeProblemFigures, figureRefsSchema, problemWithFigure } from "@/lib/bank/problem-figures";
+import { describeProblemFigures, figureRefsSchema, figureTextOf, problemWithFigure } from "@/lib/bank/problem-figures";
 
 async function handlePOST(req: Request) {
-  const body = (await req.json()) as { problem_text?: string; figures?: unknown };
+  const body = (await req.json()) as { problem_text?: string; figures?: unknown; figure_text?: unknown };
   if (!body.problem_text?.trim()) {
     return NextResponse.json({ error: "problem_text required" }, { status: 400 });
   }
   // Figures (question bank images) are read by the vision model and appended to the problem text.
   const figs = figureRefsSchema.safeParse(body.figures ?? []);
   if (!figs.success) return NextResponse.json({ error: "invalid figures" }, { status: 400 });
-  const fig = figs.data.length ? await describeProblemFigures({ owner: await requestOwner(), problemText: body.problem_text.trim(), figures: figs.data }) : {};
+  const known = figureTextOf(body.figure_text);
+  const fig: { description?: string; note?: string } = known ? { description: known } : figs.data.length ? await describeProblemFigures({ owner: await requestOwner(), problemText: body.problem_text.trim(), figures: figs.data }) : {};
   const session = createSession(fig.description ? problemWithFigure(body.problem_text, fig.description) : body.problem_text.trim());
   if (fig.description) updateSession(session.id, { figure_description: fig.description });
   try {

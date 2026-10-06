@@ -198,6 +198,18 @@ export type ImportBatch = z.infer<typeof importBatchSchema>;
 export const checkSchema = z.object({ ok: z.boolean(), detail: z.string().max(1000), skipped: z.boolean().optional() });
 export type Check = z.infer<typeof checkSchema>;
 
+/** A generated question's figure: drawn by the program from a spec, or (fallback) the model's own SVG. */
+export const candidateFigureSchema = z.object({
+  /** The figure spec (lib/figure/visual.ts) the program drew from. */
+  spec: z.unknown(),
+  svg: z.string().max(200_000),
+  /** Exact description of what is drawn (what the independent re-solve saw). */
+  description: z.string().max(4000),
+  source: z.enum(["program", "model"]),
+  verified: z.boolean(),
+});
+export type CandidateFigure = z.infer<typeof candidateFigureSchema>;
+
 export const candidateSchema = z.object({
   id,
   stem: z.string().min(1),
@@ -209,7 +221,8 @@ export const candidateSchema = z.object({
   grade: z.string().optional(),
   difficulty: z.number().int().min(1).max(5).optional(),
   knowledge_points: z.array(z.string()).default([]),
-  checks: z.object({ format: checkSchema, answer: checkSchema, novelty: checkSchema, fit: checkSchema }),
+  checks: z.object({ format: checkSchema, answer: checkSchema, novelty: checkSchema, fit: checkSchema, figure: checkSchema.optional() }),
+  figure: candidateFigureSchema.optional(),
   /** All checks passed (skipped checks do not fail it). */
   passed: z.boolean(),
   adopted_item_id: id.optional(),

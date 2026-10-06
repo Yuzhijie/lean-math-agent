@@ -19,9 +19,11 @@ export interface RenderOptions {
   highlight?: string[];
   /** Language of the diagram's own labels (logic diagrams). */
   locale?: "zh-CN" | "en-US";
+  /** Colours to use instead of the app's dark theme (e.g. black on paper for generated questions). */
+  palette?: Partial<typeof DARK_COLORS>;
 }
 
-const COLORS = {
+const DARK_COLORS = {
   stroke: "#cbd5e1",
   aux: "#94a3b8",
   hi: "#f59e0b",
@@ -46,6 +48,7 @@ function niceStep(range: number): number {
 export function renderFigureSvg(fig: SolvedFigure, opts: RenderOptions = {}): string {
   // Logic-puzzle diagrams (grid / Venn / line-up / tree) have their own renderer.
   if (fig.spec.logic && fig.logic) return renderLogicSvg(fig.spec.logic, fig.logic, opts.highlight ?? [], opts.locale);
+  const COLORS = { ...DARK_COLORS, ...opts.palette };
   const W = opts.width ?? 480;
   const maxH = opts.maxHeight ?? 380;
   const hi = new Set(opts.highlight ?? []);

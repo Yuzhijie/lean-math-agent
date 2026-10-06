@@ -271,7 +271,7 @@ describe("adopting candidates", () => {
     const bad = g.candidates.find((c) => !c.passed)!;
     const before = listItems("local", bank.id).length;
 
-    const items = adoptCandidates("local", bank.id, g.id, [good.id, bad.id, good.id], { categoryId: target.id });
+    const items = await adoptCandidates("local", bank.id, g.id, [good.id, bad.id, good.id], { categoryId: target.id });
     expect(items).toHaveLength(2);
     expect(items[0]).toMatchObject({ origin: "generated", stem: good.stem, answer: "B", options: good.options, category_ids: [target.id], tags: ["generated"], language: "en" });
     expect(items[0].generated_from).toEqual({ generation_id: g.id, template_label: "One-step problems" });
@@ -280,8 +280,8 @@ describe("adopting candidates", () => {
 
     const saved = getGeneration("local", bank.id, g.id);
     expect(saved.candidates.find((c) => c.id === good.id)!.adopted_item_id).toBe(items[0].id);
-    expect(adoptCandidates("local", bank.id, g.id, [good.id, bad.id])).toEqual([]);
+    expect(await adoptCandidates("local", bank.id, g.id, [good.id, bad.id])).toEqual([]);
     expect(listItems("local", bank.id)).toHaveLength(before + 2);
-    expect(() => adoptCandidates("local", bank.id, g.id, ["missing"])).toThrow(/不存在|not found/);
+    await expect(adoptCandidates("local", bank.id, g.id, ["missing"])).rejects.toThrow(/不存在|not found/);
   });
 });
