@@ -33,6 +33,7 @@ type Form = {
   difficulty: string;
   knowledge_points: string[];
   tags: string;
+  template_hint: string;
   category_ids: string[];
 };
 
@@ -46,6 +47,7 @@ const toForm = (it: Item): Form => ({
   difficulty: it.difficulty ? String(it.difficulty) : "",
   knowledge_points: it.knowledge_points,
   tags: it.tags.join(", "),
+  template_hint: it.template_hint ?? "",
   category_ids: it.category_ids,
 });
 
@@ -97,6 +99,7 @@ export function ItemEditor({ bankId, item, detail, categories, onSaved, onDelete
     if (!same(form.knowledge_points, base.knowledge_points)) patch.knowledge_points = form.knowledge_points;
     const tags = splitList(form.tags);
     if (!same(tags, item.tags)) patch.tags = tags;
+    if (form.template_hint.trim() !== base.template_hint.trim()) patch.template_hint = form.template_hint.trim();
     if (!same(form.category_ids, base.category_ids)) patch.category_ids = form.category_ids;
     setBusy("save");
     setError(null);
@@ -248,6 +251,18 @@ export function ItemEditor({ bankId, item, detail, categories, onSaved, onDelete
       <div className="space-y-1.5">
         <FieldLabel htmlFor="ie-kp">{tr("知识点", "Knowledge points")}</FieldLabel>
         <KnowledgePointInput id="ie-kp" value={form.knowledge_points} onChange={(v) => set("knowledge_points", v)} vocab={detail.vocab} />
+      </div>
+      <div className="space-y-1.5">
+        <FieldLabel htmlFor="ie-hint">{tr("模板提示（用这道题作模板出题时交给模型）", "Notes for generation (given to the model when this question is a template)")}</FieldLabel>
+        <Textarea
+          id="ie-hint"
+          rows={2}
+          maxLength={1000}
+          value={form.template_hint}
+          onChange={(e) => set("template_hint", e.target.value)}
+          placeholder={tr("例如：图中的表格要保留；新题换成别的情境，数字不超过 100。", "e.g. Keep the table; new questions in other contexts, numbers up to 100.")}
+          className="text-sm"
+        />
       </div>
       {manualCats.length > 0 && (
         <div className="space-y-1.5">

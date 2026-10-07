@@ -53,11 +53,17 @@ Rules:
 Return JSON: {"text":"…","figures":[{"question":"12","box":[0.1,0.4,0.5,0.6]}],"unreadable":false}`;
 
 /** Ask the vision model to transcribe one page. */
-export async function transcribePage(img: PageImage): Promise<PageTranscription> {
+/** The teacher's note about the material, as context (it never overrides the copy-clerk rules). */
+export function hintBlock(hint?: string): string {
+  const h = hint?.trim().slice(0, 1000);
+  return h ? `\n\nThe teacher who uploaded these pages says (use it to understand the layout and which text belongs to which question; still transcribe verbatim and follow all rules):\n<<<${h}>>>` : "";
+}
+
+export async function transcribePage(img: PageImage, hint?: string): Promise<PageTranscription> {
   return chatJson({
     role: "vision",
     system: SYSTEM,
-    user: `Page ${img.page}. Transcribe it as JSON.`,
+    user: `Page ${img.page}. Transcribe it as JSON.${hintBlock(hint)}`,
     images: [dataUrl(img)],
     schema: pageSchema,
     schemaName: "bank_import_ocr_page",
@@ -88,7 +94,7 @@ export interface OcrResult {
  * Read page images into questions. Page images and figures are saved as
  * assets of the bank. Throws when no page could be read at all.
  */
-export async function ocrPages(owner: string, bankId: string, pages: PageImage[], opts: { concurrency?: number } = {}): Promise<OcrResult> {
+export async function ocrPages(owner: string, bankId: string, pages: PageImage[], opts: { concurrency?: number; hint?: string } = {}): Promise<OcrResult> {
   const notes: string[] = [];
   const assets: string[] = [];
   const results: Array<PageTranscription | null> = new Array(pages.length).fill(null);
@@ -98,7 +104,7 @@ export async function ocrPages(owner: string, bankId: string, pages: PageImage[]
     await Promise.all(
       pages.slice(k, k + limit).map(async (img, j) => {
         try {
-          results[k + j] = await transcribePage(img);
+          results[k + j] = await transcribePage(img, opts.hint);
         } catch (e) {
           lastError = (e as Error).message;
           notes.push(lt(`第 ${img.page} 页识别失败：${lastError}`.slice(0, 300), `Page ${img.page} could not be read: ${lastError}`.slice(0, 300)));

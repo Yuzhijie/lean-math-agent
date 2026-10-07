@@ -49,7 +49,7 @@ export interface WorkingDraft {
   prevStatus?: DraftItem["status"];
 }
 
-const FIELD_KEYS = ["stem", "type", "options", "answer", "solution", "grade", "difficulty", "knowledge_points", "tags", "images", "source", "language", "classified", "category_path"] as const;
+const FIELD_KEYS = ["stem", "type", "options", "answer", "solution", "grade", "difficulty", "knowledge_points", "tags", "images", "source", "language", "classified", "category_path", "template_hint"] as const;
 
 /** The question fields of a draft (without draft_id, status, issues …). */
 export function fieldsOf(d: Partial<ItemFields>): DraftFields {

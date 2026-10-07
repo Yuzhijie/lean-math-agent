@@ -133,7 +133,10 @@ when no kind fits does the model draw the figure itself; that figure is re-read 
 and marked as model-drawn. Illustrations, logos and brand names from the template are never copied.
 Tables are kept too: a table in a scanned question is stored as a table and shown as one, and when
 the template questions have tables, every generated question gets a table of the same layout (new
-data, cells to fill in shown as boxes); a question without one fails the figure check. The model decides each question's place in the category
+data, cells to fill in shown as boxes); a question without one fails the figure check.
+When importing, you can add a note about the material ("模板提示", e.g. "time-ordering cards; keep 4 cards
+and o'clock times"): it helps the model read the scans, is saved on every question (editable later), and
+is given to the model whenever those questions are used as the template for new ones. The model decides each question's place in the category
 tree (e.g. Number › Fractions), its grade, knowledge points and difficulty; missing categories are created
 on commit, and "AI classify" does the same for questions already in a bank. Organise questions in categories — a manual group,
 a saved filter, or a style template that describes a type of question without source questions

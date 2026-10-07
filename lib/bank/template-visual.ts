@@ -59,7 +59,7 @@ export function hasTemplateImages(items: Item[]): boolean {
 }
 
 /** Read the template's figures and style. Never throws: on failure the note says why. */
-export async function readTemplateVisuals(owner: string, bankId: string, items: Item[]): Promise<TemplateVisuals> {
+export async function readTemplateVisuals(owner: string, bankId: string, items: Item[], hints: string[] = []): Promise<TemplateVisuals> {
   const empty: TemplateVisuals = { style: DEFAULT_STYLE, descriptions: new Map(), kinds: [] };
   const withImages = items.filter((it) => imageAssets(it).length).slice(0, MAX_TEMPLATES);
   if (!withImages.length) return empty;
@@ -86,7 +86,7 @@ export async function readTemplateVisuals(owner: string, bankId: string, items: 
     const res = await chatJson({
       role: "vision",
       system: SYSTEM,
-      user: `${blocks.join("\n\n")}\n\nDescribe the figures and their style as JSON.`,
+      user: `${blocks.join("\n\n")}${hints.length ? `\n\nThe teacher's notes on these questions (what matters in the figures):\n${hints.map((h) => `- ${h.replace(/\s+/g, " ")}`).join("\n")}` : ""}\n\nDescribe the figures and their style as JSON.`,
       images,
       schema: responseSchema,
       schemaName: "template_visuals",

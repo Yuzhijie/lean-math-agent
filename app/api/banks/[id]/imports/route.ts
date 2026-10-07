@@ -18,7 +18,8 @@ export const GET = bankRoute<P>(async ({ owner, params }) => ({
 /**
  * Upload a file (multipart field "file") → draft batch for review. Images (photos / screenshots of
  * pages) may be several "file" fields, read in order as the pages of one paper; scanned PDFs and
- * images are read by the vision model.
+ * images are read by the vision model. Optional "hint": the teacher's note about the material (guides reading scans,
+ * kept on every question as template_hint for later generation).
  * Optional fields: format, column_map (JSON), use_model ("false" to skip the model tidy-up of PDF text),
  * classify ("false" to skip model classification: catalogue place, grade, knowledge points, difficulty).
  * ?preview=columns → only the CSV/Excel header preview and suggested column mapping.
@@ -69,6 +70,7 @@ export const POST = bankRoute<P>(async ({ req, owner, params }) => {
     useModel: form.get("use_model") !== "false",
     classify: form.get("classify") !== "false",
     moreImages,
+    hint: typeof form.get("hint") === "string" ? (form.get("hint") as string) : undefined,
   });
   return { batch };
 });

@@ -59,6 +59,8 @@ export function ImportWizard({ bank, categories, open, onOpenChange, resumeBatch
   const [useModel, setUseModel] = useState(bank.allow_model);
   // The model decides catalogue place, grade, knowledge points and difficulty (editable in review).
   const [classify, setClassify] = useState(bank.allow_model);
+  // The teacher's note about the material: guides reading scans, kept on every question for later generation.
+  const [hint, setHint] = useState("");
   const [preview, setPreview] = useState<ColumnPreview | null>(null);
   const [columnMap, setColumnMap] = useState<Record<string, string>>({});
   const [batch, setBatch] = useState<ImportBatch | null>(null);
@@ -133,6 +135,7 @@ export function ImportWizard({ bank, categories, open, onOpenChange, resumeBatch
     for (const f of files) fd.append("file", f);
     if (!useModel || !bank.allow_model) fd.append("use_model", "false");
     if (!classify || !bank.allow_model) fd.append("classify", "false");
+    if (hint.trim()) fd.append("hint", hint.trim());
     if (preview) {
       const cm = Object.fromEntries(Object.entries(columnMap).filter(([, f]) => f && f !== "ignore"));
       fd.append("column_map", JSON.stringify(cm));
@@ -350,6 +353,28 @@ export function ImportWizard({ bank, categories, open, onOpenChange, resumeBatch
               >
                 {tr("由模型决定目录、分类和难度", "Let the model decide category, classification and difficulty")}
               </CheckboxField>
+              <div className="space-y-1.5">
+                <FieldLabel htmlFor="import-hint">{tr("模板提示（可选）", "Notes about this material (optional)")}</FieldLabel>
+                <Textarea
+                  id="import-hint"
+                  data-testid="import-hint"
+                  rows={3}
+                  maxLength={1000}
+                  value={hint}
+                  onChange={(e) => setHint(e.target.value)}
+                  placeholder={tr(
+                    "例如：这是一年级的时间排序题，每张卡片有一个钟面和一个活动，答案框里填 1–8；表格中的“?”是要求的数；以后出题保持 4 张卡片、整点时间。",
+                    "e.g. Year 1 time-ordering task: each card has a clock and an activity, the boxes take 1–8; the ? in the table is the value to find; new questions should keep 4 cards and o'clock times.",
+                  )}
+                  className="text-sm"
+                />
+                <p className="text-xs text-muted-foreground">
+                  {tr(
+                    "告诉模型这份材料是什么、哪些地方重要。识别扫描件和图片时会参考它，它也会保存在每道题上，用这些题作模板出题时一并交给模型（之后可在题目中修改）。",
+                    "Tell the model what this material is and what matters. It is used when reading scans and images, and saved on every question, so it guides generation when these questions are the template (editable on each question later).",
+                  )}
+                </p>
+              </div>
               {busy === "upload" && <Progress elapsed={elapsed} slow={((pdfTidy && useModel) || classify || images) && bank.allow_model} ocr={images} />}
             </div>
           )}
@@ -414,6 +439,12 @@ export function ImportWizard({ bank, categories, open, onOpenChange, resumeBatch
                   </FilterChip>
                 ))}
               </div>
+              {batch.hint && (
+                <div className="rounded-md border border-border/60 bg-white/[0.02] px-3 py-2 text-xs" data-testid="batch-hint">
+                  <span className="font-semibold">{tr("模板提示：", "Your notes: ")}</span>
+                  <span className="whitespace-pre-wrap text-muted-foreground">{batch.hint}</span>
+                </div>
+              )}
               {batch.ocr && (
                 <div className="flex items-start gap-2 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
                   <ScanText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
@@ -804,6 +835,19 @@ function DraftEditor({ bankId, draft, onChange }: { bankId: string; draft: Draft
               if (next.join("\n") !== draft.knowledge_points.join("\n")) onChange({ knowledge_points: next });
             }}
             className="h-8 text-sm"
+          />
+        </div>
+        <div className="space-y-1">
+          <FieldLabel>{tr("模板提示（出题时交给模型）", "Notes for generation (given to the model)")}</FieldLabel>
+          <Textarea
+            rows={2}
+            maxLength={1000}
+            defaultValue={draft.template_hint ?? ""}
+            onBlur={(e) => {
+              const next = e.target.value.trim() || undefined;
+              if (next !== draft.template_hint) onChange({ template_hint: next });
+            }}
+            className="text-sm"
           />
         </div>
       </div>

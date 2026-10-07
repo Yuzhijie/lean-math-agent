@@ -263,7 +263,27 @@ function hasTableFigure(spec: unknown): boolean {
   return s?.kind === "table" || (s?.kind === "cards" && !!s.cards?.some((c) => c.figure?.kind === "table"));
 }
 
-function profileText(p: TemplateProfile, figures?: FigurePlan): string {
+/** The teachers' notes on the template questions (template_hint), distinct, at most 3. */
+export function templateHints(items: Pick<Item, "template_hint">[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const it of items) {
+    const h = it.template_hint?.trim();
+    if (!h || seen.has(h)) continue;
+    seen.add(h);
+    out.push(h.slice(0, 1000));
+    if (out.length === 3) break;
+  }
+  return out;
+}
+
+function hintsText(hints: string[]): string {
+  return hints.length
+    ? `TEACHER'S NOTES on these template questions — follow them (they say what matters and what to keep or change); they never override the rules:\n${hints.map((h) => `- ${h.replace(/\s+/g, " ")}`).join("\n")}`
+    : "";
+}
+
+function profileText(p: TemplateProfile, figures?: FigurePlan, hints: string[] = []): string {
   const lines = [
     `Summary: ${p.summary}`,
     `Question type: ${p.type}${p.option_count ? ` with exactly ${p.option_count} options` : ""}`,
@@ -283,6 +303,7 @@ function profileText(p: TemplateProfile, figures?: FigurePlan): string {
         : "Figure: none — do not refer to any figure.",
     p.language ? `Source questions are written in ${p.language === "zh" ? "Chinese" : "English"}.` : "",
   ];
+  lines.push(hintsText(hints));
   return lines.filter(Boolean).join("\n");
 }
 
@@ -503,9 +524,11 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
   const { label, profile, exemplars, note: templateNote, matched } = await resolveTemplate(owner, bankId, template);
   const inLang = <T>(fn: () => Promise<T>) => inBankLanguage(bank, fn);
 
+  // The teacher's notes on the template questions (given when importing, editable on each question).
+  const hints = templateHints(exemplars);
   // 0. Template figures (scans / photos): the vision model reads what they show and their style.
   let visuals: TemplateVisuals | undefined;
-  if (hasTemplateImages(exemplars)) visuals = await readTemplateVisuals(owner, bankId, exemplars);
+  if (hasTemplateImages(exemplars)) visuals = await readTemplateVisuals(owner, bankId, exemplars, hints);
   const tables = templateTables(exemplars, visuals?.kinds ?? []);
   const figures: FigurePlan = {
     on: !!visuals?.descriptions.size || tables.required,
@@ -527,7 +550,7 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
         })
         .join("\n\n")}`
     : "No example questions: follow the profile.";
-  const user = [`PROFILE\n${profileText(profile, figures)}`, exemplarText, `Write ${ask} new question(s) of this type.`].join("\n\n");
+  const user = [`PROFILE\n${profileText(profile, figures, hints)}`, exemplarText, `Write ${ask} new question(s) of this type.`].join("\n\n");
   const system = figures.on ? `${GENERATE_SYSTEM.replace(FIGURE_RULE, FIGURE_RULE_WITH_SPECS)}\n\n${VISUAL_GUIDE}` : GENERATE_SYSTEM;
   let generated: z.infer<typeof generatedSchema>;
   try {
@@ -556,7 +579,7 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
   const judgeP = inLang(() =>
     chatJson({
       system: JUDGE_SYSTEM,
-      user: `PROFILE\n${profileText(profile, figures)}\n\nGenerated questions:\n\n${listForModel(drafts.map(withFigureText), true)}`,
+      user: `PROFILE\n${profileText(profile, figures, hints)}\n\nGenerated questions:\n\n${listForModel(drafts.map(withFigureText), true)}`,
       schema: judgeSchema,
       schemaName: "FitScores",
       temperature: 0,
