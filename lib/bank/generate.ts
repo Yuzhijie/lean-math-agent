@@ -35,6 +35,7 @@ import { loadSharp } from "./import/images";
 import { saveAsset } from "./store";
 import { hasTemplateImages, readTemplateVisuals, type TemplateVisuals } from "./template-visual";
 import type { CandidateFigure } from "./types";
+import { tablesIn, withoutTables, type ParsedTable } from "../markdown-table";
 
 const MAX_COUNT = 10;
 const EXEMPLARS = 5;
@@ -241,6 +242,25 @@ interface FigurePlan {
   style: FigureStyle;
   kinds: string[];
   layout?: string;
+  /** The template questions show a table: every new question must have one (a drawn table). */
+  tables: boolean;
+  /** Shape of the template's table, as a hint (columns, rows). */
+  tableHint?: string;
+}
+
+/** Whether most template questions have a table (in their text, or as a figure the vision model saw). */
+function templateTables(exemplars: Item[], visualKinds: string[]): { required: boolean; hint?: string } {
+  const withTable = exemplars.map((e) => tablesIn(e.stem)[0]).filter((t): t is ParsedTable => !!t);
+  const required = withTable.length > 0 ? withTable.length * 2 >= exemplars.length : visualKinds.includes("table");
+  const t = withTable[0];
+  const hint = t ? `${t.headers.length} columns (${t.headers.map((h) => `"${h}"`).join(", ")}), ${t.rows.length} rows` : undefined;
+  return { required, hint };
+}
+
+/** A figure spec contains a table (on its own or on a card). */
+function hasTableFigure(spec: unknown): boolean {
+  const s = spec as { kind?: string; cards?: Array<{ figure?: { kind?: string } }> } | undefined;
+  return s?.kind === "table" || (s?.kind === "cards" && !!s.cards?.some((c) => c.figure?.kind === "table"));
 }
 
 function profileText(p: TemplateProfile, figures?: FigurePlan): string {
@@ -253,7 +273,11 @@ function profileText(p: TemplateProfile, figures?: FigurePlan): string {
     p.stem_structure ? `Stem structure: ${p.stem_structure}` : "",
     p.knowledge_points.length ? `Knowledge points: ${p.knowledge_points.join("; ")}` : "",
     figures?.on
-      ? `Figure: these questions come with a figure${figures.kinds.length ? ` (kinds: ${figures.kinds.join(", ")})` : ""}${figures.layout ? `; layout: ${figures.layout}` : ""}. Give each new question a figure of the same kind and layout in "figure".`
+      ? `Figure: these questions come with a figure${figures.kinds.length ? ` (kinds: ${figures.kinds.join(", ")})` : ""}${figures.layout ? `; layout: ${figures.layout}` : ""}. Give each new question a figure of the same kind and layout in "figure".${
+          figures.tables
+            ? ` TABLE: the example questions present their data in a table${figures.tableHint ? ` (e.g. ${figures.tableHint})` : ""}. Every new question MUST include a table of the same kind — new data, same layout — as "figure": {"kind":"table",…} (or a table on a card); do not write the table in the stem and do not replace it by a sentence.`
+            : ""
+        }`
       : p.needs_figure
         ? "Figure: these questions use a figure — describe it precisely in words in the stem."
         : "Figure: none — do not refer to any figure.",
@@ -299,9 +323,17 @@ function toDraft(q: z.infer<typeof generatedSchema>["questions"][number], p: Tem
   if (type === "multiple_choice" && options) answer = answerLetter(answer, 26) ?? answer;
   const d = typeof q.difficulty === "number" && Number.isFinite(q.difficulty) ? Math.min(5, Math.max(1, Math.round(q.difficulty))) : undefined;
   const kps = (q.knowledge_points ?? []).map((k) => k.trim()).filter(Boolean);
+  // A table written into the stem becomes a drawn table (when the question has no other figure).
+  let stem = q.stem.trim();
+  let figureSpec = q.figure;
+  const stemTable = tablesIn(stem)[0];
+  if (stemTable && (figureSpec === undefined || figureSpec === null)) {
+    figureSpec = { kind: "table", headers: stemTable.headers, rows: stemTable.rows };
+    stem = withoutTables(stem);
+  }
   return {
     id: newId(),
-    stem: q.stem.trim(),
+    stem,
     type,
     options,
     answer,
@@ -310,7 +342,7 @@ function toDraft(q: z.infer<typeof generatedSchema>["questions"][number], p: Tem
     grade: p.grade,
     difficulty: d ?? (p.difficulty_range ? Math.round((p.difficulty_range[0] + p.difficulty_range[1]) / 2) : undefined),
     knowledge_points: (kps.length ? kps : p.knowledge_points).slice(0, 20),
-    ...drawFigure(q.figure, style),
+    ...drawFigure(figureSpec, style),
   };
 }
 
@@ -400,8 +432,11 @@ function noveltyChecks(drafts: Draft[], bankItems: Item[]): Check[] {
   });
 }
 
-function figureCheck(d: Draft, svgCheck: Check | undefined): Check {
+function figureCheck(d: Draft, svgCheck: Check | undefined, needTable = false): Check {
   if (d.figureIssue && !d.figure) return check(false, d.figureIssue);
+  if (needTable && !hasTableFigure(d.figure?.spec) && !tablesIn(d.stem).length) {
+    return check(false, lt("模板题目带表格，此题没有表格", "the template questions have a table, this question does not"));
+  }
   if (!d.figure) {
     return usesFigure({ stem: d.stem })
       ? check(false, lt("题干引用了图形，但没有给出图形", "the stem refers to a figure but none was given"))
@@ -471,11 +506,14 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
   // 0. Template figures (scans / photos): the vision model reads what they show and their style.
   let visuals: TemplateVisuals | undefined;
   if (hasTemplateImages(exemplars)) visuals = await readTemplateVisuals(owner, bankId, exemplars);
+  const tables = templateTables(exemplars, visuals?.kinds ?? []);
   const figures: FigurePlan = {
-    on: !!visuals?.descriptions.size,
+    on: !!visuals?.descriptions.size || tables.required,
     style: visuals?.style ?? DEFAULT_STYLE,
-    kinds: visuals?.kinds ?? [],
+    kinds: [...new Set([...(visuals?.kinds ?? []), ...(tables.required ? ["table"] : [])])],
     layout: visuals?.layout,
+    tables: tables.required,
+    tableHint: tables.hint,
   };
   const figureNote = visuals?.note ? lt(`未能读取模板图形（${visuals.note}），新题按文字出`, `the template's figures could not be read (${visuals.note}); questions were written from the text`) : undefined;
   const note = [templateNote, figureNote].filter(Boolean).join(lt("；", "; ")) || undefined;
@@ -542,7 +580,7 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
         : !fitScore
           ? check(true, lt("评审没有给出这道题的分数", "the review gave no score for this question"), true)
           : check(fitScore.score >= JUDGE_PASS, `${lt("匹配度", "fit")} ${fitScore.score}/5${fitScore.reason ? ` — ${fitScore.reason}` : ""}`);
-    const figure = figures.on || d.figure || d.figureIssue ? figureCheck(d, svgChecks.get(i)) : undefined;
+    const figure = figures.on || d.figure || d.figureIssue ? figureCheck(d, svgChecks.get(i), figures.tables) : undefined;
     const checks = {
       format: formatCheck(d, profile),
       answer: answerCheck(d, answers.get(n), resolved.status === "rejected" ? errText(resolved.reason) : undefined),

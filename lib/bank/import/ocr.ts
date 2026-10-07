@@ -47,7 +47,7 @@ Rules:
 - Write mathematics in LaTeX between $ … $ (e.g. $\\frac{3}{4}$, $x^2$, $\\sqrt{2}$). Plain numbers and words stay plain.
 - Keep printed answer or solution lines ("Answer: …", "答案：…", an answer key) as text.
 - Leave out running headers and footers, page numbers, logos and copyright lines. Ignore handwriting (student answers, ticks, marks).
-- A table of words or numbers: transcribe it as a Markdown table inside its question.
+- A table of words or numbers: transcribe it as a Markdown table inside its question, each row on its own line: a header row, a separator line like |---|---|, then the body rows. Keep every cell; leave an empty cell empty and write ? where the paper shows a box or blank to fill in.
 - Pictures, diagrams, graphs, number lines and shapes: do not describe them. List each one in "figures" with the number of the question it belongs to and its bounding box as fractions of the page width and height [x0, y0, x1, y1] (top-left, bottom-right; 0 to 1). Include the labels drawn in the figure inside the box.
 - Where text cannot be read, write [?] — never guess. Set "unreadable": true if the page as a whole cannot be read.
 Return JSON: {"text":"…","figures":[{"question":"12","box":[0.1,0.4,0.5,0.6]}],"unreadable":false}`;

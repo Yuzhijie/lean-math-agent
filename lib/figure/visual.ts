@@ -122,11 +122,16 @@ const pictographSchema = z.object({
   /** Number of symbols per row (halves allowed). */
   rows: z.array(z.object({ label, symbols: z.number().min(0).max(12) })).min(1).max(8),
 });
+const cell = z.union([z.string().max(60), z.number(), z.null()]).transform((v) => (v === null ? "" : String(v)));
 const tableSchema = z.object({
   kind: z.literal("table"),
   title: label.optional(),
-  headers: z.array(label).min(1).max(8),
-  rows: z.array(z.array(z.union([z.string().max(40), z.number()]).transform(String)).max(8)).min(1).max(12),
+  headers: z.array(cell).min(1).max(10),
+  rows: z.array(z.array(cell).max(10)).min(1).max(15),
+  /** The first column holds row labels (drawn like headers). */
+  row_headers: z.boolean().optional(),
+  /** Text under the table (e.g. a key or a note). */
+  caption: z.string().max(80).optional(),
 });
 const gridShapeSchema = z.object({
   kind: z.literal("grid_shape"),
@@ -385,24 +390,65 @@ function pictograph(spec: z.infer<typeof pictographSchema>, t: Theme): Box {
   return { w: W, h: keyY + 12, body: parts.join("") };
 }
 
+/** Approximate text width in px: CJK characters are about twice as wide as Latin ones. */
+function textWidth(s: string, size: number): number {
+  let w = 0;
+  for (const ch of s) w += /[\u2E80-\u9FFF\uF900-\uFAFF\uFF00-\uFFEF]/.test(ch) ? 1 : 0.58;
+  return w * size;
+}
+
+/** Simple LaTeX in a cell as plain text for SVG ($\frac{1}{2}$ → 1/2, \times → ×). */
+export function plainMath(s: string): string {
+  return s
+    .replace(/\$/g, "")
+    .replace(/\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, "$1/$2")
+    .replace(/\\times/g, "×")
+    .replace(/\\div/g, "÷")
+    .replace(/\\cdot/g, "·")
+    .replace(/\\(?:le|leq)\b/g, "≤")
+    .replace(/\\(?:ge|geq)\b/g, "≥")
+    .replace(/\\(?:text|mathrm)\s*\{([^{}]*)\}/g, "$1")
+    .replace(/\^\{?2\}?/g, "²")
+    .replace(/\^\{?3\}?/g, "³")
+    .replace(/\\[,;! ]/g, " ")
+    .replace(/[{}]/g, "")
+    .trim();
+}
+
+/** A cell to be filled in: empty, "?", or underscores. */
+const isBlank = (v: string) => /^\s*(?:\?+|？+|_+|\\_+|\[\s*\]|□)?\s*$/.test(v);
+
 function table(spec: z.infer<typeof tableSchema>, t: Theme): Box {
-  const cols = spec.headers.length;
-  const widths = Array.from({ length: cols }, (_, c) => Math.max(70, Math.min(200, 16 + 9 * Math.max(spec.headers[c].length, ...spec.rows.map((r) => (r[c] ?? "").length)))));
-  const rowH = 34, titleH = spec.title ? 30 : 0;
+  const cols = Math.max(spec.headers.length, ...spec.rows.map((r) => r.length));
+  const all = [spec.headers, ...spec.rows].map((r) => Array.from({ length: cols }, (_, c) => plainMath(r[c] ?? "")));
+  const widths = Array.from({ length: cols }, (_, c) => Math.max(64, Math.min(260, 26 + Math.max(...all.map((r) => textWidth(r[c], 15))))));
+  const rowH = 36, titleH = spec.title ? 30 : 0;
   const W = widths.reduce((a, b) => a + b, 0);
   const parts: string[] = [];
-  if (spec.title) parts.push(text(t, W / 2, 20, spec.title, 16, "middle", "bold"));
-  const rows = [spec.headers, ...spec.rows];
-  rows.forEach((row, ri) => {
+  if (spec.title) parts.push(text(t, W / 2, 20, plainMath(spec.title), 16, "middle", "bold"));
+  all.forEach((row, ri) => {
     let x = 0;
     const y = titleH + ri * rowH;
     for (let c = 0; c < cols; c++) {
-      parts.push(`<rect x="${x}" y="${y}" width="${widths[c]}" height="${rowH}" fill="${ri === 0 ? t.fill : t.paper}" stroke="${t.ink}" stroke-width="${t.sw * 0.7}"/>`);
-      parts.push(text(t, x + widths[c] / 2, y + 22, row[c] ?? "", 14, "middle", ri === 0 ? "bold" : "normal"));
+      const head = ri === 0 || (spec.row_headers && c === 0);
+      parts.push(`<rect x="${x}" y="${y}" width="${widths[c]}" height="${rowH}" fill="${head ? t.fill : t.paper}" stroke="${t.ink}" stroke-width="${t.sw * 0.7}"/>`);
+      const v = row[c];
+      if (!head && isBlank(v)) {
+        // A space to fill in: an empty box, with "?" when the template asks for it.
+        parts.push(`<rect x="${r1(x + widths[c] / 2 - 18)}" y="${y + 6}" width="36" height="${rowH - 12}" rx="3" fill="${t.paper}" stroke="${t.accent}" stroke-width="1.4" stroke-dasharray="4 3"/>`);
+        if (/\?|？/.test(v)) parts.push(text(t, x + widths[c] / 2, y + 24, "?", 15, "middle", "bold", t.accent));
+      } else {
+        parts.push(text(t, x + widths[c] / 2, y + 23, v, 15, "middle", head ? "bold" : "normal"));
+      }
       x += widths[c];
     }
   });
-  return { w: W + 2, h: titleH + rows.length * rowH + 2, body: parts.join("") };
+  let h = titleH + all.length * rowH;
+  if (spec.caption) {
+    parts.push(text(t, 0, h + 22, plainMath(spec.caption), 13, "start"));
+    h += 30;
+  }
+  return { w: W + 2, h: h + 2, body: parts.join("") };
 }
 
 function gridShape(spec: z.infer<typeof gridShapeSchema>, t: Theme): Box {
@@ -639,8 +685,10 @@ function describeLeaf(s: VisualLeaf): string {
       return `a ${s.horizontal ? "horizontal " : ""}bar chart${s.title ? ` titled "${s.title}"` : ""}${s.value_label ? ` (${s.value_label})` : ""}: ${s.categories.map((c, i) => `${c} = ${fmt(s.values[i] ?? 0)}`).join(", ")}${s.show_values ? " (values written on the bars)" : " (values read from the scale)"}`;
     case "pictograph":
       return `a pictograph${s.title ? ` titled "${s.title}"` : ""} where each ${s.symbol} stands for ${fmt(s.key)}: ${s.rows.map((r) => `${r.label} has ${fmt(r.symbols)} symbol${r.symbols === 1 ? "" : "s"} (= ${fmt(r.symbols * s.key)})`).join(", ")}`;
-    case "table":
-      return `a table${s.title ? ` titled "${s.title}"` : ""} with columns ${s.headers.map((h) => `"${h}"`).join(", ")}; rows: ${s.rows.map((r) => r.join(" | ")).join("; ")}`;
+    case "table": {
+      const show = (v: string) => (isBlank(v) ? (/\?|？/.test(v) ? "? (to find)" : "(blank)") : v);
+      return `a table${s.title ? ` titled "${s.title}"` : ""} with ${s.rows.length} row${s.rows.length === 1 ? "" : "s"} under the header row ${s.headers.map((h) => `"${h}"`).join(" | ")}${s.row_headers ? " (first column = row labels)" : ""}; rows: ${s.rows.map((r) => s.headers.map((_, c) => show(r[c] ?? "")).join(" | ")).join("; ")}${s.caption ? `; note under the table: "${s.caption}"` : ""}`;
+    }
     case "grid_shape": {
       const on = new Set(s.shaded.map(([r, c]) => `${r},${c}`));
       let perimeter = 0;
@@ -679,7 +727,7 @@ export const VISUAL_GUIDE = `FIGURES — when a question needs a figure, add "fi
 - {"kind":"number_line","min":n,"max":n,"step":n,"label_every"?:int,"points"?:[{"value":n,"label"?:s}],"hops"?:[{"from":n,"to":n,"label"?:s}],"unknown"?:[{"value":n,"text":"?"}]}
 - {"kind":"bar_chart","title"?:s,"categories":[s],"values":[n],"value_label"?:s,"axis_max"?:n,"axis_step"?:n,"horizontal"?:bool,"show_values"?:bool}
 - {"kind":"pictograph","title"?:s,"symbol":"circle"|"star"|"square"|"triangle"|"heart"|"apple"|"flower","key":n,"rows":[{"label":s,"symbols":n (halves allowed)}]}
-- {"kind":"table","title"?:s,"headers":[s],"rows":[[s]]}
+- {"kind":"table","title"?:s,"headers":[s],"rows":[[s]],"row_headers"?:bool,"caption"?:s} — a cell "" or "?" is drawn as a box to fill in
 - {"kind":"grid_shape","cols":int,"rows":int,"shaded":[[row,col],…] (0-based),"unit_label"?:s}
 - {"kind":"fraction","shape":"bar"|"circle"|"rectangle","parts":int,"shaded":int,"label"?:s}
 - {"kind":"groups","groups":[{"count":int,"symbol":…,"label"?:s}],"array"?:bool,"caption"?:s}

@@ -130,7 +130,10 @@ the question's own data — clocks, number lines, bar charts, pictographs, table
 fractions, groups of objects, geometry, or a layout of cards. The independent re-solve sees an exact
 description of the drawn figure, so a figure that does not match the answer fails the checks. Only
 when no kind fits does the model draw the figure itself; that figure is re-read by the vision model
-and marked as model-drawn. Illustrations, logos and brand names from the template are never copied. The model decides each question's place in the category
+and marked as model-drawn. Illustrations, logos and brand names from the template are never copied.
+Tables are kept too: a table in a scanned question is stored as a table and shown as one, and when
+the template questions have tables, every generated question gets a table of the same layout (new
+data, cells to fill in shown as boxes); a question without one fails the figure check. The model decides each question's place in the category
 tree (e.g. Number › Fractions), its grade, knowledge points and difficulty; missing categories are created
 on commit, and "AI classify" does the same for questions already in a bank. Organise questions in categories — a manual group,
 a saved filter, or a style template that describes a type of question without source questions
