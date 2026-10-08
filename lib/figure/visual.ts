@@ -25,6 +25,7 @@ import { buildFigure } from "./check";
 import { renderFigureSvg } from "./render";
 import { cubeStackSchema, describeCubeStack, describeSolid, drawCubeStack, drawSolid, solidSchema, type Pen } from "./solid3d";
 import { figureSpecSchema } from "./spec";
+import { describeSpeech, drawSpeech, speechSchema } from "./speech";
 import { describeStar, drawStar, starSchema } from "./star";
 
 // ── Style ───────────────────────────────────────────────────────────
@@ -161,7 +162,7 @@ const groupsSchema = z.object({
 });
 const geometrySchema = z.object({ kind: z.literal("geometry"), spec: figureSpecSchema });
 
-const leafSchemas = [clockSchema, numberLineSchema, barChartSchema, pictographSchema, tableSchema, gridShapeSchema, fractionSchema, groupsSchema, geometrySchema, cubeStackSchema, solidSchema, starSchema] as const;
+const leafSchemas = [clockSchema, numberLineSchema, barChartSchema, pictographSchema, tableSchema, gridShapeSchema, fractionSchema, groupsSchema, geometrySchema, cubeStackSchema, solidSchema, starSchema, speechSchema] as const;
 export const visualLeafSchema = z.discriminatedUnion("kind", [...leafSchemas]);
 export type VisualLeaf = z.infer<typeof visualLeafSchema>;
 
@@ -189,7 +190,7 @@ const svgSchema = z.object({ kind: z.literal("svg"), svg: z.string().min(20).max
 export const visualSpecSchema = z.discriminatedUnion("kind", [...leafSchemas, cardsSchema, svgSchema]);
 export type VisualSpec = z.infer<typeof visualSpecSchema>;
 
-export const VISUAL_KINDS = ["clock", "number_line", "bar_chart", "pictograph", "table", "grid_shape", "fraction", "groups", "geometry", "cube_stack", "solid", "star", "cards", "svg"] as const;
+export const VISUAL_KINDS = ["clock", "number_line", "bar_chart", "pictograph", "table", "grid_shape", "fraction", "groups", "geometry", "cube_stack", "solid", "star", "speech", "cards", "svg"] as const;
 
 /** Kinds that draw a 3D figure. */
 export const SOLID_KINDS = ["cube_stack", "solid"] as const;
@@ -586,6 +587,8 @@ function leaf(spec: VisualLeaf, t: Theme): Box & { verified?: boolean; issues?: 
       return drawSolid(spec, pen(t));
     case "star":
       return drawStar(spec, { ...pen(t), accent: t.accent });
+    case "speech":
+      return drawSpeech(spec, { ...pen(t), accent: t.accent });
   }
 }
 
@@ -729,6 +732,8 @@ function describeLeaf(s: VisualLeaf): string {
       return describeSolid(s);
     case "star":
       return describeStar(s);
+    case "speech":
+      return describeSpeech(s);
   }
 }
 
@@ -757,6 +762,7 @@ export const VISUAL_GUIDE = `FIGURES — when a question needs a figure, add "fi
 - {"kind":"cube_stack","heights":[[int 0–6,…],…] (number of cubes in each column seen from above: first row = BACK, last row = FRONT, left to right),"caps"?:[{"row":r,"col":c,"shape":"half_cylinder"|"roof"|"pyramid"|"cylinder"|"cone"|"dome","axis"?:"x"|"y"}] (a piece on top of that column, or on the ground where the height is 0; axis "x" = the curved/sloping top runs left–right, "y" = front–back),"unit_lines"?:bool (default true = small cubes; false = plain blocks, like a building),"projection"?:"oblique"|"isometric","show_stack"?:bool (default true),"views"?:[{"view":"front"|"left"|"right"|"side"|"top","label"?:s,"blank"?:bool}],"caption"?:s} — a solid made of unit cubes drawn in 3D; views are computed from the same data ("side" = from the right; "blank": an empty grid to draw that view in; "show_stack": false draws only the views, e.g. building plans). Unless the question is about hidden cubes, put taller columns at the back so every cube can be seen. Label views in the question's language (e.g. "从正面看", "front view")
 - {"kind":"solid","shape":"cube"|"cuboid"|"triangular_prism"|"square_pyramid"|"triangular_pyramid"|"cylinder"|"cone"|"sphere"|"hemisphere","length"?:n,"width"?:n,"height"?:n,"radius"?:n (proportions only),"labels"?:{"length"?:s,"width"?:s,"height"?:s,"radius"?:s} (text written on the edges, e.g. "6 cm"),"hidden_edges"?:bool,"projection"?:"oblique"|"isometric","caption"?:s} — a 3D solid with hidden edges dashed; length = left–right, width = front–back, height = up
 - {"kind":"star","points":3–12,"tip_angle":degrees (under 180 − 360/points),"divide"?:"none"|"tips"|"inner" (lines from the centre to every tip → identical concave quadrilaterals; to every inner corner → identical kites),"show_division"?:bool,"symmetry_lines"?:bool,"show_piece"?:bool (one piece drawn beside the star),"piece_labels"?:{"centre"?:s,"tip"?:s,"inner"?:s} (e.g. "38°", "?"),"tip_label"?:s,"caption"?:s} — a star drawn to scale; every angle follows from "points" and "tip_angle" (piece cut to the tips: 360/points at the centre, tip_angle/2 at each tip, 360 − 360/points − tip_angle at the inner corner), so the angles in the question must be these
+- {"kind":"speech","speakers":[{"text":s,"name"?:s}] (1–3),"choices"?:[s] (2–6, drawn underneath with empty circles),"caption"?:s} — someone saying something: a simple child figure with a speech bubble beside the head (the program lays it out so nothing covers anything)
 - {"kind":"cards","columns":1-4,"cards":[{"label"?:s,"figure"?:<one of the kinds above>,"caption"?:s,"answer_box"?:bool}]} — a sheet of cards, e.g. sequence cards each with a clock and an activity, or picture cards to sort
-- {"kind":"svg","svg":"<svg …>…</svg>","description":"exact description of everything drawn"} — ONLY when no kind above fits; simple line drawing, viewBox about 400×300, no text that gives the answer away.
+- {"kind":"svg","svg":"<svg …>…</svg>","description":"exact description of everything drawn"} — ONLY when no kind above fits; simple line drawing, viewBox about 400×300, no text that gives the answer away; nothing may cover anything else (no shape over a face, a figure or text), and everything stays inside the picture.
 Rules: the figure must show exactly the information the question needs (no more, no less, nothing that gives the answer away unless the template does the same); refer to it in the stem the way the examples do; prefer the same kind and layout of figure as the examples.`;

@@ -37,6 +37,7 @@ import { hasTemplateImages, readTemplateVisuals, type TemplateVisuals } from "./
 import type { CandidateFigure } from "./types";
 import { tablesIn, withoutTables, type ParsedTable } from "../markdown-table";
 import { allStarAngles, type StarSpec } from "../figure/star";
+import { svgOverlaps } from "../figure/svg-overlap";
 
 const MAX_COUNT = 10;
 const EXEMPLARS = 5;
@@ -232,7 +233,7 @@ const FIGURE_RULE_WITH_SPECS =
   '- Questions with a figure: put it in "figure" as a figure spec (see FIGURES below); the program draws it in the template\'s style. The stem refers to the figure the way the examples do and must not repeat information that only the figure should give. Copy the layout of the examples\' figures (e.g. the same number of cards with the same kind of picture), never their pictures, logos or brand names.';
 
 const FIGURE_CHECK_SYSTEM = `You check a figure drawn for a maths question. You get the question, the description the figure should match, and the figure image.
-Say whether the image shows exactly what the description says (every number, label, time, value and shape) and whether it fits the question. List concrete problems.
+Say whether the image shows exactly what the description says (every number, label, time, value and shape) and whether it fits the question. It also fails when anything covers something else (a shape drawn over a face, a figure, a label or text), when text is cut off or overlaps other text, or when part of the drawing runs outside the picture. List concrete problems.
 Return JSON only: {"ok": true|false, "problems": "…"}`;
 
 const RESOLVE_SYSTEM = `You solve math questions independently and carefully. For each question, work it out and give only the final answer.
@@ -446,7 +447,7 @@ async function repairFigures(drafts: Draft[], figures: FigurePlan, inLang: <T>(f
   const needs = (d: Draft, i: number): string | undefined => {
     if (d.figureIssue && !d.figure) return d.figureIssue;
     const svg = svgChecks.get(i);
-    if (svg && !svg.ok && !svg.skipped) return `${svg.detail} — draw it with a program kind from the guide if one fits (e.g. "star" for a star cut into pieces), not "svg"`;
+    if (svg && !svg.ok && !svg.skipped) return `${svg.detail} — draw it with a program kind from the guide if one fits (e.g. "star" for a star cut into pieces, "speech" for someone saying something), not "svg"; if "svg" is the only way, make sure nothing covers anything else`;
     const angles = d.figure?.source === "program" ? angleCheck(d) : null;
     if (angles && !angles.ok) return `${angles.detail} — change the figure's numbers so that they match the question`;
     if (figures.solids.length && !figureKinds(d.figure?.spec).some((k) => SOLID_KIND_SET.has(k))) return `a 3D figure (${figures.solids.join(" or ")}) is required`;
@@ -700,7 +701,14 @@ function figureCheck(d: Draft, svgCheck: Check | undefined, needTable = false, n
 /** Re-read model-drawn SVG figures with the vision model (needs sharp to rasterise). Keyed by draft index. */
 async function checkModelFigures(drafts: Draft[]): Promise<Map<number, Check>> {
   const out = new Map<number, Check>();
-  const todo = drafts.map((d, i) => ({ d, i })).filter(({ d }) => d.figure?.source === "model");
+  let todo = drafts.map((d, i) => ({ d, i })).filter(({ d }) => d.figure?.source === "model");
+  // Things covering each other are found by the program first (no model call needed).
+  todo = todo.filter(({ d, i }) => {
+    const covered = svgOverlaps(d.figure!.svg);
+    if (!covered?.length) return true;
+    out.set(i, check(false, lt(`模型绘制的图形有遮挡：${covered.join("；")}`, `the model-drawn figure has things covering each other: ${covered.join("; ")}`)));
+    return false;
+  });
   if (!todo.length) return out;
   const sharp = await loadSharp();
   if (!sharp) return out;
