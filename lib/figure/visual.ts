@@ -179,18 +179,39 @@ const cardsSchema = z.object({
         caption: label.optional(),
         /** An empty answer box under the card (write the order, the time …). */
         answer_box: z.boolean().optional(),
+        /** A simple icon on the card (instead of a picture). */
+        icon: symbol.optional(),
+        /** An empty checkbox to the left of the card (choices to tick). */
+        checkbox: z.boolean().optional(),
       }),
     )
     .min(1)
     .max(12),
 });
+/** Several figure areas, one under another (or side by side): e.g. priced item cards, then the answer choices. */
+const groupSchema = z.object({
+  kind: z.literal("group"),
+  direction: z.enum(["vertical", "horizontal"]).optional(),
+  parts: z.array(z.discriminatedUnion("kind", [...leafSchemas, cardsSchema])).min(2).max(4),
+  caption: label.optional(),
+});
 /** Drawn by the model when no kind fits: not program-drawn. */
 const svgSchema = z.object({ kind: z.literal("svg"), svg: z.string().min(20).max(60_000), description: z.string().min(1).max(2000) });
 
-export const visualSpecSchema = z.discriminatedUnion("kind", [...leafSchemas, cardsSchema, svgSchema]);
+export const visualSpecSchema = z.discriminatedUnion("kind", [...leafSchemas, cardsSchema, groupSchema, svgSchema]);
 export type VisualSpec = z.infer<typeof visualSpecSchema>;
 
-export const VISUAL_KINDS = ["clock", "number_line", "bar_chart", "pictograph", "table", "grid_shape", "fraction", "groups", "geometry", "cube_stack", "solid", "star", "speech", "cards", "svg"] as const;
+export const VISUAL_KINDS = ["clock", "number_line", "bar_chart", "pictograph", "table", "grid_shape", "fraction", "groups", "geometry", "cube_stack", "solid", "star", "speech", "cards", "group", "svg"] as const;
+
+/** Every figure in a spec: itself, the parts of a group and the figures on cards. */
+export function specNodes(spec: unknown): Array<Record<string, unknown> & { kind: string }> {
+  const s = spec as (Record<string, unknown> & { kind?: string }) | null | undefined;
+  if (!s || typeof s !== "object" || typeof s.kind !== "string") return [];
+  const out = [s as Record<string, unknown> & { kind: string }];
+  if (s.kind === "group") for (const p of (s.parts as unknown[]) ?? []) out.push(...specNodes(p));
+  if (s.kind === "cards") for (const c of (s.cards as Array<{ figure?: unknown }>) ?? []) out.push(...specNodes(c.figure));
+  return out;
+}
 
 /** Kinds that draw a 3D figure. */
 export const SOLID_KINDS = ["cube_stack", "solid"] as const;
@@ -606,11 +627,14 @@ function frameRect(t: Theme, x: number, y: number, w: number, h: number): string
 function cards(spec: z.infer<typeof cardsSchema>, t: Theme): Box & { verified: boolean; issues: string[] } {
   const inner = spec.cards.map((c) => (c.figure ? leaf(c.figure, t) : undefined));
   const pad = 14;
-  const cw = Math.max(150, ...inner.map((b) => (b ? b.w : 0))) + 2 * pad;
+  const iconH = 46;
+  const box = spec.cards.some((c) => c.checkbox) ? 40 : 0; // room for the checkbox on the left
+  const textW = Math.max(0, ...spec.cards.map((c) => Math.max(c.label ? textWidth(c.label, 18) : 0, c.caption ? textWidth(c.caption, 14) : 0)));
+  const cw = Math.max(150, textW + 16, ...inner.map((b) => (b ? b.w : 0))) + 2 * pad + box;
   const ch =
     Math.max(
-      60,
-      ...spec.cards.map((c, i) => (c.label ? 30 : 0) + (inner[i] ? inner[i]!.h + 8 : 0) + (c.caption ? 26 : 0) + (c.answer_box ? 50 : 0)),
+      box ? 44 : 60,
+      ...spec.cards.map((c, i) => (c.label ? 30 : 0) + (inner[i] ? inner[i]!.h + 8 : 0) + (c.icon ? iconH : 0) + (c.caption ? 26 : 0) + (c.answer_box ? 50 : 0)),
     ) +
     2 * pad;
   const cols = Math.min(spec.columns, spec.cards.length);
@@ -619,25 +643,53 @@ function cards(spec: z.infer<typeof cardsSchema>, t: Theme): Box & { verified: b
   spec.cards.forEach((c, i) => {
     const x = (i % cols) * (cw + gap), y = Math.floor(i / cols) * (ch + gap);
     parts.push(frameRect(t, x + 1, y + 1, cw, ch));
-    let yy = y + pad;
+    if (c.checkbox) parts.push(`<rect x="${r1(x + 14)}" y="${r1(y + ch / 2 - 11)}" width="22" height="22" rx="3" fill="${t.paper}" stroke="${t.ink}" stroke-width="1.6"/>`);
+    const cx = x + box + (cw - box) / 2; // centre of the content
+    const used = (c.label ? 30 : 0) + (inner[i] ? inner[i]!.h + 8 : 0) + (c.icon ? iconH : 0) + (c.caption ? 26 : 0) + (c.answer_box ? 50 : 0);
+    let yy = y + (box ? (ch - used) / 2 : pad);
     if (c.label) {
-      parts.push(text(t, x + cw / 2, yy + 20, c.label, 18, "middle", "bold"));
+      parts.push(text(t, cx, yy + 20, c.label, 18, "middle", "bold"));
       yy += 30;
     }
     const b = inner[i];
     if (b) {
-      parts.push(`<g transform="translate(${r1(x + (cw - b.w) / 2)},${r1(yy)})">${b.body}</g>`);
+      parts.push(`<g transform="translate(${r1(cx - b.w / 2)},${r1(yy)})">${b.body}</g>`);
       yy += b.h + 8;
     }
+    if (c.icon) {
+      parts.push(symbolPath(c.icon, cx, yy + iconH / 2 - 2, 17, t));
+      yy += iconH;
+    }
     if (c.caption) {
-      parts.push(text(t, x + cw / 2, yy + 18, c.caption, 14));
+      parts.push(text(t, cx, yy + 18, c.caption, 14));
       yy += 26;
     }
-    if (c.answer_box) parts.push(`<rect x="${r1(x + cw / 2 - 26)}" y="${r1(yy + 4)}" width="52" height="40" rx="4" fill="${t.paper}" stroke="${t.ink}" stroke-width="1.5"/>`);
+    if (c.answer_box) parts.push(`<rect x="${r1(cx - 26)}" y="${r1(yy + 4)}" width="52" height="40" rx="4" fill="${t.paper}" stroke="${t.ink}" stroke-width="1.5"/>`);
   });
   const rows = Math.ceil(spec.cards.length / cols);
   const issues = inner.flatMap((b) => b?.issues ?? []);
   return { w: cols * cw + (cols - 1) * gap + 2, h: rows * ch + (rows - 1) * gap + 2, body: parts.join(""), verified: inner.every((b) => !b || b.verified !== false), issues };
+}
+
+function group(spec: z.infer<typeof groupSchema>, t: Theme): Box & { verified: boolean; issues: string[] } {
+  const boxes = spec.parts.map((p) => (p.kind === "cards" ? cards(p, t) : leaf(p, t)));
+  const across = spec.direction === "horizontal";
+  const gap = 26;
+  const parts: string[] = [];
+  let at = 0;
+  const W = across ? 0 : Math.max(...boxes.map((b) => b.w));
+  const H = across ? Math.max(...boxes.map((b) => b.h)) : 0;
+  for (const b of boxes) {
+    parts.push(`<g transform="translate(${r1(across ? at : (W - b.w) / 2)},${r1(across ? (H - b.h) / 2 : at)})">${b.body}</g>`);
+    at += (across ? b.w : b.h) + gap;
+  }
+  let w = across ? at - gap : W, h = across ? H : at - gap;
+  if (spec.caption) {
+    parts.push(text(t, 0, h + 22, spec.caption, 14, "start"));
+    h += 30;
+    w = Math.max(w, textWidth(spec.caption, 14));
+  }
+  return { w, h, body: parts.join(""), verified: boxes.every((b) => (b as { verified?: boolean }).verified !== false), issues: boxes.flatMap((b) => (b as { issues?: string[] }).issues ?? []) };
 }
 
 // ── Model-drawn SVG ─────────────────────────────────────────────────
@@ -675,9 +727,9 @@ export function buildVisual(spec: VisualSpec, style: FigureStyle = DEFAULT_STYLE
     if (!clean) throw new Error("the model's SVG is not a valid <svg> element");
     return { svg: clean, description: spec.description.trim(), source: "model", verified: false, issues: [] };
   }
-  const box = spec.kind === "cards" ? cards(spec, t) : leaf(spec, t);
-  const pad = spec.kind === "cards" ? 6 : 16;
-  const framed = spec.kind !== "cards" && spec.kind !== "table" && (t.frame === "box" || t.frame === "rounded");
+  const box = spec.kind === "cards" ? cards(spec, t) : spec.kind === "group" ? group(spec, t) : leaf(spec, t);
+  const pad = spec.kind === "cards" || spec.kind === "group" ? 6 : 16;
+  const framed = spec.kind !== "cards" && spec.kind !== "group" && spec.kind !== "table" && (t.frame === "box" || t.frame === "rounded");
   const fpad = framed ? 10 : 0;
   const W = Math.ceil(box.w + 2 * (pad + fpad)), H = Math.ceil(box.h + 2 * (pad + fpad));
   const svg =
@@ -738,13 +790,17 @@ function describeLeaf(s: VisualLeaf): string {
 }
 
 /** Exact text description of a spec (what a solver would see in the figure). */
+function describeCards(spec: z.infer<typeof cardsSchema>): string {
+  return `${spec.cards.length} card${spec.cards.length === 1 ? "" : "s"} in ${spec.columns} column${spec.columns === 1 ? "" : "s"}, in reading order: ${spec.cards
+    .map((c, i) => `card ${i + 1}: ${[c.checkbox ? "an empty checkbox on the left" : "", c.label ? `"${c.label}"` : "", c.figure ? describeLeaf(c.figure) : "", c.icon ? `a ${c.icon} icon` : "", c.caption ? `caption "${c.caption}"` : "", c.answer_box ? "an empty answer box" : ""].filter(Boolean).join(", ")}`)
+    .join("; ")}`;
+}
+
 export function describeVisual(spec: VisualSpec): string {
   if (spec.kind === "svg") return spec.description;
-  if (spec.kind === "cards") {
-    return `${spec.cards.length} card${spec.cards.length === 1 ? "" : "s"} in ${spec.columns} column${spec.columns === 1 ? "" : "s"}, in reading order: ${spec.cards
-      .map((c, i) => `card ${i + 1}: ${[c.label ? `"${c.label}"` : "", c.figure ? describeLeaf(c.figure) : "", c.caption ? `caption "${c.caption}"` : "", c.answer_box ? "an empty answer box" : ""].filter(Boolean).join(", ")}`)
-      .join("; ")}`;
-  }
+  if (spec.kind === "cards") return describeCards(spec);
+  if (spec.kind === "group")
+    return `${spec.parts.length} figure areas ${spec.direction === "horizontal" ? "side by side" : "one under another"}: ${spec.parts.map((p, i) => `area ${i + 1}: ${p.kind === "cards" ? describeCards(p) : describeLeaf(p)}`).join("; ")}${spec.caption ? `; caption "${spec.caption}"` : ""}`;
   return describeLeaf(spec);
 }
 
@@ -763,6 +819,7 @@ export const VISUAL_GUIDE = `FIGURES — when a question needs a figure, add "fi
 - {"kind":"solid","shape":"cube"|"cuboid"|"triangular_prism"|"square_pyramid"|"triangular_pyramid"|"cylinder"|"cone"|"sphere"|"hemisphere","length"?:n,"width"?:n,"height"?:n,"radius"?:n (proportions only),"labels"?:{"length"?:s,"width"?:s,"height"?:s,"radius"?:s} (text written on the edges, e.g. "6 cm"),"hidden_edges"?:bool,"projection"?:"oblique"|"isometric","caption"?:s} — a 3D solid with hidden edges dashed; length = left–right, width = front–back, height = up
 - {"kind":"star","points":3–12,"tip_angle":degrees (under 180 − 360/points),"divide"?:"none"|"tips"|"inner" (lines from the centre to every tip → identical concave quadrilaterals; to every inner corner → identical kites),"show_division"?:bool,"symmetry_lines"?:bool,"show_piece"?:bool (one piece drawn beside the star),"piece_labels"?:{"centre"?:s,"tip"?:s,"inner"?:s} (e.g. "38°", "?"),"tip_label"?:s,"caption"?:s} — a star drawn to scale; every angle follows from "points" and "tip_angle" (piece cut to the tips: 360/points at the centre, tip_angle/2 at each tip, 360 − 360/points − tip_angle at the inner corner), so the angles in the question must be these
 - {"kind":"speech","speakers":[{"text":s,"name"?:s}] (1–3),"choices"?:[s] (2–6, drawn underneath with empty circles),"caption"?:s} — someone saying something: a simple child figure with a speech bubble beside the head (the program lays it out so nothing covers anything)
-- {"kind":"cards","columns":1-4,"cards":[{"label"?:s,"figure"?:<one of the kinds above>,"caption"?:s,"answer_box"?:bool}]} — a sheet of cards, e.g. sequence cards each with a clock and an activity, or picture cards to sort
+- {"kind":"cards","columns":1-4,"cards":[{"label"?:s,"figure"?:<one of the kinds above>,"icon"?:"circle"|"star"|"square"|"triangle"|"heart"|"apple"|"flower","caption"?:s,"answer_box"?:bool,"checkbox"?:bool}]} — a sheet of cards, e.g. sequence cards each with a clock and an activity, item cards with a name and a price ("label": "$1.50", "caption": "orange juice", a simple "icon" instead of a picture), or answer choices to tick ("columns": 1, "checkbox": true)
+- {"kind":"group","direction"?:"vertical"|"horizontal","parts":[<a kind above or cards>, …] (2–4),"caption"?:s} — several figure areas, e.g. the priced item cards and, under them, the answer choices with checkboxes
 - {"kind":"svg","svg":"<svg …>…</svg>","description":"exact description of everything drawn"} — ONLY when no kind above fits; simple line drawing, viewBox about 400×300, no text that gives the answer away; nothing may cover anything else (no shape over a face, a figure or text), and everything stays inside the picture.
 Rules: the figure must show exactly the information the question needs (no more, no less, nothing that gives the answer away unless the template does the same); refer to it in the stem the way the examples do; prefer the same kind and layout of figure as the examples.`;

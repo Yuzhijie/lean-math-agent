@@ -13,7 +13,7 @@ import type { Item } from "@/lib/bank/types";
 // the four checks, with a fake model that recognises each call by its prompt.
 
 type Msg = { role: string; content: string };
-type Kind = "profile" | "generate" | "resolve" | "judge";
+type Kind = "profile" | "generate" | "resolve" | "judge" | "reword";
 
 function kindOf(messages: Msg[]): Kind {
   const sys = messages.find((m) => m.role === "system")?.content ?? "";
@@ -21,6 +21,7 @@ function kindOf(messages: Msg[]): Kind {
   if (sys.startsWith("You write new original")) return "generate";
   if (sys.startsWith("You solve math questions")) return "resolve";
   if (sys.startsWith("You review generated")) return "judge";
+  if (sys.startsWith("You reword generated")) return "reword";
   throw new Error("unknown call: " + sys.slice(0, 60));
 }
 
@@ -61,6 +62,8 @@ beforeEach(() => {
     },
     resolve: { answers: [1, 2, 3, 4].map((n) => ({ n, answer: "B" })) },
     judge: { scores: [1, 2, 3, 4].map((n) => ({ n, score: 4, reason: "same type" })) },
+    // the copied question is not reworded here, so it still fails the novelty check
+    reword: { stems: [] },
   };
   vi.stubGlobal(
     "fetch",

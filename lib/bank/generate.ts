@@ -30,7 +30,7 @@ import { StemIndex, TOO_CLOSE } from "./similarity";
 import { addItems, BankError, getBank, getCategory, getGeneration, getItem, listCategories, listItems, putGeneration } from "./store";
 import { QUESTION_TYPES, type Candidate, type Check, type Generation, type Item, type QuestionType, type TemplateProfile, type TemplateRef } from "./types";
 import { vocabFor } from "./vocab";
-import { buildVisual, DEFAULT_STYLE, SOLID_KINDS, VISUAL_GUIDE, visualSpecSchema, type FigureStyle } from "../figure/visual";
+import { buildVisual, DEFAULT_STYLE, SOLID_KINDS, specNodes, VISUAL_GUIDE, visualSpecSchema, type FigureStyle } from "../figure/visual";
 import { loadSharp } from "./import/images";
 import { saveAsset } from "./store";
 import { hasTemplateImages, readTemplateVisuals, type TemplateVisuals } from "./template-visual";
@@ -148,7 +148,7 @@ function answerLetter(answer: string, optionCount: number): string | null {
 }
 
 /** "Select all …" questions: several options can be correct; the answer is a set of letters ("A, D"). */
-const SELECT_ALL = /\b(?:select|choose|tick|circle|colou?r|mark|pick) all\b|\ball (?:of )?the (?:items|options|answers|ones|cards|shapes|numbers) (?:that|which)\b|选出所有|全部选出|所有(?:正确|符合)|多选|哪几(?:个|项|种|样)/i;
+const SELECT_ALL = /\b(?:select|choose|tick|circle|colou?r|mark|pick|shade) (?:all|every|each)\b|\ball (?:of )?the (?:items|options|answers|ones|cards|shapes|numbers) (?:that|which)\b|选出所有|全部选出|所有(?:正确|符合)|多选|哪几(?:个|项|种|样)/i;
 
 export function isSelectAll(stem: string): boolean {
   return SELECT_ALL.test(stem);
@@ -282,9 +282,17 @@ interface FigurePlan {
   tableHint?: string;
   /** The template questions show 3D figures: every new question must have one, of these kinds. */
   solids: string[];
+  /** Number of separate figure areas the template questions have (images per question), when more than one. */
+  areas?: number;
 }
 
 const SOLID_KIND_SET = new Set<string>(SOLID_KINDS);
+
+/** Separate figure areas in most template questions (their images), 1 when there is at most one. */
+function areaCount(exemplars: Pick<Item, "images">[]): number {
+  const counts = exemplars.map((e) => e.images.length).filter((n) => n > 0).sort((a, b) => a - b);
+  return counts.length ? Math.min(4, counts[Math.floor(counts.length / 2)]) : 1;
+}
 
 /** 3D figure kinds the template uses: from the vision model's reading, or the captions given to figures at import ("cube_stack: …"). */
 export function templateSolids(exemplars: Pick<Item, "images">[], visualKinds: string[]): string[] {
@@ -296,9 +304,7 @@ export function templateSolids(exemplars: Pick<Item, "images">[], visualKinds: s
 
 /** Kinds of figure in a spec (cards included). */
 function figureKinds(spec: unknown): string[] {
-  const s = spec as { kind?: string; cards?: Array<{ figure?: { kind?: string } }> } | undefined;
-  if (!s?.kind) return [];
-  return s.kind === "cards" ? (s.cards ?? []).map((c) => c.figure?.kind ?? "").filter(Boolean) : [s.kind];
+  return specNodes(spec).map((n) => n.kind);
 }
 
 /** Whether most template questions have a table (in their text, or as the figure the vision model saw). */
@@ -313,8 +319,7 @@ export function templateTables(exemplars: Pick<Item, "stem">[], itemKinds: strin
 
 /** A figure spec contains a table (on its own or on a card). */
 function hasTableFigure(spec: unknown): boolean {
-  const s = spec as { kind?: string; cards?: Array<{ figure?: { kind?: string } }> } | undefined;
-  return s?.kind === "table" || (s?.kind === "cards" && !!s.cards?.some((c) => c.figure?.kind === "table"));
+  return specNodes(spec).some((n) => n.kind === "table");
 }
 
 /** Notes on the template questions as templates (template_hint: the vision model's analysis, possibly edited), distinct, at most 3. */
@@ -350,6 +355,10 @@ function profileText(p: TemplateProfile, figures?: FigurePlan, hints: string[] =
       ? `Figure: these questions come with a figure${figures.kinds.length ? ` (kinds: ${figures.kinds.join(", ")})` : ""}${figures.layout ? `; layout: ${figures.layout}` : ""}. Give each new question a figure of the same kind and layout in "figure"${figures.kinds.length && !figures.tables && !figures.kinds.includes("table") ? ` — keep the examples' kind (${figures.kinds.join(", ")}); do not turn it into a table or a sentence` : ""}.${
           figures.tables
             ? ` TABLE: the example questions present their data in a table${figures.tableHint ? ` (e.g. ${figures.tableHint})` : ""}. Every new question MUST include a table of the same kind — new data, same layout — as "figure": {"kind":"table",…} (or a table on a card); do not write the table in the stem and do not replace it by a sentence.`
+            : ""
+        }${
+          figures.areas && figures.areas > 1
+            ? ` AREAS: each example has ${figures.areas} separate figure areas (e.g. the items with their prices, then the answer choices). Draw them as {"kind":"group","parts":[…]} with one part per area, in the same order — answer choices to tick as cards with "columns": 1 and "checkbox": true.`
             : ""
         }${
           figures.solids.length
@@ -567,9 +576,11 @@ const fmtMoney = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 /** Texts that pair a name with a price: figure cards and table rows, and lines of the stem. */
 function pricedTexts(c: Draft): string[] {
   const out: string[] = [];
-  const spec = c.figure?.spec as { kind?: string; rows?: unknown[][]; cards?: Array<{ label?: string; caption?: string }> } | undefined;
-  if (spec?.kind === "table") for (const r of spec.rows ?? []) out.push(r.map(String).join(" "));
-  if (spec?.kind === "cards") for (const k of spec.cards ?? []) out.push(`${k.label ?? ""} ${k.caption ?? ""}`);
+  for (const node of specNodes(c.figure?.spec)) {
+    const n = node as { kind: string; rows?: unknown[][]; cards?: Array<{ label?: string; caption?: string }> };
+    if (n.kind === "table") for (const r of n.rows ?? []) out.push(r.map(String).join(" "));
+    if (n.kind === "cards") for (const k of n.cards ?? []) out.push(`${k.label ?? ""} ${k.caption ?? ""}`);
+  }
   for (const t of tablesIn(c.stem)) for (const r of t.rows) out.push(r.join(" "));
   out.push(...withoutTables(c.stem).split(/\n|;|；/));
   return out;
@@ -629,6 +640,51 @@ function answerCheck(c: Draft, independent: string | undefined, resolveError: st
     : check(false, lt(`独立解答为 ${independent}，与答案 ${c.answer} 不一致`, `independent answer is ${independent}, not ${c.answer}`) + extra);
 }
 
+const REWORD_SYSTEM = `You reword generated maths questions that are too close to questions already in the bank (the close question is shown with each).
+Rewrite each stem with a different everyday context, different names and a different sentence structure, so that it no longer reads like the bank question.
+Keep EXACTLY: every number, amount and unit; the options and their order; what the figure shows; what is asked; the answer. Keep the instruction style of the type (e.g. "Select all …") but word it differently where you can.
+Return JSON only: {"stems":[{"n":1,"stem":"…"}]}`;
+
+/** The numbers in a text, sorted (to check that a rewording kept them all). */
+function numbersIn(text: string): string {
+  return (text.normalize("NFKC").match(/\d+(?:[.,]\d+)?/g) ?? []).map((n) => n.replace(",", ".")).sort().join(" ");
+}
+
+/** Stems too close to a bank question are reworded once (same numbers, options, figure and answer). Returns the drafts changed. */
+async function rewordTooClose(drafts: Draft[], bankItems: Item[], inLang: <T>(fn: () => Promise<T>) => Promise<T>): Promise<number> {
+  const index = new StemIndex<string>();
+  for (const it of bankItems) index.add(it.stem, it.stem);
+  const close = drafts.map((d, i) => ({ d, i, near: index.nearest(d.stem) })).filter((x) => x.near && x.near.score >= TOO_CLOSE);
+  if (!close.length) return 0;
+  let res: { stems: Array<{ n: number; stem: string }> };
+  try {
+    res = await inLang(() =>
+      chatJson({
+        system: REWORD_SYSTEM,
+        user: close.map(({ d, i, near }) => `${describeItem(withFigureText(d), i + 1, true)}\nToo close (${Math.round(near!.score * 100)}%) to the bank question:\n${clip(near!.item, 600)}`).join("\n\n"),
+        schema: z.object({ stems: z.array(z.object({ n: z.coerce.number(), stem: z.string() })).default([]) }),
+        schemaName: "Rewordings",
+        temperature: 0.7,
+        noCache: true,
+      }),
+    );
+  } catch {
+    return 0;
+  }
+  let changed = 0;
+  for (const r of res.stems) {
+    const x = close.find((c) => c.i === Math.round(r.n) - 1);
+    const stem = r.stem.trim();
+    if (!x || !stem || numbersIn(stem) !== numbersIn(x.d.stem)) continue; // a rewording must keep every number
+    if (isSelectAll(x.d.stem) !== isSelectAll(stem)) continue;
+    const after = index.nearest(stem);
+    if (after && after.score >= x.near!.score) continue;
+    x.d.stem = stem;
+    changed++;
+  }
+  return changed;
+}
+
 function noveltyChecks(drafts: Draft[], bankItems: Item[]): Check[] {
   const index = new StemIndex<string>();
   for (const it of bankItems) {
@@ -646,11 +702,7 @@ function noveltyChecks(drafts: Draft[], bankItems: Item[]): Check[] {
 
 /** Angles a program-drawn figure has exactly (stars and their pieces), or [] when it has none to check. */
 function figureAngles(spec: unknown): number[] {
-  const s = spec as { kind?: string; cards?: Array<{ figure?: unknown }> } | undefined;
-  if (!s?.kind) return [];
-  if (s.kind === "star") return allStarAngles(s as StarSpec);
-  if (s.kind === "cards") return (s.cards ?? []).flatMap((c) => figureAngles(c.figure));
-  return [];
+  return specNodes(spec).flatMap((n) => (n.kind === "star" ? allStarAngles(n as unknown as StarSpec) : []));
 }
 
 const DEGREES = /(\d+(?:\.\d+)?)\s*(?:°|\^\s*\{?\s*\\circ\s*\}?|\\degree|degrees?|度)/gi;
@@ -766,13 +818,14 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
   const tables = templateTables(exemplars, visuals?.itemKinds ?? []);
   const solids = templateSolids(exemplars, visuals?.kinds ?? []);
   const figures: FigurePlan = {
-    on: !!visuals?.descriptions.size || tables.required || solids.length > 0,
+    on: !!visuals?.descriptions.size || tables.required || solids.length > 0 || areaCount(exemplars) > 1,
     style: visuals?.style ?? DEFAULT_STYLE,
     kinds: [...new Set([...(visuals?.kinds ?? []), ...(tables.required ? ["table"] : []), ...solids])],
     layout: visuals?.layout,
     tables: tables.required,
     tableHint: tables.hint,
     solids,
+    ...(areaCount(exemplars) > 1 ? { areas: areaCount(exemplars) } : {}),
   };
   const figureNote = visuals?.note ? lt(`未能读取模板图形（${visuals.note}），新题按文字出`, `the template's figures could not be read (${visuals.note}); questions were written from the text`) : undefined;
   const note = [templateNote, figureNote].filter(Boolean).join(lt("；", "; ")) || undefined;
@@ -797,6 +850,8 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
   const drafts = generated.questions.slice(0, ask * 2).map((q) => toDraft(q, profile, figures.style));
   // Figures the program could not draw (or a required kind left out) go back to the writer once, with the error.
   if (figures.on) await repairFigures(drafts, figures, inLang);
+  // Stems that read like a bank question are reworded once (same numbers, options, figure, answer).
+  await rewordTooClose(drafts, listItems(owner, bankId), inLang);
   // Model-drawn figures (no kind fitted): the vision model checks them against their description.
   const svgChecks = figures.on ? await checkModelFigures(drafts) : new Map<number, Check>();
   // A model-drawn figure that does not match, or a figure whose angles contradict the question: one more repair round.
@@ -866,7 +921,7 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
   // 4. Passed first (at most `count`), then the failed ones so the UI can show why.
   const passed = candidates.filter((c) => c.passed).slice(0, count);
   const failed = candidates.filter((c) => !c.passed);
-  const figure_plan = figures.on || visuals ? { kinds: (visuals?.itemKinds.length ? visuals.itemKinds : figures.kinds).slice(0, 20), layout: figures.layout?.slice(0, 300), tables: figures.tables, solids: figures.solids, ...(visuals?.note ? { note: visuals.note.slice(0, 300) } : {}) } : undefined;
+  const figure_plan = figures.on || visuals ? { kinds: (visuals?.itemKinds.length ? visuals.itemKinds : figures.kinds).slice(0, 20), layout: figures.layout?.slice(0, 300), tables: figures.tables, solids: figures.solids, ...(figures.areas ? { areas: figures.areas } : {}), ...(visuals?.note ? { note: visuals.note.slice(0, 300) } : {}) } : undefined;
   return putGeneration(owner, bankId, { template, template_label: clip(label, 200), mode: "same_type", requested: count, note, matched, ...(figure_plan ? { figure_plan } : {}), candidates: [...passed, ...failed] });
 }
 

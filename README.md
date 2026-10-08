@@ -148,6 +148,9 @@ model finds wrong is sent back once to be redrawn.
 Someone saying something is drawn by the program (a simple figure with the speech bubble beside the
 head, answer choices underneath), and a model drawing in which one thing covers another — a bubble
 over a face, a shape over text — is caught by the program and redrawn.
+Questions whose template has several figure areas (priced item cards, then answer choices with
+checkboxes) are drawn with the same areas, and a new question that copies the wording of a bank
+question is reworded once (same numbers, options and figure) before it is checked.
 "Select all" questions keep their whole answer (e.g. A, D). When such a question gives a total
 ("she spent exactly $5"), the program tries every combination of the options' prices: exactly one
 combination must make the total, and it must be the answer. When the template questions have 3D figures,

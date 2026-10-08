@@ -265,7 +265,7 @@ export const generationSchema = z.object({
   matched: z.number().int().optional(),
   /** What the template's figures were read as (for diagnosis): kinds per example, layout, required table / 3D. */
   figure_plan: z
-    .object({ kinds: z.array(z.string()).max(20), layout: z.string().max(300).optional(), tables: z.boolean(), solids: z.array(z.string()).max(4), note: z.string().max(300).optional() })
+    .object({ kinds: z.array(z.string()).max(20), layout: z.string().max(300).optional(), tables: z.boolean(), solids: z.array(z.string()).max(4), areas: z.number().int().optional(), note: z.string().max(300).optional() })
     .optional(),
   candidates: z.array(candidateSchema),
   created_at: ts,
