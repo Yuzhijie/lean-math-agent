@@ -86,7 +86,7 @@ export async function readTemplateVisuals(owner: string, bankId: string, items: 
     const res = await chatJson({
       role: "vision",
       system: SYSTEM,
-      user: `${blocks.join("\n\n")}${hints.length ? `\n\nThe teacher's notes on these questions (what matters in the figures):\n${hints.map((h) => `- ${h.replace(/\s+/g, " ")}`).join("\n")}` : ""}\n\nDescribe the figures and their style as JSON.`,
+      user: `${blocks.join("\n\n")}${hints.length ? `\n\nNotes on these questions as templates (what matters in the figures):\n${hints.map((h) => `- ${h.replace(/\s+/g, " ")}`).join("\n")}` : ""}\n\nDescribe the figures and their style as JSON.`,
       images,
       schema: responseSchema,
       schemaName: "template_visuals",

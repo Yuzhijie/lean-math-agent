@@ -146,11 +146,8 @@ export async function parseImport(args: {
   classify?: boolean;
   /** More page images after the first file (photos of a multi-page paper), read as one batch in this order. */
   moreImages?: Array<{ fileName: string; data: Buffer }>;
-  /** The teacher's note about the material: guides reading scans and is kept on every question (template_hint). */
-  hint?: string;
 }): Promise<ImportBatch> {
   const { owner, bankId, fileName, data } = args;
-  const hint = args.hint?.trim() ? clampStr(args.hint.trim(), 1000) : undefined;
   const bank = getBank(owner, bankId);
   const format = args.format ?? detectFormat(fileName, data);
   if (!IMPORT_FORMATS.includes(format)) throw new BankError(lt("不支持的文件格式", "Unsupported file format"), 415);
@@ -184,7 +181,7 @@ export async function parseImport(args: {
         requireVision(bank.allow_model, "pdf");
         const pages = await scannedPdfPages(data, { maxPages: maxOcrPages() });
         if (!pages.length) throw new BankError(lt("这个 PDF 既没有文字也没有可识别的页面图像", "This PDF has neither text nor page images to read"), 422);
-        ({ questions, notes, ocrAssets } = await readScans(owner, bankId, pages, notes, hint));
+        ({ questions, notes, ocrAssets } = await readScans(owner, bankId, pages, notes));
         ocr = true;
       } else questions = pdf.questions;
       if (args.useModel !== false && bank.allow_model && process.env.LLM_API_KEY && questions.length) questions = await refineWithModel(questions);
@@ -201,7 +198,7 @@ export async function parseImport(args: {
         if (!detectImage(f.data) && !IMAGE_FILE.test(f.fileName)) throw new BankError(lt(`${f.fileName} 不是图片`, `${f.fileName} is not an image`), 415);
         pages.push(await preparePhoto(f.data, i + 1));
       }
-      ({ questions, notes, ocrAssets } = await readScans(owner, bankId, pages, notes, hint));
+      ({ questions, notes, ocrAssets } = await readScans(owner, bankId, pages, notes));
       ocr = true;
       if (args.useModel !== false && questions.length) questions = await refineWithModel(questions);
       break;
@@ -224,9 +221,8 @@ export async function parseImport(args: {
   }
 
   const file = clampStr(fileName, 300);
-  // The teacher's note goes with every question (a value already in the file wins).
   const working: WorkingDraft[] = questions.map((q) => ({
-    fields: { ...q.fields, source: { ...q.fields.source, file }, ...(hint && !q.fields.template_hint ? { template_hint: hint } : {}) },
+    fields: { ...q.fields, source: { ...q.fields.source, file } },
     raw: q.raw,
     issues: q.issues,
   }));
@@ -244,7 +240,6 @@ export async function parseImport(args: {
     assets: [...originals, ...ocrAssets],
     ...(notes.length ? { notes } : {}),
     ...(ocr ? { ocr: true } : {}),
-    ...(hint ? { hint } : {}),
     report: reportOf(drafts),
   });
 }
@@ -261,8 +256,8 @@ function requireVision(allowModel: boolean, kind: "pdf" | "image") {
   if (!process.env.LLM_API_KEY) throw new BankError(lt(`${what}识别图片需要配置模型（LLM_API_KEY）。`, `${what}reading images needs a configured model (LLM_API_KEY).`), 422);
 }
 
-async function readScans(owner: string, bankId: string, pages: PageImage[], notes: string[], hint?: string): Promise<{ questions: ParsedQuestion[]; notes: string[]; ocrAssets: string[] }> {
-  const res = await ocrPages(owner, bankId, pages, { hint });
+async function readScans(owner: string, bankId: string, pages: PageImage[], notes: string[]): Promise<{ questions: ParsedQuestion[]; notes: string[]; ocrAssets: string[] }> {
+  const res = await ocrPages(owner, bankId, pages);
   return { questions: res.questions, notes: [...notes, ...res.notes], ocrAssets: res.assets };
 }
 

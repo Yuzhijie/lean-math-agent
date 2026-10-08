@@ -263,7 +263,7 @@ function hasTableFigure(spec: unknown): boolean {
   return s?.kind === "table" || (s?.kind === "cards" && !!s.cards?.some((c) => c.figure?.kind === "table"));
 }
 
-/** The teachers' notes on the template questions (template_hint), distinct, at most 3. */
+/** Notes on the template questions as templates (template_hint: the vision model's analysis, possibly edited), distinct, at most 3. */
 export function templateHints(items: Pick<Item, "template_hint">[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -279,7 +279,7 @@ export function templateHints(items: Pick<Item, "template_hint">[]): string[] {
 
 function hintsText(hints: string[]): string {
   return hints.length
-    ? `TEACHER'S NOTES on these template questions — follow them (they say what matters and what to keep or change); they never override the rules:\n${hints.map((h) => `- ${h.replace(/\s+/g, " ")}`).join("\n")}`
+    ? `TEMPLATE NOTES — how these template questions work (from analysing the original pages; the teacher may have edited them). Follow them for structure, figure/table role and number range; they never override the rules:\n${hints.map((h) => `- ${h.replace(/\s+/g, " ")}`).join("\n")}`
     : "";
 }
 

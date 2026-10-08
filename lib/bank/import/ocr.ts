@@ -10,6 +10,13 @@
  * out of the page and attached to their question, and every draft keeps
  * its page image so the reviewer can compare. Nothing read from an image
  * is trusted: every draft is marked for review.
+ *
+ * The prompt makes the model survey the page first (regions, reading
+ * order, decoration vs information), then transcribe, then analyse every
+ * question as a template: its task, what a new question of the same kind
+ * must keep, and exactly what each figure shows (clock times, values,
+ * cards in order). That analysis becomes the question's template_hint and
+ * the figure captions, which guide generation from these questions.
  */
 import { z } from "zod";
 import { chatJson } from "@/lib/llm/client";
@@ -25,13 +32,32 @@ export function maxOcrPages(): number {
   return Number.isInteger(n) && n > 0 ? n : 30;
 }
 
+const label = z.union([z.string(), z.number()]).nullish();
 const pageSchema = z.object({
+  /** The model's survey of the page before transcribing (regions, reading order, what is decoration). */
+  layout: z.string().nullish(),
   text: z.string().default(""),
   figures: z
     .array(
       z.object({
-        question: z.union([z.string(), z.number()]).nullish(),
+        question: label,
         box: z.array(z.coerce.number()).length(4),
+        /** clock, table, bar_chart, number_line, shape, picture, cards, … */
+        kind: z.string().nullish(),
+        /** Exactly what the figure shows (every label, number, time, value). */
+        shows: z.string().nullish(),
+      }),
+    )
+    .nullish(),
+  /** Each question analysed as a template for new questions. */
+  questions: z
+    .array(
+      z.object({
+        label,
+        /** What the student has to do. */
+        task: z.string().nullish(),
+        /** What a new question of the same kind must keep (structure, figure role, answer form, number range). */
+        template_note: z.string().nullish(),
       }),
     )
     .nullish(),
@@ -39,36 +65,43 @@ const pageSchema = z.object({
 });
 export type PageTranscription = z.infer<typeof pageSchema>;
 
-const SYSTEM = `You transcribe pages of a maths exam or worksheet from an image. You are a copy clerk, not a teacher.
-Rules:
-- Transcribe the printed text VERBATIM in reading order (two columns: the whole left column, then the right). Keep the page's language. Do not translate, solve, correct, summarise or add anything.
-- Start every question on a new line with its number exactly as printed, followed by ". " (e.g. "12. …"; keep "第3题" or "例1" as printed). Sub-parts like "(a)" stay inside their question.
+const SYSTEM = `You read pages of a maths exam or worksheet from an image, so that the questions can be stored exactly and later used as templates for new questions of the same kind.
+Work in three steps.
+
+STEP 1 — Survey the page before transcribing (write it in "layout", 1–3 sentences):
+- Find the regions: title and instructions, question blocks, figures (clocks, tables, charts, number lines, shapes, cards with pictures), answer boxes or lines, and pure decoration (illustrations, logos, banners, borders) that carries no maths information.
+- Work out the reading order (two columns: the whole left column, then the right; cards: left to right, top to bottom) and which instructions, figures and tables belong to which question.
+- A worksheet task without printed question numbers (e.g. a "challenge" with instructions, a set of cards and a final question) is ONE question: number it "1." (or continue from the previous number on the page).
+
+STEP 2 — Transcribe ("text"). You are a copy clerk, not a teacher:
+- Transcribe the printed text VERBATIM in reading order. Keep the page's language. Do not translate, solve, correct, summarise or add anything.
+- Start every question on a new line with its number exactly as printed, followed by ". " (e.g. "12. …"; keep "第3题" or "例1" as printed). Sub-parts like "(a)" stay inside their question. Instructions that introduce a question go inside that question, after its number.
 - Put each answer choice on its own line as "A. …", "B. …" in order.
 - Write mathematics in LaTeX between $ … $ (e.g. $\\frac{3}{4}$, $x^2$, $\\sqrt{2}$). Plain numbers and words stay plain.
 - Keep printed answer or solution lines ("Answer: …", "答案：…", an answer key) as text.
-- Leave out running headers and footers, page numbers, logos and copyright lines. Ignore handwriting (student answers, ticks, marks).
+- Leave out running headers and footers, page numbers, logos, brand names, copyright lines and decoration. Ignore handwriting (student answers, crossings-out, ticks, marks) — transcribe what is printed.
 - A table of words or numbers: transcribe it as a Markdown table inside its question, each row on its own line: a header row, a separator line like |---|---|, then the body rows. Keep every cell; leave an empty cell empty and write ? where the paper shows a box or blank to fill in.
-- Pictures, diagrams, graphs, number lines and shapes: do not describe them. List each one in "figures" with the number of the question it belongs to and its bounding box as fractions of the page width and height [x0, y0, x1, y1] (top-left, bottom-right; 0 to 1). Include the labels drawn in the figure inside the box.
-- Where text cannot be read, write [?] — never guess. Set "unreadable": true if the page as a whole cannot be read.
-Return JSON: {"text":"…","figures":[{"question":"12","box":[0.1,0.4,0.5,0.6]}],"unreadable":false}`;
+- Pictures, diagrams, graphs, number lines, clocks and shapes are not transcribed as text: list each one in "figures" (see below).
+- Where printed text cannot be read, write [?] — never guess. Set "unreadable": true if the page as a whole cannot be read.
 
-/** Ask the vision model to transcribe one page. */
-/** The teacher's note about the material, as context (it never overrides the copy-clerk rules). */
-export function hintBlock(hint?: string): string {
-  const h = hint?.trim().slice(0, 1000);
-  return h ? `\n\nThe teacher who uploaded these pages says (use it to understand the layout and which text belongs to which question; still transcribe verbatim and follow all rules):\n<<<${h}>>>` : "";
-}
+STEP 3 — Figures and templates:
+- "figures": one entry per figure that carries maths information, with the number of the question it belongs to, its bounding box as fractions of the page width and height [x0, y0, x1, y1] (top-left, bottom-right; 0 to 1, including the labels drawn in it), its "kind" (clock, digital_clock, table, bar_chart, pictograph, number_line, grid_shape, fraction, shape, groups, cards, picture, other) and "shows": exactly what it shows — every label, number and value, read carefully: on a clock the SHORT hand gives the hour and the LONG hand the minutes (e.g. "analogue clock showing 7:30"); read bars and points against the scale; count tally marks, objects and squares one by one. A set of picture cards is one figure of kind "cards" whose "shows" lists every card in reading order.
+- "questions": for every question on the page, its "label", the "task" (what the student has to do, one sentence) and a "template_note": 1–3 sentences on what a new question of the same kind must keep — the structure and layout, what information is in the figure or table rather than in the text, the answer form, the size and type of numbers used. Write task and template_note in the language of the page.
 
-export async function transcribePage(img: PageImage, hint?: string): Promise<PageTranscription> {
+Return JSON only:
+{"layout":"…","text":"…","figures":[{"question":"1","box":[0.1,0.4,0.5,0.6],"kind":"clock","shows":"analogue clock showing 2:00"}],"questions":[{"label":"1","task":"…","template_note":"…"}],"unreadable":false}`;
+
+/** Ask the vision model to read one page. */
+export async function transcribePage(img: PageImage): Promise<PageTranscription> {
   return chatJson({
     role: "vision",
     system: SYSTEM,
-    user: `Page ${img.page}. Transcribe it as JSON.${hintBlock(hint)}`,
+    user: `Page ${img.page}. Follow the three steps and return the JSON.`,
     images: [dataUrl(img)],
     schema: pageSchema,
     schemaName: "bank_import_ocr_page",
     temperature: 0,
-    maxTokens: 8000,
+    maxTokens: 10000,
     maxRetries: 1,
     keepLanguage: true,
     noCache: false,
@@ -94,7 +127,7 @@ export interface OcrResult {
  * Read page images into questions. Page images and figures are saved as
  * assets of the bank. Throws when no page could be read at all.
  */
-export async function ocrPages(owner: string, bankId: string, pages: PageImage[], opts: { concurrency?: number; hint?: string } = {}): Promise<OcrResult> {
+export async function ocrPages(owner: string, bankId: string, pages: PageImage[], opts: { concurrency?: number } = {}): Promise<OcrResult> {
   const notes: string[] = [];
   const assets: string[] = [];
   const results: Array<PageTranscription | null> = new Array(pages.length).fill(null);
@@ -104,7 +137,7 @@ export async function ocrPages(owner: string, bankId: string, pages: PageImage[]
     await Promise.all(
       pages.slice(k, k + limit).map(async (img, j) => {
         try {
-          results[k + j] = await transcribePage(img, opts.hint);
+          results[k + j] = await transcribePage(img);
         } catch (e) {
           lastError = (e as Error).message;
           notes.push(lt(`第 ${img.page} 页识别失败：${lastError}`.slice(0, 300), `Page ${img.page} could not be read: ${lastError}`.slice(0, 300)));
@@ -140,16 +173,24 @@ export async function ocrPages(owner: string, bankId: string, pages: PageImage[]
   const questions = splitQuestions(lines, { figureCheck: true });
 
   // Figures: cut out and attach to the question with the same number on that page.
-  const figureOf = new Map<string, Box[]>();
-  const looseFigures = new Map<number, Box[]>();
+  type Fig = { box: Box; kind?: string; shows?: string };
+  const figureOf = new Map<string, Fig[]>();
+  const looseFigures = new Map<number, Fig[]>();
+  // The model's analysis of each question as a template, by page and number.
+  const analysisOf = new Map<string, { task?: string; note?: string }>();
   results.forEach((r, i) => {
+    const page = pages[i].page;
     for (const f of r?.figures ?? []) {
       const box = normaliseBox({ x0: f.box[0], y0: f.box[1], x1: f.box[2], y1: f.box[3] });
       if (!box) continue;
-      const page = pages[i].page;
+      const fig: Fig = { box, kind: f.kind?.trim() || undefined, shows: f.shows?.trim() || undefined };
       const key = labelKey(f.question);
-      if (key) figureOf.set(`${page}|${key}`, [...(figureOf.get(`${page}|${key}`) ?? []), box]);
-      else looseFigures.set(page, [...(looseFigures.get(page) ?? []), box]);
+      if (key) figureOf.set(`${page}|${key}`, [...(figureOf.get(`${page}|${key}`) ?? []), fig]);
+      else looseFigures.set(page, [...(looseFigures.get(page) ?? []), fig]);
+    }
+    for (const q of r?.questions ?? []) {
+      const key = labelKey(q.label);
+      if (key && !analysisOf.has(key)) analysisOf.set(key, { task: q.task?.trim() || undefined, note: q.template_note?.trim() || undefined });
     }
   });
   const pageByNumber = new Map(pages.map((p) => [p.page, p]));
@@ -164,31 +205,42 @@ export async function ocrPages(owner: string, bankId: string, pages: PageImage[]
     const issues = [OCR_ISSUE(), ...q.issues];
     if (/\[\?\]/.test(q.raw)) issues.push(UNREADABLE_ISSUE());
     const images = [...q.fields.images];
-    let boxes: Array<{ page: number; box: Box }> = [];
+    let figs: Array<{ page: number } & Fig> = [];
     if (page && label && figureOf.has(`${page}|${label}`)) {
-      boxes = figureOf.get(`${page}|${label}`)!.map((box) => ({ page, box }));
+      figs = figureOf.get(`${page}|${label}`)!.map((f) => ({ page, ...f }));
       figureOf.delete(`${page}|${label}`);
     } else if (label) {
-      for (const [k, bs] of byLabelAnyPage(label)) {
-        boxes.push(...bs.map((box) => ({ page: Number(k.split("|")[0]), box })));
+      for (const [k, fs] of byLabelAnyPage(label)) {
+        figs.push(...fs.map((f) => ({ page: Number(k.split("|")[0]), ...f })));
         figureOf.delete(k);
       }
     }
     let cropFailed = false;
-    for (const { page: p, box } of boxes.slice(0, 6)) {
+    for (const { page: p, box, kind, shows } of figs.slice(0, 6)) {
       const img = pageByNumber.get(p);
       const cut = img ? await cropFigure(img, box) : null;
       if (cut) {
         const name = saveAsset(owner, bankId, cut.data, cut.ext);
         assets.push(name);
-        images.push({ asset: name, caption: lt(`第 ${p} 页的图`, `Figure from page ${p}`) });
+        // The caption says what the figure shows (as read by the model), so it is useful without the image.
+        const caption = shows ? `${kind ? `${kind}: ` : ""}${shows}` : lt(`第 ${p} 页的图`, `Figure from page ${p}`);
+        images.push({ asset: name, caption: caption.slice(0, 200) });
       } else cropFailed = true;
     }
+    // The model's understanding of the question as a template (task, what to keep, what each figure shows).
+    const analysis = label ? analysisOf.get(label) : undefined;
+    const figureLines = figs.filter((f) => f.shows).map((f) => lt(`图（${f.kind ?? "图形"}）：${f.shows}`, `Figure (${f.kind ?? "figure"}): ${f.shows}`));
+    const templateHint = [analysis?.task, analysis?.note, ...figureLines].filter(Boolean).join("\n").slice(0, 1000) || undefined;
     const keptIssues = images.length > q.fields.images.length ? issues.filter((x) => x !== FIGURE_ISSUE_ZH && x !== FIGURE_ISSUE_EN) : issues;
     if (cropFailed) keptIssues.push(lt("图形未能裁剪，请对照原图补充", "A figure could not be cut out; add it from the original page"));
     out.push({
       ...q,
-      fields: { ...q.fields, images, source: { ...q.fields.source, ...(page && pageAsset.has(page) ? { page_image: pageAsset.get(page) } : {}) } },
+      fields: {
+        ...q.fields,
+        images,
+        source: { ...q.fields.source, ...(page && pageAsset.has(page) ? { page_image: pageAsset.get(page) } : {}) },
+        ...(templateHint ? { template_hint: templateHint } : {}),
+      },
       issues: keptIssues,
     });
   }

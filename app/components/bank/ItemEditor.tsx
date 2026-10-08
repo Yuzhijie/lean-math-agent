@@ -253,10 +253,10 @@ export function ItemEditor({ bankId, item, detail, categories, onSaved, onDelete
         <KnowledgePointInput id="ie-kp" value={form.knowledge_points} onChange={(v) => set("knowledge_points", v)} vocab={detail.vocab} />
       </div>
       <div className="space-y-1.5">
-        <FieldLabel htmlFor="ie-hint">{tr("模板提示（用这道题作模板出题时交给模型）", "Notes for generation (given to the model when this question is a template)")}</FieldLabel>
+        <FieldLabel htmlFor="ie-hint">{tr("模板说明（用这道题作模板出题时交给模型；识别扫描件时由模型生成，可修改）", "Template notes (given to the model when this question is a template; written by the model when a scan is read, editable)")}</FieldLabel>
         <Textarea
           id="ie-hint"
-          rows={2}
+          rows={4}
           maxLength={1000}
           value={form.template_hint}
           onChange={(e) => set("template_hint", e.target.value)}

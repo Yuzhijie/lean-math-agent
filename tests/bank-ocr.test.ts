@@ -113,7 +113,7 @@ function fakeModel(opts: { failPages?: number[]; other?: (system: string) => unk
       const images = typeof last === "string" ? [] : last.filter((p) => p.type === "image_url").map((p) => p.image_url!.url);
       calls.push({ model: body.model, system: sys, user, images });
       const reply = (content: unknown) => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }), { status: 200 });
-      if (sys.startsWith("You transcribe")) {
+      if (sys.startsWith("You read pages")) {
         const n = Number(/Page (\d+)/.exec(user)?.[1]);
         if (opts.failPages?.includes(n)) return new Response("model does not support images", { status: 400 });
         return reply(PAGES[n] ?? { text: "" });
@@ -200,7 +200,7 @@ describe("importing photos of a paper", () => {
       expect(d[0].images).toHaveLength(0);
       expect(d[2].issues.join()).toMatch(/could not be read \(\[\?\]\)/);
       // The vision model got one image per call, and the prompt was not switched to English.
-      const vision = calls.filter((c) => c.system.startsWith("You transcribe"));
+      const vision = calls.filter((c) => c.system.startsWith("You read pages"));
       expect(vision).toHaveLength(2);
       expect(vision.every((c) => c.model === "vision-model" && c.images.length === 1 && c.images[0].startsWith("data:image/"))).toBe(true);
       expect(vision[0].user).not.toMatch(/Answer in English/);
@@ -217,7 +217,7 @@ describe("importing photos of a paper", () => {
     const batch = await parseImport({ owner: OWNER, bankId: newBank(), fileName: "p1.png", data: png(), moreImages: [{ fileName: "p2.png", data: png() }] });
     expect(batch.drafts).toHaveLength(3);
     expect(batch.drafts[0].grade).toBe("Year 3");
-    const other = calls.filter((c) => !c.system.startsWith("You transcribe"));
+    const other = calls.filter((c) => !c.system.startsWith("You read pages"));
     expect(other.length).toBeGreaterThanOrEqual(2);
     expect(other.every((c) => c.model === "text-model" && c.images.length === 0)).toBe(true);
   });

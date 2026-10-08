@@ -48,10 +48,10 @@ export const itemFieldsSchema = z.object({
   source: itemSourceSchema.optional(),
   language: z.enum(["zh", "en"]).optional(),
   /**
-   * The teacher's note about this question as a template (given when importing,
-   * editable later): what kind of question it is, what matters in its figure or
-   * table, what new questions should keep or change. Used when reading scans and
-   * when the question is a template for generation.
+   * This question as a template for new ones: its task, what a new question of the
+   * same kind must keep, and what each figure shows. Written by the vision model when
+   * a scan or photo is read (editable in review and on the question); used when the
+   * question is a template for generation.
    */
   template_hint: z.string().max(1000).optional(),
   /** Set when the model decided the classification (grade, knowledge points, difficulty, catalogue place). */
@@ -194,8 +194,6 @@ export const importBatchSchema = z.object({
   notes: z.array(z.string().max(500)).max(100).optional(),
   /** Scans and photos: the questions were read from page images by the model. */
   ocr: z.boolean().optional(),
-  /** The teacher's note given with the import (copied to every question as template_hint). */
-  hint: z.string().max(1000).optional(),
   report: z
     .object({ total: z.number(), ok: z.number(), needs_review: z.number(), duplicate: z.number(), error: z.number(), committed: z.number().optional() })
     .optional(),
