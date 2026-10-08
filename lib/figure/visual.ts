@@ -5,7 +5,8 @@
  * a bar chart with these values, a number line from 0 to 20 with a point
  * at 13, a pictograph, a table, shaded squares on a grid, a fraction
  * shape, groups of objects, a geometry construction (lib/figure/spec.ts),
- * or a layout of cards each holding one of these (like cut-out sequence
+ * 3D figures (a stack of unit cubes with its views, or a solid — see
+ * lib/figure/solid3d.ts), or a layout of cards each holding one of these (like cut-out sequence
  * cards on a worksheet). The program draws it, so the figure always shows
  * exactly the data in the spec, and `describeVisual` turns the same spec
  * into an exact text description for the independent re-solve.
@@ -22,6 +23,7 @@
 import { z } from "zod";
 import { buildFigure } from "./check";
 import { renderFigureSvg } from "./render";
+import { cubeStackSchema, describeCubeStack, describeSolid, drawCubeStack, drawSolid, solidSchema, type Pen } from "./solid3d";
 import { figureSpecSchema } from "./spec";
 
 // ── Style ───────────────────────────────────────────────────────────
@@ -158,7 +160,7 @@ const groupsSchema = z.object({
 });
 const geometrySchema = z.object({ kind: z.literal("geometry"), spec: figureSpecSchema });
 
-const leafSchemas = [clockSchema, numberLineSchema, barChartSchema, pictographSchema, tableSchema, gridShapeSchema, fractionSchema, groupsSchema, geometrySchema] as const;
+const leafSchemas = [clockSchema, numberLineSchema, barChartSchema, pictographSchema, tableSchema, gridShapeSchema, fractionSchema, groupsSchema, geometrySchema, cubeStackSchema, solidSchema] as const;
 export const visualLeafSchema = z.discriminatedUnion("kind", [...leafSchemas]);
 export type VisualLeaf = z.infer<typeof visualLeafSchema>;
 
@@ -186,7 +188,10 @@ const svgSchema = z.object({ kind: z.literal("svg"), svg: z.string().min(20).max
 export const visualSpecSchema = z.discriminatedUnion("kind", [...leafSchemas, cardsSchema, svgSchema]);
 export type VisualSpec = z.infer<typeof visualSpecSchema>;
 
-export const VISUAL_KINDS = ["clock", "number_line", "bar_chart", "pictograph", "table", "grid_shape", "fraction", "groups", "geometry", "cards", "svg"] as const;
+export const VISUAL_KINDS = ["clock", "number_line", "bar_chart", "pictograph", "table", "grid_shape", "fraction", "groups", "geometry", "cube_stack", "solid", "cards", "svg"] as const;
+
+/** Kinds that draw a 3D figure. */
+export const SOLID_KINDS = ["cube_stack", "solid"] as const;
 
 // ── Drawing helpers ─────────────────────────────────────────────────
 
@@ -574,7 +579,15 @@ function leaf(spec: VisualLeaf, t: Theme): Box & { verified?: boolean; issues?: 
       return groups(spec, t);
     case "geometry":
       return geometry(spec, t);
+    case "cube_stack":
+      return drawCubeStack(spec, pen(t));
+    case "solid":
+      return drawSolid(spec, pen(t));
   }
+}
+
+function pen(t: Theme): Pen {
+  return { ink: t.ink, fill: t.fill, paper: t.paper, sw: t.sw, text: (x, y, s, size, anchor) => text(t, x, y, s, size, anchor) };
 }
 
 function frameRect(t: Theme, x: number, y: number, w: number, h: number): string {
@@ -707,6 +720,10 @@ function describeLeaf(s: VisualLeaf): string {
       const claims = sp.claims.map((c) => JSON.stringify(c)).join("; ");
       return `a geometry figure${sp.title ? ` ("${sp.title}")` : ""} built from: ${cons}${claims ? `; conditions shown: ${claims}` : ""}${sp.draw.filter((d) => "label" in d && d.label).map((d) => `; label "${(d as { label?: string }).label}"`).join("")}`;
     }
+    case "cube_stack":
+      return describeCubeStack(s);
+    case "solid":
+      return describeSolid(s);
   }
 }
 
@@ -732,6 +749,8 @@ export const VISUAL_GUIDE = `FIGURES — when a question needs a figure, add "fi
 - {"kind":"fraction","shape":"bar"|"circle"|"rectangle","parts":int,"shaded":int,"label"?:s}
 - {"kind":"groups","groups":[{"count":int,"symbol":…,"label"?:s}],"array"?:bool,"caption"?:s}
 - {"kind":"geometry","spec":{"needed":true,"constructions":[…],"draw":[…],"claims":[…]}} — triangles, rectangles, squares, polygons, circles, angles, coordinates (constructions like {"op":"rectangle","ids":["A","B","C","D"],"width":6,"height":4}; label sides with draw {"type":"segment","a":"A","b":"B","label":"6 cm"})
+- {"kind":"cube_stack","heights":[[int 0–6,…],…] (number of cubes in each column seen from above: first row = BACK, last row = FRONT, left to right),"projection"?:"oblique"|"isometric","show_stack"?:bool (default true),"views"?:[{"view":"front"|"left"|"right"|"top","label"?:s,"blank"?:bool}],"caption"?:s} — unit cubes drawn in 3D; views are drawn from the same heights ("blank": an empty grid to draw that view in). Unless the question is about hidden cubes, put taller columns at the back so every cube can be seen. Label views in the question's language (e.g. "从正面看", "front view")
+- {"kind":"solid","shape":"cube"|"cuboid"|"triangular_prism"|"square_pyramid"|"triangular_pyramid"|"cylinder"|"cone"|"sphere"|"hemisphere","length"?:n,"width"?:n,"height"?:n,"radius"?:n (proportions only),"labels"?:{"length"?:s,"width"?:s,"height"?:s,"radius"?:s} (text written on the edges, e.g. "6 cm"),"hidden_edges"?:bool,"projection"?:"oblique"|"isometric","caption"?:s} — a 3D solid with hidden edges dashed; length = left–right, width = front–back, height = up
 - {"kind":"cards","columns":1-4,"cards":[{"label"?:s,"figure"?:<one of the kinds above>,"caption"?:s,"answer_box"?:bool}]} — a sheet of cards, e.g. sequence cards each with a clock and an activity, or picture cards to sort
 - {"kind":"svg","svg":"<svg …>…</svg>","description":"exact description of everything drawn"} — ONLY when no kind above fits; simple line drawing, viewBox about 400×300, no text that gives the answer away.
 Rules: the figure must show exactly the information the question needs (no more, no less, nothing that gives the answer away unless the template does the same); refer to it in the stem the way the examples do; prefer the same kind and layout of figure as the examples.`;

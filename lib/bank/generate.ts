@@ -30,7 +30,7 @@ import { StemIndex, TOO_CLOSE } from "./similarity";
 import { addItems, BankError, getBank, getCategory, getGeneration, getItem, listCategories, listItems, putGeneration } from "./store";
 import { QUESTION_TYPES, type Candidate, type Check, type Generation, type Item, type QuestionType, type TemplateProfile, type TemplateRef } from "./types";
 import { vocabFor } from "./vocab";
-import { buildVisual, DEFAULT_STYLE, VISUAL_GUIDE, visualSpecSchema, type FigureStyle } from "../figure/visual";
+import { buildVisual, DEFAULT_STYLE, SOLID_KINDS, VISUAL_GUIDE, visualSpecSchema, type FigureStyle } from "../figure/visual";
 import { loadSharp } from "./import/images";
 import { saveAsset } from "./store";
 import { hasTemplateImages, readTemplateVisuals, type TemplateVisuals } from "./template-visual";
@@ -246,6 +246,25 @@ interface FigurePlan {
   tables: boolean;
   /** Shape of the template's table, as a hint (columns, rows). */
   tableHint?: string;
+  /** The template questions show 3D figures: every new question must have one, of these kinds. */
+  solids: string[];
+}
+
+const SOLID_KIND_SET = new Set<string>(SOLID_KINDS);
+
+/** 3D figure kinds the template uses: from the vision model's reading, or the captions given to figures at import ("cube_stack: …"). */
+export function templateSolids(exemplars: Pick<Item, "images">[], visualKinds: string[]): string[] {
+  const kinds = new Set(visualKinds.filter((k) => SOLID_KIND_SET.has(k)));
+  const captioned = exemplars.map((e) => e.images.map((im) => /^\s*(cube_stack|solid)\s*:/i.exec(im.caption ?? "")?.[1]?.toLowerCase()).find(Boolean));
+  if (captioned.filter(Boolean).length * 2 >= exemplars.length && exemplars.length) for (const k of captioned) if (k) kinds.add(k);
+  return [...kinds];
+}
+
+/** Kinds of figure in a spec (cards included). */
+function figureKinds(spec: unknown): string[] {
+  const s = spec as { kind?: string; cards?: Array<{ figure?: { kind?: string } }> } | undefined;
+  if (!s?.kind) return [];
+  return s.kind === "cards" ? (s.cards ?? []).map((c) => c.figure?.kind ?? "").filter(Boolean) : [s.kind];
 }
 
 /** Whether most template questions have a table (in their text, or as a figure the vision model saw). */
@@ -296,6 +315,10 @@ function profileText(p: TemplateProfile, figures?: FigurePlan, hints: string[] =
       ? `Figure: these questions come with a figure${figures.kinds.length ? ` (kinds: ${figures.kinds.join(", ")})` : ""}${figures.layout ? `; layout: ${figures.layout}` : ""}. Give each new question a figure of the same kind and layout in "figure".${
           figures.tables
             ? ` TABLE: the example questions present their data in a table${figures.tableHint ? ` (e.g. ${figures.tableHint})` : ""}. Every new question MUST include a table of the same kind — new data, same layout — as "figure": {"kind":"table",…} (or a table on a card); do not write the table in the stem and do not replace it by a sentence.`
+            : ""
+        }${
+          figures.solids.length
+            ? ` 3D: the example questions show ${figures.solids.includes("cube_stack") ? "stacks of unit cubes" : "3D solids"}. Every new question MUST include a 3D figure of the same kind — ${figures.solids.map((k) => `{"kind":"${k}",…}`).join(" or ")} (or on cards) — with new numbers/arrangement but the same layout and the same views; never describe the solid in words instead of drawing it.`
             : ""
         }`
       : p.needs_figure
@@ -453,10 +476,13 @@ function noveltyChecks(drafts: Draft[], bankItems: Item[]): Check[] {
   });
 }
 
-function figureCheck(d: Draft, svgCheck: Check | undefined, needTable = false): Check {
+function figureCheck(d: Draft, svgCheck: Check | undefined, needTable = false, needSolid: string[] = []): Check {
   if (d.figureIssue && !d.figure) return check(false, d.figureIssue);
   if (needTable && !hasTableFigure(d.figure?.spec) && !tablesIn(d.stem).length) {
     return check(false, lt("模板题目带表格，此题没有表格", "the template questions have a table, this question does not"));
+  }
+  if (needSolid.length && !figureKinds(d.figure?.spec).some((k) => SOLID_KIND_SET.has(k))) {
+    return check(false, lt("模板题目带立体图形，此题没有立体图形", "the template questions have a 3D figure, this question does not"));
   }
   if (!d.figure) {
     return usesFigure({ stem: d.stem })
@@ -530,13 +556,15 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
   let visuals: TemplateVisuals | undefined;
   if (hasTemplateImages(exemplars)) visuals = await readTemplateVisuals(owner, bankId, exemplars, hints);
   const tables = templateTables(exemplars, visuals?.kinds ?? []);
+  const solids = templateSolids(exemplars, visuals?.kinds ?? []);
   const figures: FigurePlan = {
-    on: !!visuals?.descriptions.size || tables.required,
+    on: !!visuals?.descriptions.size || tables.required || solids.length > 0,
     style: visuals?.style ?? DEFAULT_STYLE,
-    kinds: [...new Set([...(visuals?.kinds ?? []), ...(tables.required ? ["table"] : [])])],
+    kinds: [...new Set([...(visuals?.kinds ?? []), ...(tables.required ? ["table"] : []), ...solids])],
     layout: visuals?.layout,
     tables: tables.required,
     tableHint: tables.hint,
+    solids,
   };
   const figureNote = visuals?.note ? lt(`未能读取模板图形（${visuals.note}），新题按文字出`, `the template's figures could not be read (${visuals.note}); questions were written from the text`) : undefined;
   const note = [templateNote, figureNote].filter(Boolean).join(lt("；", "; ")) || undefined;
@@ -603,7 +631,7 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
         : !fitScore
           ? check(true, lt("评审没有给出这道题的分数", "the review gave no score for this question"), true)
           : check(fitScore.score >= JUDGE_PASS, `${lt("匹配度", "fit")} ${fitScore.score}/5${fitScore.reason ? ` — ${fitScore.reason}` : ""}`);
-    const figure = figures.on || d.figure || d.figureIssue ? figureCheck(d, svgChecks.get(i), figures.tables) : undefined;
+    const figure = figures.on || d.figure || d.figureIssue ? figureCheck(d, svgChecks.get(i), figures.tables, figures.solids) : undefined;
     const checks = {
       format: formatCheck(d, profile),
       answer: answerCheck(d, answers.get(n), resolved.status === "rejected" ? errText(resolved.reason) : undefined),

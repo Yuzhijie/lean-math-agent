@@ -134,6 +134,11 @@ and marked as model-drawn. Illustrations, logos and brand names from the templat
 Tables are kept too: a table in a scanned question is stored as a table and shown as one, and when
 the template questions have tables, every generated question gets a table of the same layout (new
 data, cells to fill in shown as boxes); a question without one fails the figure check.
+3D figures work the same way: stacks of small cubes (观察物体, counting cubes) are drawn in 3D from the
+number of cubes in each column, with their front / left / right / top views or empty grids to draw a
+view in, and solids (cube, cuboid, prisms, pyramids, cylinder, cone, sphere, hemisphere) are drawn with
+hidden edges dashed and the given lengths on their edges. When the template questions have 3D figures,
+every generated question must have one; a question without one fails the figure check.
 When reading scans, the model first surveys each page (regions, reading order, what is decoration), then
 transcribes it (reading clocks, scales and tallies carefully), then analyses every question as a
 template: what the student has to do, what a new question of the same kind must keep, and exactly what
