@@ -7,7 +7,7 @@
  * "Add to bank" work from the same card.
  */
 import type { BankProblemMeta, DifficultyLevel, GeneratedProblem, GradeLevel } from "../types";
-import { generateFromTemplate } from "./generate";
+import { answerLetters, generateFromTemplate } from "./generate";
 import { LETTERS } from "./profile";
 import type { TemplateSelection } from "./select";
 import type { Candidate } from "./types";
@@ -38,8 +38,10 @@ function statementOf(c: Pick<Candidate, "stem" | "options">): string {
 function answerOf(c: Candidate): string {
   let a = c.answer;
   if (c.type === "multiple_choice" && c.options?.length) {
-    const i = LETTERS.indexOf(c.answer.trim().toUpperCase().charAt(0));
-    if (i >= 0 && c.options[i] !== undefined) a = `${LETTERS[i]}. ${c.options[i]}`;
+    // One letter, or several for "select all" questions ("A, D").
+    const letters = answerLetters(c.answer, c.options.length) ?? [];
+    const named = letters.map((l) => ({ l, o: c.options![LETTERS.indexOf(l)] })).filter((x) => x.o !== undefined);
+    if (named.length) a = named.map((x) => `${x.l}. ${x.o}`).join("\n");
   }
   return c.solution?.trim() ? `${a}\n\n${c.solution.trim()}` : a;
 }

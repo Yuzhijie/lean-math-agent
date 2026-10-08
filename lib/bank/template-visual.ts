@@ -25,6 +25,8 @@ export interface TemplateVisuals {
   descriptions: Map<string, string>;
   /** Kinds of figure the template uses (e.g. clock, cards, bar_chart). */
   kinds: string[];
+  /** The kind of each described example's figure, in order. */
+  itemKinds: string[];
   /** How figures are laid out with the question (one line). */
   layout?: string;
   /** Why the figures could not be read (generation then works from the text). */
@@ -60,7 +62,7 @@ export function hasTemplateImages(items: Item[]): boolean {
 
 /** Read the template's figures and style. Never throws: on failure the note says why. */
 export async function readTemplateVisuals(owner: string, bankId: string, items: Item[], hints: string[] = []): Promise<TemplateVisuals> {
-  const empty: TemplateVisuals = { style: DEFAULT_STYLE, descriptions: new Map(), kinds: [] };
+  const empty: TemplateVisuals = { style: DEFAULT_STYLE, descriptions: new Map(), kinds: [], itemKinds: [] };
   const withImages = items.filter((it) => imageAssets(it).length).slice(0, MAX_TEMPLATES);
   if (!withImages.length) return empty;
   const images: string[] = [];
@@ -98,12 +100,14 @@ export async function readTemplateVisuals(owner: string, bankId: string, items: 
     const style = figureStyleSchema.safeParse(res.style ?? {});
     const descriptions = new Map<string, string>();
     const kinds = new Set<string>();
+    const itemKinds: string[] = [];
     for (const r of res.items) {
+      if ((VISUAL_KINDS as readonly string[]).includes(r.kind)) itemKinds.push(r.kind);
       const it = withImages[Math.round(r.n) - 1];
       if (it && r.description.trim()) descriptions.set(it.id, r.description.trim().slice(0, 1500));
       if ((VISUAL_KINDS as readonly string[]).includes(r.kind)) kinds.add(r.kind);
     }
-    return { style: style.success ? style.data : DEFAULT_STYLE, descriptions, kinds: [...kinds], layout: res.layout?.trim().slice(0, 300) };
+    return { style: style.success ? style.data : DEFAULT_STYLE, descriptions, kinds: [...kinds], itemKinds, layout: res.layout?.trim().slice(0, 300) };
   } catch (e) {
     return { ...empty, note: `the vision model could not read the figures: ${(e as Error).message}`.slice(0, 240) };
   }

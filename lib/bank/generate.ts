@@ -145,6 +145,36 @@ function answerLetter(answer: string, optionCount: number): string | null {
   return LETTERS.indexOf(letter) < optionCount ? letter : null;
 }
 
+/** "Select all …" questions: several options can be correct; the answer is a set of letters ("A, D"). */
+const SELECT_ALL = /\b(?:select|choose|tick|circle|colou?r|mark|pick) all\b|\ball (?:of )?the (?:items|options|answers|ones|cards|shapes|numbers) (?:that|which)\b|选出所有|全部选出|所有(?:正确|符合)|多选|哪几(?:个|项|种|样)/i;
+
+export function isSelectAll(stem: string): boolean {
+  return SELECT_ALL.test(stem);
+}
+
+/** All option letters an answer names ("A, D", "A and D", "A、D", "AD"), sorted; null if it is not a list of letters. */
+export function answerLetters(answer: string, optionCount: number): string[] | null {
+  const s = answer
+    .normalize("NFKC")
+    .trim()
+    .replace(/^(?:答案|答|选|answers?|options?)\s*[:：]?\s*/i, "")
+    .replace(/\b(?:and|or)\b|和|与|及/gi, ",")
+    .replace(/[()（）.]/g, " ")
+    .trim();
+  if (!/^[A-Ja-j](?:[\s,，、;；&/+]*[A-Ja-j])*$/.test(s)) return null;
+  const letters = [...new Set(s.toUpperCase().match(/[A-J]/g) ?? [])].sort();
+  return letters.length && letters.every((l) => LETTERS.indexOf(l) < optionCount) ? letters : null;
+}
+
+/** Letters an answer names: letters, or option texts (one or several, separated by commas / "and"). */
+function resolveLetters(answer: string, options: string[]): string[] | null {
+  const direct = answerLetters(answer, options.length);
+  if (direct) return direct;
+  const parts = answer.split(/\s*(?:,|，|、|;|；|\band\b|和|与)\s*/i).filter(Boolean);
+  const letters = parts.map((p) => resolveLetter(p, options));
+  return letters.length && letters.every(Boolean) ? [...new Set(letters as string[])].sort() : null;
+}
+
 /** Letter of the option an answer names: its letter, or an option text it equals. */
 function resolveLetter(answer: string, options: string[]): string | null {
   const l = answerLetter(answer, options.length);
@@ -188,6 +218,7 @@ Match the profile exactly: same question type, same skill and knowledge points, 
 The example questions show the type only — do NOT copy them. Every question you write needs a new context, new numbers and new wording, while testing the same skill at the same difficulty. The questions must also differ from each other.
 Rules:
 - Multiple choice: exactly the required number of options, all different, exactly one correct; "options" holds the option texts without letters; "answer" is only the letter of the correct option (A, B, C, …). Wrong options should be plausible (typical mistakes).
+- "Select all" questions (the examples ask to select / tick all that apply): "answer" lists every correct letter, e.g. "A, D". That set must be the ONLY one that works: check every other combination of the options (e.g. other items that add up to the same total) and change the numbers until exactly one set fits.
 - Numeric: "answer" is a single number, with a unit if the question needs one (e.g. "12 cm"); fractions as a/b.
 - Use $...$ for inline LaTeX math.
 - Each question is self-contained and well-posed, with exactly one correct answer; check the answer by solving it yourself in "solution".
@@ -205,6 +236,7 @@ Return JSON only: {"ok": true|false, "problems": "…"}`;
 
 const RESOLVE_SYSTEM = `You solve math questions independently and carefully. For each question, work it out and give only the final answer.
 - Multiple choice: the letter of the correct option (A, B, C, …).
+- "Select all" questions: every correct letter, e.g. "A, D". If more than one different set of options fits, answer "unsolvable".
 - Numeric: the number, with a unit if the question asks for one.
 - If a question is ambiguous, has no correct option or cannot be solved, answer "unsolvable".
 Return JSON only: {"answers": [{"n": number, "answer": string}]} with one entry per question number.`;
@@ -267,10 +299,11 @@ function figureKinds(spec: unknown): string[] {
   return s.kind === "cards" ? (s.cards ?? []).map((c) => c.figure?.kind ?? "").filter(Boolean) : [s.kind];
 }
 
-/** Whether most template questions have a table (in their text, or as a figure the vision model saw). */
-function templateTables(exemplars: Item[], visualKinds: string[]): { required: boolean; hint?: string } {
+/** Whether most template questions have a table (in their text, or as the figure the vision model saw). */
+export function templateTables(exemplars: Pick<Item, "stem">[], itemKinds: string[]): { required: boolean; hint?: string } {
   const withTable = exemplars.map((e) => tablesIn(e.stem)[0]).filter((t): t is ParsedTable => !!t);
-  const required = withTable.length > 0 ? withTable.length * 2 >= exemplars.length : visualKinds.includes("table");
+  // From the figures: only when most of them are tables (a card sheet with prices is not a table).
+  const required = withTable.length > 0 ? withTable.length * 2 >= exemplars.length : itemKinds.length > 0 && itemKinds.filter((k) => k === "table").length * 2 >= itemKinds.length;
   const t = withTable[0];
   const hint = t ? `${t.headers.length} columns (${t.headers.map((h) => `"${h}"`).join(", ")}), ${t.rows.length} rows` : undefined;
   return { required, hint };
@@ -312,7 +345,7 @@ function profileText(p: TemplateProfile, figures?: FigurePlan, hints: string[] =
     p.stem_structure ? `Stem structure: ${p.stem_structure}` : "",
     p.knowledge_points.length ? `Knowledge points: ${p.knowledge_points.join("; ")}` : "",
     figures?.on
-      ? `Figure: these questions come with a figure${figures.kinds.length ? ` (kinds: ${figures.kinds.join(", ")})` : ""}${figures.layout ? `; layout: ${figures.layout}` : ""}. Give each new question a figure of the same kind and layout in "figure".${
+      ? `Figure: these questions come with a figure${figures.kinds.length ? ` (kinds: ${figures.kinds.join(", ")})` : ""}${figures.layout ? `; layout: ${figures.layout}` : ""}. Give each new question a figure of the same kind and layout in "figure"${figures.kinds.length && !figures.tables && !figures.kinds.includes("table") ? ` — keep the examples' kind (${figures.kinds.join(", ")}); do not turn it into a table or a sentence` : ""}.${
           figures.tables
             ? ` TABLE: the example questions present their data in a table${figures.tableHint ? ` (e.g. ${figures.tableHint})` : ""}. Every new question MUST include a table of the same kind — new data, same layout — as "figure": {"kind":"table",…} (or a table on a card); do not write the table in the stem and do not replace it by a sentence.`
             : ""
@@ -373,7 +406,10 @@ function toDraft(q: z.infer<typeof generatedSchema>["questions"][number], p: Tem
   const type = toType(q.type ?? undefined, p.type);
   const options = q.options?.length ? q.options.map((o) => o.replace(LETTER_PREFIX, "").trim()) : undefined;
   let answer = q.answer.trim();
-  if (type === "multiple_choice" && options) answer = answerLetter(answer, 26) ?? answer;
+  if (type === "multiple_choice" && options) {
+    const many = isSelectAll(q.stem) ? resolveLetters(answer, options) : null;
+    answer = many ? many.join(", ") : (answerLetter(answer, 26) ?? answer);
+  }
   const d = typeof q.difficulty === "number" && Number.isFinite(q.difficulty) ? Math.min(5, Math.max(1, Math.round(q.difficulty))) : undefined;
   const kps = (q.knowledge_points ?? []).map((k) => k.trim()).filter(Boolean);
   // A table written into the stem becomes a drawn table (when the question has no other figure).
@@ -462,8 +498,10 @@ export function formatCheck(c: Draft, p: TemplateProfile): Check {
     const norm = opts.map((o) => o.normalize("NFKC").replace(/\s+/g, "").toLowerCase());
     if (opts.some((o) => !o.trim())) issues.push(lt("有空选项", "an option is empty"));
     else if (new Set(norm).size !== norm.length) issues.push(lt("选项有重复", "options are not distinct"));
-    if (c.answer.trim() && !/^[A-J]$/.test(c.answer.trim())) issues.push(lt(`答案“${c.answer}”不是选项字母`, `answer "${c.answer}" is not an option letter`));
-    else if (c.answer.trim() && LETTERS.indexOf(c.answer.trim()) >= opts.length) issues.push(lt(`答案 ${c.answer} 超出选项范围`, `answer ${c.answer} is not one of the options`));
+    const multi = isSelectAll(c.stem);
+    const letters = c.answer.trim() ? (multi ? answerLetters(c.answer, 10) : /^[A-J]$/.test(c.answer.trim()) ? [c.answer.trim()] : null) : [];
+    if (c.answer.trim() && !letters) issues.push(multi ? lt(`答案“${c.answer}”不是选项字母（可多个，如 A, D）`, `answer "${c.answer}" is not a list of option letters (e.g. A, D)`) : lt(`答案“${c.answer}”不是选项字母`, `answer "${c.answer}" is not an option letter`));
+    else if (letters?.some((l) => LETTERS.indexOf(l) >= opts.length)) issues.push(lt(`答案 ${c.answer} 超出选项范围`, `answer ${c.answer} is not one of the options`));
   } else if (c.type === "numeric") {
     if (c.answer.trim() && parseNumber(c.answer) === null) issues.push(lt(`答案“${c.answer}”不是一个数`, `answer "${c.answer}" is not a number`));
   }
@@ -474,6 +512,12 @@ export function formatCheck(c: Draft, p: TemplateProfile): Check {
 /** Compare the proposed answer with the independent one (null → cannot compare). */
 function compareAnswers(c: Draft, independent: string): { same: boolean; comparable: boolean } {
   if (/^\s*unsolvable\s*$/i.test(independent)) return { same: false, comparable: true };
+  if (c.type === "multiple_choice" && isSelectAll(c.stem)) {
+    const mine = answerLetters(c.answer, c.options?.length ?? 0);
+    const theirs = resolveLetters(independent, c.options ?? []);
+    if (!mine || !theirs) return { same: false, comparable: !!mine };
+    return { same: mine.join(",") === theirs.join(","), comparable: true };
+  }
   if (c.type === "multiple_choice") {
     const mine = answerLetter(c.answer, c.options?.length ?? 0);
     const theirs = resolveLetter(independent, c.options ?? []);
@@ -501,8 +545,70 @@ function arithmeticCheck(c: Draft): { mismatch: boolean; detail: string } | null
   return { mismatch: false, detail: lt(`算式核对通过（${r.expression} = ${r.computed}）`, `arithmetic verified (${r.expression} = ${r.computed})`) };
 }
 
+/** Money in cents ("$1.50", "50c", "2元", "¥3.5", "1.20"), or null. */
+function money(text: string): number | null {
+  const t = text.normalize("NFKC");
+  let m = /(?:\$|¥|￥|A\$)\s*(\d+(?:\.\d{1,2})?)/.exec(t) ?? /(\d+(?:\.\d{1,2})?)\s*(?:元|dollars?)/.exec(t);
+  if (m) return Math.round(parseFloat(m[1]) * 100);
+  m = /(\d+)\s*(?:c|cents?|¢|分)\b/.exec(t) ?? /(\d+)\s*(?:c|cents?|¢|分)/.exec(t);
+  if (m) return parseInt(m[1], 10);
+  m = /(\d+)\s*角/.exec(t);
+  return m ? parseInt(m[1], 10) * 10 : null;
+}
+
+const fmtMoney = (cents: number) => `$${(cents / 100).toFixed(2)}`;
+
+/** Texts that pair a name with a price: figure cards and table rows, and lines of the stem. */
+function pricedTexts(c: Draft): string[] {
+  const out: string[] = [];
+  const spec = c.figure?.spec as { kind?: string; rows?: unknown[][]; cards?: Array<{ label?: string; caption?: string }> } | undefined;
+  if (spec?.kind === "table") for (const r of spec.rows ?? []) out.push(r.map(String).join(" "));
+  if (spec?.kind === "cards") for (const k of spec.cards ?? []) out.push(`${k.label ?? ""} ${k.caption ?? ""}`);
+  for (const t of tablesIn(c.stem)) for (const r of t.rows) out.push(r.join(" "));
+  out.push(...withoutTables(c.stem).split(/\n|;|；/));
+  return out;
+}
+
+/**
+ * "Select all the items that cost exactly $5": the program finds every set of options whose prices make the
+ * total. Exactly one set must work and it must be the answer. Null when the question is not of this kind.
+ */
+export function selectionCheck(c: Pick<Draft, "stem" | "type" | "options" | "answer" | "figure">): { mismatch: boolean; detail: string } | null {
+  if (c.type !== "multiple_choice" || !c.options?.length || c.options.length > 10 || !isSelectAll(c.stem)) return null;
+  const totalM = /(?:exactly|total(?:ling|led)?|spent|spends|paid|pays|costs?|altogether|一共|共|总共|正好|恰好|刚好)[^\n]{0,30}?((?:\$|¥|￥)\s*\d+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?\s*(?:元|c\b|cents?)|\d+\s*角)/i.exec(withoutTables(c.stem).normalize("NFKC"));
+  const total = totalM ? money(totalM[1]) : null;
+  if (total === null) return null;
+  const norm = (s: string) => s.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  const texts = pricedTexts(c as Draft).map((t) => ({ t: norm(t.replace(/(?:\$|¥|￥)\s*\d+(?:\.\d+)?|\d+(?:\.\d+)?\s*(?:元|角|c\b|cents?)/gi, " ")), price: money(t) })).filter((x) => x.price !== null && x.t);
+  const prices = c.options.map((o) => {
+    const own = money(o);
+    if (own !== null) return own;
+    const name = norm(o);
+    const hit = texts.find((x) => x.t === name) ?? texts.find((x) => name && (x.t.includes(name) || name.includes(x.t)));
+    return hit ? hit.price : null;
+  });
+  if (prices.some((p) => p === null)) return null;
+  const sets: string[][] = [];
+  const n = c.options.length;
+  for (let mask = 1; mask < 1 << n; mask++) {
+    let sum = 0;
+    const letters: string[] = [];
+    for (let i = 0; i < n; i++) if (mask & (1 << i)) (sum += prices[i]!, letters.push(LETTERS[i]));
+    if (sum === total) sets.push(letters);
+  }
+  const show = (l: string[]) => l.join(" + ");
+  const priceList = c.options.map((o, i) => `${LETTERS[i]} ${fmtMoney(prices[i]!)}`).join(lt("，", ", "));
+  if (!sets.length) return { mismatch: true, detail: lt(`没有一组选项正好是 ${fmtMoney(total)}（${priceList}）`, `no set of options makes exactly ${fmtMoney(total)} (${priceList})`) };
+  if (sets.length > 1) return { mismatch: true, detail: lt(`有 ${sets.length} 组选项都是 ${fmtMoney(total)}：${sets.map(show).join("；")}，答案不唯一`, `${sets.length} sets of options make ${fmtMoney(total)}: ${sets.map(show).join("; ")} — the answer is not unique`) };
+  const mine = answerLetters(c.answer, n);
+  if (!mine || mine.join(",") !== sets[0].join(",")) return { mismatch: true, detail: lt(`只有 ${show(sets[0])} 正好是 ${fmtMoney(total)}，与答案 ${c.answer} 不符`, `only ${show(sets[0])} makes ${fmtMoney(total)}, not the answer ${c.answer}`) };
+  return { mismatch: false, detail: lt(`程序核对：只有 ${show(sets[0])} 正好是 ${fmtMoney(total)}`, `checked by the program: only ${show(sets[0])} makes ${fmtMoney(total)}`) };
+}
+
 function answerCheck(c: Draft, independent: string | undefined, resolveError: string | undefined): Check {
-  const arith = arithmeticCheck(c);
+  const sel = selectionCheck(c);
+  if (sel?.mismatch) return check(false, sel.detail);
+  const arith = sel ?? arithmeticCheck(c);
   if (arith?.mismatch) return check(false, arith.detail);
   const extra = arith ? ` ${arith.detail}` : "";
   if (c.type !== "multiple_choice" && c.type !== "numeric") {
@@ -611,7 +717,7 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
   // 0. Template figures (scans / photos): the vision model reads what they show and their style.
   let visuals: TemplateVisuals | undefined;
   if (hasTemplateImages(exemplars)) visuals = await readTemplateVisuals(owner, bankId, exemplars, hints);
-  const tables = templateTables(exemplars, visuals?.kinds ?? []);
+  const tables = templateTables(exemplars, visuals?.itemKinds ?? []);
   const solids = templateSolids(exemplars, visuals?.kinds ?? []);
   const figures: FigurePlan = {
     on: !!visuals?.descriptions.size || tables.required || solids.length > 0,
@@ -707,7 +813,8 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
   // 4. Passed first (at most `count`), then the failed ones so the UI can show why.
   const passed = candidates.filter((c) => c.passed).slice(0, count);
   const failed = candidates.filter((c) => !c.passed);
-  return putGeneration(owner, bankId, { template, template_label: clip(label, 200), mode: "same_type", requested: count, note, matched, candidates: [...passed, ...failed] });
+  const figure_plan = figures.on || visuals ? { kinds: (visuals?.itemKinds.length ? visuals.itemKinds : figures.kinds).slice(0, 20), layout: figures.layout?.slice(0, 300), tables: figures.tables, solids: figures.solids, ...(visuals?.note ? { note: visuals.note.slice(0, 300) } : {}) } : undefined;
+  return putGeneration(owner, bankId, { template, template_label: clip(label, 200), mode: "same_type", requested: count, note, matched, ...(figure_plan ? { figure_plan } : {}), candidates: [...passed, ...failed] });
 }
 
 // ── Adoption ────────────────────────────────────────────────────────

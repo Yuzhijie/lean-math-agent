@@ -263,6 +263,10 @@ export const generationSchema = z.object({
   note: z.string().max(500).optional(),
   /** Number of bank questions that served as the template class. */
   matched: z.number().int().optional(),
+  /** What the template's figures were read as (for diagnosis): kinds per example, layout, required table / 3D. */
+  figure_plan: z
+    .object({ kinds: z.array(z.string()).max(20), layout: z.string().max(300).optional(), tables: z.boolean(), solids: z.array(z.string()).max(4), note: z.string().max(300).optional() })
+    .optional(),
   candidates: z.array(candidateSchema),
   created_at: ts,
 });

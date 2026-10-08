@@ -140,7 +140,10 @@ view in, and solids (cube, cuboid, prisms, pyramids, cylinder, cone, sphere, hem
 hidden edges dashed and the given lengths on their edges. Block figures can be drawn as plain blocks
 (like a building) with a half-cylinder, roof, pyramid, cylinder, cone or dome on top, and "here are the
 plans — which 3D drawing is right?" questions get the plans and four 3D options, all drawn from data.
-A figure the model writes wrongly is sent back to it once, with the error, before the checks. When the template questions have 3D figures,
+A figure the model writes wrongly is sent back to it once, with the error, before the checks.
+"Select all" questions keep their whole answer (e.g. A, D). When such a question gives a total
+("she spent exactly $5"), the program tries every combination of the options' prices: exactly one
+combination must make the total, and it must be the answer. When the template questions have 3D figures,
 every generated question must have one; a question without one fails the figure check.
 When reading scans, the model first surveys each page (regions, reading order, what is decoration), then
 transcribes it (reading clocks, scales and tallies carefully), then analyses every question as a
