@@ -36,6 +36,7 @@ import { saveAsset } from "./store";
 import { hasTemplateImages, readTemplateVisuals, type TemplateVisuals } from "./template-visual";
 import type { CandidateFigure } from "./types";
 import { tablesIn, withoutTables, type ParsedTable } from "../markdown-table";
+import { allStarAngles, type StarSpec } from "../figure/star";
 
 const MAX_COUNT = 10;
 const EXEMPLARS = 5;
@@ -441,15 +442,19 @@ For each question return a corrected "figure" that follows the FIGURES guide exa
 Return JSON only: {"fixes":[{"n":1,"figure":{…}}]}`;
 
 /** One repair round for figures the program could not draw, or that a required kind is missing from. */
-async function repairFigures(drafts: Draft[], figures: FigurePlan, inLang: <T>(fn: () => Promise<T>) => Promise<T>): Promise<number> {
-  const needs = (d: Draft): string | undefined => {
+async function repairFigures(drafts: Draft[], figures: FigurePlan, inLang: <T>(fn: () => Promise<T>) => Promise<T>, svgChecks = new Map<number, Check>()): Promise<number[]> {
+  const needs = (d: Draft, i: number): string | undefined => {
     if (d.figureIssue && !d.figure) return d.figureIssue;
+    const svg = svgChecks.get(i);
+    if (svg && !svg.ok && !svg.skipped) return `${svg.detail} — draw it with a program kind from the guide if one fits (e.g. "star" for a star cut into pieces), not "svg"`;
+    const angles = d.figure?.source === "program" ? angleCheck(d) : null;
+    if (angles && !angles.ok) return `${angles.detail} — change the figure's numbers so that they match the question`;
     if (figures.solids.length && !figureKinds(d.figure?.spec).some((k) => SOLID_KIND_SET.has(k))) return `a 3D figure (${figures.solids.join(" or ")}) is required`;
     if (figures.tables && !hasTableFigure(d.figure?.spec) && !tablesIn(d.stem).length) return "a table figure is required";
     return undefined;
   };
-  const todo = drafts.map((d, i) => ({ d, i, why: needs(d) })).filter((x) => x.why);
-  if (!todo.length) return 0;
+  const todo = drafts.map((d, i) => ({ d, i, why: needs(d, i) })).filter((x) => x.why);
+  if (!todo.length) return [];
   let res: { fixes: Array<{ n: number; figure?: unknown }> };
   try {
     res = await inLang(() =>
@@ -466,9 +471,9 @@ async function repairFigures(drafts: Draft[], figures: FigurePlan, inLang: <T>(f
       }),
     );
   } catch {
-    return 0;
+    return [];
   }
-  let fixed = 0;
+  const fixed: number[] = [];
   for (const f of res.fixes) {
     const d = drafts[Math.round(f.n) - 1];
     if (!d || !todo.some((t) => t.d === d) || f.figure === undefined || f.figure === null) continue;
@@ -477,7 +482,7 @@ async function repairFigures(drafts: Draft[], figures: FigurePlan, inLang: <T>(f
     d.figure = drawn.figure;
     d.figureIssue = drawn.figureIssue;
     d.figureRaw = f.figure;
-    fixed++;
+    fixed.push(drafts.indexOf(d));
   }
   return fixed;
 }
@@ -638,6 +643,36 @@ function noveltyChecks(drafts: Draft[], bankItems: Item[]): Check[] {
   });
 }
 
+/** Angles a program-drawn figure has exactly (stars and their pieces), or [] when it has none to check. */
+function figureAngles(spec: unknown): number[] {
+  const s = spec as { kind?: string; cards?: Array<{ figure?: unknown }> } | undefined;
+  if (!s?.kind) return [];
+  if (s.kind === "star") return allStarAngles(s as StarSpec);
+  if (s.kind === "cards") return (s.cards ?? []).flatMap((c) => figureAngles(c.figure));
+  return [];
+}
+
+const DEGREES = /(\d+(?:\.\d+)?)\s*(?:°|\^\s*\{?\s*\\circ\s*\}?|\\degree|degrees?|度)/gi;
+
+/**
+ * The angles named in the question (and a degree answer) must be angles the figure really has:
+ * a star drawn with a 76° tip cannot go with "the smallest angle is 42°". Null when not applicable.
+ */
+export function angleCheck(d: Pick<Draft, "stem" | "answer" | "type" | "figure">): { ok: boolean; detail: string } | null {
+  const have = figureAngles(d.figure?.spec);
+  if (!have.length) return null;
+  const said = [...d.stem.matchAll(DEGREES)].map((m) => parseFloat(m[1]));
+  const ans = parseNumber(d.answer);
+  if (ans !== null && (DEGREES.test(d.answer) || /angle|degree|角|度/i.test(d.stem))) said.push(ans);
+  DEGREES.lastIndex = 0;
+  if (!said.length) return null;
+  const fmtA = (v: number) => `${Math.round(v * 100) / 100}°`;
+  const off = said.filter((v) => !have.some((h) => Math.abs(h - v) <= 0.5));
+  return off.length
+    ? { ok: false, detail: lt(`图中的角是 ${have.map(fmtA).join("、")}，题目或答案中的 ${off.map(fmtA).join("、")} 与图不符`, `the figure's angles are ${have.map(fmtA).join(", ")}; ${off.map(fmtA).join(", ")} in the question or answer does not match the figure`) }
+    : { ok: true, detail: lt(`题目中的角与图一致（${said.map(fmtA).join("、")}）`, `the angles in the question match the figure (${said.map(fmtA).join(", ")})`) };
+}
+
 function figureCheck(d: Draft, svgCheck: Check | undefined, needTable = false, needSolid: string[] = []): Check {
   if (d.figureIssue && !d.figure) return check(false, d.figureIssue);
   if (needTable && !hasTableFigure(d.figure?.spec) && !tablesIn(d.stem).length) {
@@ -652,6 +687,9 @@ function figureCheck(d: Draft, svgCheck: Check | undefined, needTable = false, n
       : check(true, lt("此题不需要图形", "this question has no figure"), true);
   }
   if (d.figure.source === "program") {
+    const angles = angleCheck(d);
+    if (angles && !angles.ok) return check(false, angles.detail);
+    if (angles && d.figure.verified && !d.figureIssue) return check(true, `${lt("图形由程序按题目数据绘制", "the figure was drawn by the program from the question's data")}; ${angles.detail}`);
     return d.figure.verified && !d.figureIssue
       ? check(true, lt("图形由程序按题目数据绘制", "the figure was drawn by the program from the question's data"))
       : check(false, lt(`图形条件不成立：${d.figureIssue ?? ""}`, `the figure's conditions do not hold: ${d.figureIssue ?? ""}`));
@@ -753,6 +791,13 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
   if (figures.on) await repairFigures(drafts, figures, inLang);
   // Model-drawn figures (no kind fitted): the vision model checks them against their description.
   const svgChecks = figures.on ? await checkModelFigures(drafts) : new Map<number, Check>();
+  // A model-drawn figure that does not match, or a figure whose angles contradict the question: one more repair round.
+  if (figures.on && drafts.some((d, i) => (svgChecks.get(i) && !svgChecks.get(i)!.ok && !svgChecks.get(i)!.skipped) || (d.figure?.source === "program" && angleCheck(d)?.ok === false))) {
+    const fixed = await repairFigures(drafts, figures, inLang, svgChecks);
+    for (const i of fixed) svgChecks.delete(i);
+    const again = await checkModelFigures(fixed.map((i) => drafts[i]));
+    for (const [k, c] of again) svgChecks.set(fixed[k], c);
+  }
 
   // 2. Independent re-solve and fit judge (in parallel; neither sees the other).
   const solvable = drafts.map((d, i) => ({ d, n: i + 1 })).filter(({ d }) => d.type === "multiple_choice" || d.type === "numeric");

@@ -141,6 +141,10 @@ hidden edges dashed and the given lengths on their edges. Block figures can be d
 (like a building) with a half-cylinder, roof, pyramid, cylinder, cone or dome on top, and "here are the
 plans — which 3D drawing is right?" questions get the plans and four 3D options, all drawn from data.
 A figure the model writes wrongly is sent back to it once, with the error, before the checks.
+Stars cut into identical pieces ("this star has 6 lines of symmetry… the smallest angle is 38°") are drawn
+by the program from the number of points and the tip angle, with one piece beside the star; the
+angles in the question must be angles the figure really has. A model-drawn figure that the vision
+model finds wrong is sent back once to be redrawn.
 "Select all" questions keep their whole answer (e.g. A, D). When such a question gives a total
 ("she spent exactly $5"), the program tries every combination of the options' prices: exactly one
 combination must make the total, and it must be the answer. When the template questions have 3D figures,
