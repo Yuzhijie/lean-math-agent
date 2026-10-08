@@ -318,7 +318,7 @@ function profileText(p: TemplateProfile, figures?: FigurePlan, hints: string[] =
             : ""
         }${
           figures.solids.length
-            ? ` 3D: the example questions show ${figures.solids.includes("cube_stack") ? "stacks of unit cubes" : "3D solids"}. Every new question MUST include a 3D figure of the same kind — ${figures.solids.map((k) => `{"kind":"${k}",…}`).join(" or ")} (or on cards) — with new numbers/arrangement but the same layout and the same views; never describe the solid in words instead of drawing it.`
+            ? ` 3D: the example questions show 3D figures. Every new question MUST include a program-drawn 3D figure with the same layout and the same views (new numbers/arrangement); never describe the solid in words instead of drawing it. Use {"kind":"cube_stack",…} for anything built from blocks — cube stacks, steps, buildings (plain blocks: "unit_lines": false; a curved, sloping or pointed piece on top: "caps"; front/side/top plans: "views") — and {"kind":"solid",…} for a single solid. When the examples give plans (views) and ask which 3D drawing matches, use "cards": the first card a cube_stack with "show_stack": false and the views, then one card per option (labels A, B, C, D), each a cube_stack drawing of a different solid; exactly one option matches the plans.`
             : ""
         }`
       : p.needs_figure
@@ -337,7 +337,14 @@ function toType(t: string | undefined, fallback: QuestionType): QuestionType {
   return (QUESTION_TYPES as readonly string[]).includes(v) ? (v as QuestionType) : fallback;
 }
 
-type Draft = Omit<Candidate, "checks" | "passed" | "adopted_item_id"> & { figureIssue?: string };
+type Draft = Omit<Candidate, "checks" | "passed" | "adopted_item_id"> & { figureIssue?: string; figureRaw?: unknown };
+
+/** The value at a Zod issue path, for error messages ("got …"). */
+function valueAt(raw: unknown, path: Array<string | number>): unknown {
+  let v: unknown = raw;
+  for (const k of path) v = v && typeof v === "object" ? (v as Record<string | number, unknown>)[k] : undefined;
+  return v;
+}
 
 /** Draw a question's figure spec; an unusable spec becomes `figureIssue`. */
 function drawFigure(raw: unknown, style: FigureStyle): { figure?: CandidateFigure; figureIssue?: string } {
@@ -345,7 +352,9 @@ function drawFigure(raw: unknown, style: FigureStyle): { figure?: CandidateFigur
   const parsed = visualSpecSchema.safeParse(raw);
   if (!parsed.success) {
     const i = parsed.error.issues[0];
-    return { figureIssue: lt(`图形描述无效：${i?.path.join(".")} ${i?.message}`, `invalid figure spec: ${i?.path.join(".")} ${i?.message}`) };
+    const got = i ? valueAt(raw, i.path) : undefined;
+    const gotText = got === undefined ? "" : ` (got ${clip(JSON.stringify(got), 80)})`;
+    return { figureIssue: lt(`图形描述无效：${i?.path.join(".")} ${i?.message}${gotText}`, `invalid figure spec: ${i?.path.join(".")} ${i?.message}${gotText}`) };
   }
   try {
     const v = buildVisual(parsed.data, style);
@@ -387,7 +396,54 @@ function toDraft(q: z.infer<typeof generatedSchema>["questions"][number], p: Tem
     difficulty: d ?? (p.difficulty_range ? Math.round((p.difficulty_range[0] + p.difficulty_range[1]) / 2) : undefined),
     knowledge_points: (kps.length ? kps : p.knowledge_points).slice(0, 20),
     ...drawFigure(figureSpec, style),
+    ...(figureSpec !== undefined && figureSpec !== null ? { figureRaw: figureSpec } : {}),
   };
+}
+
+const FIGURE_FIX_SYSTEM = `You fix the figure specs of generated maths questions. Each question below either has a figure spec the program could not use (the error is given) or is missing a figure that questions of this type must have.
+For each question return a corrected "figure" that follows the FIGURES guide exactly (only the kinds and fields listed there), shows exactly what the question and its answer need, and keeps the same intent as the original spec. Do not change the question.
+Return JSON only: {"fixes":[{"n":1,"figure":{…}}]}`;
+
+/** One repair round for figures the program could not draw, or that a required kind is missing from. */
+async function repairFigures(drafts: Draft[], figures: FigurePlan, inLang: <T>(fn: () => Promise<T>) => Promise<T>): Promise<number> {
+  const needs = (d: Draft): string | undefined => {
+    if (d.figureIssue && !d.figure) return d.figureIssue;
+    if (figures.solids.length && !figureKinds(d.figure?.spec).some((k) => SOLID_KIND_SET.has(k))) return `a 3D figure (${figures.solids.join(" or ")}) is required`;
+    if (figures.tables && !hasTableFigure(d.figure?.spec) && !tablesIn(d.stem).length) return "a table figure is required";
+    return undefined;
+  };
+  const todo = drafts.map((d, i) => ({ d, i, why: needs(d) })).filter((x) => x.why);
+  if (!todo.length) return 0;
+  let res: { fixes: Array<{ n: number; figure?: unknown }> };
+  try {
+    res = await inLang(() =>
+      chatJson({
+        system: `${FIGURE_FIX_SYSTEM}\n\n${VISUAL_GUIDE}`,
+        user: todo
+          .map(({ d, i, why }) => `${describeItem(d, i + 1, true)}\nProblem: ${why}${d.figureRaw !== undefined ? `\nSpec given: ${clip(JSON.stringify(d.figureRaw), 4000)}` : ""}`)
+          .join("\n\n"),
+        schema: z.object({ fixes: z.array(z.object({ n: z.coerce.number(), figure: z.unknown().optional() })).default([]) }),
+        schemaName: "FigureFixes",
+        temperature: 0,
+        noCache: true,
+        maxTokens: 8000,
+      }),
+    );
+  } catch {
+    return 0;
+  }
+  let fixed = 0;
+  for (const f of res.fixes) {
+    const d = drafts[Math.round(f.n) - 1];
+    if (!d || !todo.some((t) => t.d === d) || f.figure === undefined || f.figure === null) continue;
+    const drawn = drawFigure(f.figure, figures.style);
+    if (!drawn.figure) continue;
+    d.figure = drawn.figure;
+    d.figureIssue = drawn.figureIssue;
+    d.figureRaw = f.figure;
+    fixed++;
+  }
+  return fixed;
 }
 
 // ── Checks ──────────────────────────────────────────────────────────
@@ -587,6 +643,8 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
     throw new BankError(lt(`生成失败：${errText(e)}`, `generation failed: ${errText(e)}`), 502);
   }
   const drafts = generated.questions.slice(0, ask * 2).map((q) => toDraft(q, profile, figures.style));
+  // Figures the program could not draw (or a required kind left out) go back to the writer once, with the error.
+  if (figures.on) await repairFigures(drafts, figures, inLang);
   // Model-drawn figures (no kind fitted): the vision model checks them against their description.
   const svgChecks = figures.on ? await checkModelFigures(drafts) : new Map<number, Check>();
 
@@ -640,8 +698,9 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
       ...(figure ? { figure } : {}),
     };
     const passed = Object.values(checks).every((c) => c.skipped || c.ok);
-    const { figureIssue: _issue, ...candidate } = d;
+    const { figureIssue: _issue, figureRaw: _raw, ...candidate } = d;
     void _issue;
+    void _raw;
     return { ...candidate, checks, passed };
   });
 

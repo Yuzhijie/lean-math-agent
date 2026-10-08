@@ -21,7 +21,7 @@ export function QuestionFigure({ svg, source, verified }: { svg: string; source?
   return (
     <figure className="space-y-1" data-testid="question-figure">
       <div
-        className="overflow-x-auto rounded-md border border-border/60 bg-white p-2 [&_svg]:mx-auto [&_svg]:block [&_svg]:h-auto [&_svg]:max-h-[360px] [&_svg]:max-w-full"
+        className="overflow-x-auto rounded-md border border-border/60 bg-white p-2 [&_svg]:mx-auto [&_svg]:block [&_svg]:h-auto [&_svg]:max-h-[75vh] [&_svg]:max-w-full"
         dangerouslySetInnerHTML={{ __html: clean }}
       />
       {source && (

@@ -2,7 +2,9 @@
  * 3D figures for generated questions: stacks of unit cubes and solids.
  *
  * `cube_stack` — unit cubes stacked on a grid, given as column heights on a
- * map seen from above (first row = back, last row = front, left to right).
+ * map seen from above (first row = back, last row = front, left to right),
+ * optionally with a cap on a column (half-cylinder, roof, pyramid, cylinder,
+ * cone, dome) and drawn either as unit cubes or as plain blocks (a building).
  * Drawn in 3D (oblique, as in most textbooks, or isometric), optionally
  * with its front / left / right / top views as square grids — or as empty
  * grids for the student to draw a view in.
@@ -20,20 +22,40 @@ import { z } from "zod";
 const label = z.string().max(40);
 const dim = z.number().finite().positive().max(1000);
 
-export const VIEW_NAMES = ["front", "left", "right", "top"] as const;
+export const VIEW_NAMES = ["front", "left", "right", "side", "top"] as const;
+export type ViewName = (typeof VIEW_NAMES)[number];
 
-export const cubeStackSchema = z
-  .object({
-    kind: z.literal("cube_stack"),
-    /** Column heights seen from above: first row = back, last row = front; left to right. */
-    heights: z.array(z.array(z.number().int().min(0).max(6)).min(1).max(6)).min(1).max(6),
-    projection: z.enum(["oblique", "isometric"]).optional(),
-    /** Draw the 3D stack (default true); false = only the views. */
-    show_stack: z.boolean().optional(),
-    /** Views drawn next to the stack; `blank` = an empty grid to draw the view in. */
-    views: z.array(z.object({ view: z.enum(VIEW_NAMES), label: label.optional(), blank: z.boolean().optional() })).max(4).optional(),
-    caption: label.optional(),
-  });
+/** Pieces that can sit on top of a column (or on the ground): one grid cell wide. */
+export const CAP_SHAPES = ["half_cylinder", "roof", "pyramid", "cylinder", "cone", "dome"] as const;
+export type CapShape = (typeof CAP_SHAPES)[number];
+/** Height of each cap in cube units. */
+const CAP_H: Record<CapShape, number> = { half_cylinder: 0.5, roof: 0.5, pyramid: 0.6, cylinder: 1, cone: 1, dome: 0.5 };
+
+const capSchema = z.object({
+  /** Cell in `heights` (0-based; row 0 = back). */
+  row: z.number().int().min(0).max(5),
+  col: z.number().int().min(0).max(5),
+  shape: z.enum(CAP_SHAPES),
+  /** half_cylinder / roof: "x" = the curved or sloping top runs left–right, "y" = front–back. */
+  axis: z.enum(["x", "y"]).optional(),
+});
+export type Cap = z.infer<typeof capSchema>;
+
+export const cubeStackSchema = z.object({
+  kind: z.literal("cube_stack"),
+  /** Column heights seen from above: first row = back, last row = front; left to right. */
+  heights: z.array(z.array(z.number().int().min(0).max(6)).min(1).max(6)).min(1).max(6),
+  /** A piece on top of a column (a half-cylinder, a roof, …). */
+  caps: z.array(capSchema).max(12).optional(),
+  projection: z.enum(["oblique", "isometric"]).optional(),
+  /** Lines between the unit cubes (default true); false = plain blocks, like a building. */
+  unit_lines: z.boolean().optional(),
+  /** Draw the 3D stack (default true); false = only the views. */
+  show_stack: z.boolean().optional(),
+  /** Views drawn next to the stack; `blank` = an empty grid to draw the view in. "side" = seen from the right. */
+  views: z.array(z.object({ view: z.enum(VIEW_NAMES), label: label.optional(), blank: z.boolean().optional() })).max(4).optional(),
+  caption: label.optional(),
+});
 
 export const SOLID_SHAPES = ["cube", "cuboid", "triangular_prism", "square_pyramid", "triangular_pyramid", "cylinder", "cone", "sphere", "hemisphere"] as const;
 
@@ -111,27 +133,103 @@ function fit(parts: string[], xs: number[], ys: number[], pad = 4, extraBottom =
 
 // ── Cube stacks ─────────────────────────────────────────────────────
 
+/** A stack ready to draw: rectangular heights (empty outer rows/columns trimmed) and caps by cell. */
+export interface Stack {
+  g: number[][];
+  caps: Map<string, Cap>;
+}
+
+const key = (r: number, c: number) => `${r},${c}`;
+
+export function prepareStack(heights: number[][], caps: Cap[] = []): Stack {
+  const cols = Math.max(...heights.map((r) => r.length), ...caps.map((k) => k.col + 1));
+  const rows = Math.max(heights.length, ...caps.map((k) => k.row + 1));
+  const full = Array.from({ length: rows }, (_, r) => Array.from({ length: cols }, (_, c) => Math.max(0, Math.round(heights[r]?.[c] ?? 0))));
+  const capAt = new Map(caps.map((k) => [key(k.row, k.col), k]));
+  const used = (r: number, c: number) => full[r][c] > 0 || capAt.has(key(r, c));
+  let r0 = 0, r1 = rows - 1, c0 = 0, c1 = cols - 1;
+  const rowUsed = (r: number) => full[r].some((_, c) => used(r, c));
+  const colUsed = (c: number) => full.some((_, r) => used(r, c));
+  while (r0 < r1 && !rowUsed(r0)) r0++;
+  while (r1 > r0 && !rowUsed(r1)) r1--;
+  while (c0 < c1 && !colUsed(c0)) c0++;
+  while (c1 > c0 && !colUsed(c1)) c1--;
+  const g = full.slice(r0, r1 + 1).map((r) => r.slice(c0, c1 + 1));
+  const m = new Map<string, Cap>();
+  for (const k of caps) if (k.row >= r0 && k.row <= r1 && k.col >= c0 && k.col <= c1) m.set(key(k.row - r0, k.col - c0), { ...k, row: k.row - r0, col: k.col - c0 });
+  return { g, caps: m };
+}
+
 /** Rectangular height grid with empty outer rows/columns removed. */
 export function normaliseHeights(heights: number[][]): number[][] {
-  const cols = Math.max(...heights.map((r) => r.length));
-  let g = heights.map((r) => Array.from({ length: cols }, (_, c) => Math.max(0, Math.round(r[c] ?? 0))));
-  while (g.length > 1 && g[0].every((h) => h === 0)) g = g.slice(1);
-  while (g.length > 1 && g[g.length - 1].every((h) => h === 0)) g = g.slice(0, -1);
-  const used = (c: number) => g.some((r) => r[c] > 0);
-  let c0 = 0, c1 = cols - 1;
-  while (c0 < c1 && !used(c0)) c0++;
-  while (c1 > c0 && !used(c1)) c1--;
-  return g.map((r) => r.slice(c0, c1 + 1));
+  return prepareStack(heights).g;
+}
+
+/** The cells along each line of sight of a view, from the viewer's left to right; each list runs nearest first. */
+function sightLines(st: Stack, view: Exclude<ViewName, "top">): Array<Array<[number, number]>> {
+  const R = st.g.length, C = st.g[0].length;
+  const range = (n: number) => Array.from({ length: n }, (_, i) => i);
+  if (view === "front") return range(C).map((c) => range(R).map((i) => [R - 1 - i, c] as [number, number]));
+  if (view === "left") return range(R).map((r) => range(C).map((c) => [r, c] as [number, number]));
+  return range(R).map((i) => range(C).map((j) => [R - 1 - i, C - 1 - j] as [number, number])); // right / side
+}
+
+export interface SideView {
+  /** For each position left to right, for each unit height: depth index of the face seen there (-1 = nothing). */
+  faces: number[][];
+  heights: number[];
+  /** Caps seen in this view: position, base height and the outline shape. */
+  caps: Array<{ pos: number; base: number; outline: "rect" | "semicircle" | "triangle"; h: number }>;
+}
+
+function capOutline(k: Cap, lookingAlong: "x" | "y"): { outline: "rect" | "semicircle" | "triangle"; h: number } {
+  const h = CAP_H[k.shape];
+  const axis = k.axis ?? "x";
+  switch (k.shape) {
+    case "half_cylinder":
+      return { outline: axis === lookingAlong ? "semicircle" : "rect", h };
+    case "roof":
+      return { outline: axis === lookingAlong ? "triangle" : "rect", h };
+    case "pyramid":
+    case "cone":
+      return { outline: "triangle", h };
+    case "cylinder":
+      return { outline: "rect", h };
+    default:
+      return { outline: "semicircle", h };
+  }
+}
+
+/** A side view (front, left, right/side) of the stack. */
+export function sideView(st: Stack, view: Exclude<ViewName, "top">): SideView {
+  const lines = sightLines(st, view);
+  const heights = lines.map((l) => Math.max(0, ...l.map(([r, c]) => st.g[r][c])));
+  const H = Math.max(...heights);
+  const faces = lines.map((l) =>
+    Array.from({ length: H }, (_, z) => {
+      const i = l.findIndex(([r, c]) => st.g[r][c] > z);
+      return i;
+    }),
+  );
+  const caps: SideView["caps"] = [];
+  const along = view === "front" ? "y" : "x";
+  lines.forEach((l, pos) => {
+    let nearer = 0;
+    for (const [r, c] of l) {
+      const h = st.g[r][c];
+      const k = st.caps.get(key(r, c));
+      if (k && h >= nearer) caps.push({ pos, base: h, ...capOutline(k, along) });
+      nearer = Math.max(nearer, h);
+    }
+  });
+  return { faces, heights, caps };
 }
 
 /** A view as columns of squares (heights left to right as the viewer sees them), or the top view as a 0/1 grid. */
-export function stackView(heights: number[][], view: (typeof VIEW_NAMES)[number]): number[] | number[][] {
-  const g = normaliseHeights(heights);
-  const cols = g[0].length;
-  if (view === "top") return g.map((r) => r.map((h) => (h > 0 ? 1 : 0)));
-  if (view === "front") return Array.from({ length: cols }, (_, c) => Math.max(...g.map((r) => r[c])));
-  const byRow = g.map((r) => Math.max(...r)); // back → front
-  return view === "left" ? byRow : byRow.reverse();
+export function stackView(heights: number[][], view: ViewName): number[] | number[][] {
+  const st = prepareStack(heights);
+  if (view === "top") return st.g.map((r) => r.map((h) => (h > 0 ? 1 : 0)));
+  return sideView(st, view).heights;
 }
 
 export function cubeCount(heights: number[][]): number {
@@ -158,74 +256,260 @@ export function hiddenTops(heights: number[][], projection: "oblique" | "isometr
   return n;
 }
 
-function stack3d(g: number[][], projection: "oblique" | "isometric", pen: Pen): Drawn {
+// Convex meshes for caps (unit cell, base at z = 0). Smooth faces are parts of a curved surface: no lines between them.
+interface Mesh {
+  v: V3[];
+  f: number[][];
+  smooth: boolean[];
+}
+
+function extrudeX(profile: Array<[number, number]>, smoothSides: boolean): Mesh {
+  // profile: (y, z) points along the top, from y = 1 to y = 0.
+  const n = profile.length;
+  const v: V3[] = [...profile.map(([y, z]) => [0, y, z] as V3), ...profile.map(([y, z]) => [1, y, z] as V3)];
+  const f: number[][] = [profile.map((_, i) => i), profile.map((_, i) => n + i), [0, n - 1, 2 * n - 1, n]];
+  const smooth = [false, false, false];
+  for (let i = 0; i < n - 1; i++) {
+    f.push([i, i + 1, n + i + 1, n + i]);
+    smooth.push(smoothSides);
+  }
+  return { v, f, smooth };
+}
+
+function capMesh(k: Cap): Mesh {
+  const N = 16;
+  let m: Mesh;
+  switch (k.shape) {
+    case "half_cylinder":
+      m = extrudeX(Array.from({ length: N + 1 }, (_, i) => [0.5 + 0.5 * Math.cos((Math.PI * i) / N), 0.5 * Math.sin((Math.PI * i) / N)] as [number, number]), true);
+      break;
+    case "roof":
+      m = extrudeX([[1, 0], [0.5, 0.5], [0, 0]], false);
+      break;
+    case "pyramid":
+      return { v: [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0.5, 0.5, CAP_H.pyramid]], f: [[0, 1, 2, 3], [0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4]], smooth: [false, false, false, false, false] };
+    case "cylinder":
+    case "cone": {
+      const ring = Array.from({ length: N * 2 }, (_, i) => [0.5 + 0.5 * Math.cos((Math.PI * i) / N), 0.5 + 0.5 * Math.sin((Math.PI * i) / N)]);
+      const M = ring.length;
+      if (k.shape === "cone") {
+        const v: V3[] = [...ring.map(([x, y]) => [x, y, 0] as V3), [0.5, 0.5, 1]];
+        const f = [ring.map((_, i) => i), ...ring.map((_, i) => [i, (i + 1) % M, M])];
+        return { v, f, smooth: f.map((_, i) => i > 0) };
+      }
+      const v: V3[] = [...ring.map(([x, y]) => [x, y, 0] as V3), ...ring.map(([x, y]) => [x, y, 1] as V3)];
+      const f = [ring.map((_, i) => i), ring.map((_, i) => M + i), ...ring.map((_, i) => [i, (i + 1) % M, M + ((i + 1) % M), M + i])];
+      return { v, f, smooth: f.map((_, i) => i > 1) };
+    }
+    default: {
+      // dome: rings of latitude and a top point
+      const L = 4, M = N * 2;
+      const v: V3[] = [];
+      for (let j = 0; j < L; j++) {
+        const phi = (j / L) * (Math.PI / 2);
+        for (let i = 0; i < M; i++) v.push([0.5 + 0.5 * Math.cos(phi) * Math.cos((2 * Math.PI * i) / M), 0.5 + 0.5 * Math.cos(phi) * Math.sin((2 * Math.PI * i) / M), 0.5 * Math.sin(phi)]);
+      }
+      v.push([0.5, 0.5, 0.5]);
+      const f: number[][] = [Array.from({ length: M }, (_, i) => i)];
+      for (let j = 0; j < L - 1; j++) for (let i = 0; i < M; i++) f.push([j * M + i, j * M + ((i + 1) % M), (j + 1) * M + ((i + 1) % M), (j + 1) * M + i]);
+      for (let i = 0; i < M; i++) f.push([(L - 1) * M + i, (L - 1) * M + ((i + 1) % M), L * M]);
+      return { v, f, smooth: f.map((_, i) => i > 0) };
+    }
+  }
+  if ((k.axis ?? "x") === "y") m = { ...m, v: m.v.map(([x, y, z]) => [y, x, z] as V3) };
+  return m;
+}
+
+const LIGHT: V3 = [0.3, -0.5, 0.8];
+
+function faceShade(fill: string, n: V3): string {
+  const k = dot(n, LIGHT) / ((Math.hypot(...n) || 1) * Math.hypot(...LIGHT));
+  return shade(fill, Math.max(-0.25, Math.min(0.55, -0.25 + 0.95 * k)));
+}
+
+/** Draw a convex mesh: visible faces filled, creases and outlines stroked. */
+function drawMesh(m: Mesh, off: V3, P: (p: V3) => V2, d: V3, pen: Pen, sw: number, parts: string[], xs: number[], ys: number[]) {
+  const v = m.v.map(([x, y, z]) => [x + off[0], y + off[1], z + off[2]] as V3);
+  const centre: V3 = [0, 1, 2].map((k) => v.reduce((a, p) => a + p[k], 0) / v.length) as V3;
+  const info = m.f.map((f) => {
+    let n = cross(sub(v[f[1]], v[f[0]]), sub(v[f[2]], v[f[0]]));
+    if (Math.hypot(...n) < 1e-12 && f.length > 3) n = cross(sub(v[f[2]], v[f[0]]), sub(v[f[3]], v[f[0]]));
+    const fc: V3 = [0, 1, 2].map((k) => f.reduce((a, i) => a + v[i][k], 0) / f.length) as V3;
+    if (dot(n, sub(fc, centre)) < 0) n = [-n[0], -n[1], -n[2]];
+    return { n, vis: dot(n, d) > 1e-9 };
+  });
+  const pv = v.map(P);
+  m.f.forEach((f, i) => {
+    if (!info[i].vis) return;
+    const c = faceShade(pen.fill, info[i].n);
+    parts.push(`<polygon points="${pts(f.map((j) => pv[j]))}" fill="${c}" stroke="${c}" stroke-width="0.6" stroke-linejoin="round"/>`);
+    f.forEach((j) => (xs.push(pv[j][0]), ys.push(pv[j][1])));
+  });
+  const edges = new Map<string, number[]>();
+  m.f.forEach((f, i) =>
+    f.forEach((a, k) => {
+      const b = f[(k + 1) % f.length];
+      const id = a < b ? `${a}-${b}` : `${b}-${a}`;
+      edges.set(id, [...(edges.get(id) ?? []), i]);
+    }),
+  );
+  for (const [id, fs] of edges) {
+    const vis = fs.filter((i) => info[i].vis);
+    if (!vis.length) continue;
+    if (vis.length === fs.length && fs.every((i) => m.smooth[i])) continue; // inside a curved surface
+    const [a, b] = id.split("-").map(Number);
+    parts.push(`<line x1="${r1(pv[a][0])}" y1="${r1(pv[a][1])}" x2="${r1(pv[b][0])}" y2="${r1(pv[b][1])}" stroke="${pen.ink}" stroke-width="${sw}" stroke-linecap="round"/>`);
+  }
+}
+
+function stack3d(st: Stack, projection: "oblique" | "isometric", unitLines: boolean, pen: Pen): Drawn {
+  const { g, caps } = st;
   const R = g.length, C = g[0].length;
-  const maxH = Math.max(...g.flat());
+  const maxH = Math.max(...g.flat(), ...[...caps.values()].map((k) => g[k.row][k.col] + CAP_H[k.shape]));
   const size = Math.max(R, C, maxH);
   const scale = size <= 3 ? 30 : size <= 4 ? 26 : 22;
   const P = projector(projection, scale);
-  const cubes: V3[] = [];
-  for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) for (let z = 0; z < g[r][c]; z++) cubes.push([c, R - 1 - r, z]);
+  const d = viewDir(projection);
+  const occ = new Set<string>();
+  type Piece = { at: V3; cap?: Cap };
+  const pieces: Piece[] = [];
+  for (let r = 0; r < R; r++)
+    for (let c = 0; c < C; c++) {
+      for (let z = 0; z < g[r][c]; z++) {
+        pieces.push({ at: [c, R - 1 - r, z] });
+        occ.add(`${c},${R - 1 - r},${z}`);
+      }
+      const k = caps.get(key(r, c));
+      if (k) pieces.push({ at: [c, R - 1 - r, g[r][c]], cap: k });
+    }
   // Far first: larger y, then lower z, then smaller x (valid painter order for both projections).
-  cubes.sort((a, b) => b[1] - a[1] || a[2] - b[2] || a[0] - b[0]);
-  const top = shade(pen.fill, 0.55), front = pen.fill, side = shade(pen.fill, -0.18);
-  const st = `stroke="${pen.ink}" stroke-width="${Math.max(1.2, pen.sw * 0.75)}" stroke-linejoin="round"`;
+  pieces.sort((a, b) => b.at[1] - a.at[1] || a.at[2] - b.at[2] || a.at[0] - b.at[0]);
+  const sw = Math.max(1.2, pen.sw * 0.75);
+  const st2 = `stroke="${pen.ink}" stroke-width="${sw}" stroke-linejoin="round"`;
+  const fills = { front: faceShade(pen.fill, [0, -1, 0]), side: faceShade(pen.fill, [1, 0, 0]), top: faceShade(pen.fill, [0, 0, 1]) };
+  const has = (x: number, y: number, z: number) => occ.has(`${x},${y},${z}`);
   const parts: string[] = [];
   const xs: number[] = [], ys: number[] = [];
-  const face = (corners: V3[], fill: string) => {
-    const p = corners.map(P);
-    p.forEach(([x, y]) => (xs.push(x), ys.push(y)));
-    parts.push(`<polygon points="${pts(p)}" fill="${fill}" ${st}/>`);
+  const line = (a: V3, b: V3) => {
+    const [pa, pb] = [P(a), P(b)];
+    parts.push(`<line x1="${r1(pa[0])}" y1="${r1(pa[1])}" x2="${r1(pb[0])}" y2="${r1(pb[1])}" stroke="${pen.ink}" stroke-width="${sw}" stroke-linecap="round"/>`);
   };
-  for (const [x, y, z] of cubes) {
-    face([[x, y, z], [x + 1, y, z], [x + 1, y, z + 1], [x, y, z + 1]], front);
-    face([[x + 1, y, z], [x + 1, y + 1, z], [x + 1, y + 1, z + 1], [x + 1, y, z + 1]], side);
-    face([[x, y, z + 1], [x + 1, y, z + 1], [x + 1, y + 1, z + 1], [x, y + 1, z + 1]], top);
+  // Faces: [corners, fill, exposed(x,y,z), in-plane neighbours per edge]
+  for (const { at, cap } of pieces) {
+    const [x, y, z] = at;
+    if (cap) {
+      drawMesh(capMesh(cap), at, P, d, pen, sw, parts, xs, ys);
+      continue;
+    }
+    const faces: Array<{ c: V3[]; fill: string; exposed: (x: number, y: number, z: number) => boolean; nb: V3[] }> = [
+      { c: [[x, y, z], [x + 1, y, z], [x + 1, y, z + 1], [x, y, z + 1]], fill: fills.front, exposed: (a, b, cc) => has(a, b, cc) && !has(a, b - 1, cc), nb: [[x, y, z - 1], [x + 1, y, z], [x, y, z + 1], [x - 1, y, z]] },
+      { c: [[x + 1, y, z], [x + 1, y + 1, z], [x + 1, y + 1, z + 1], [x + 1, y, z + 1]], fill: fills.side, exposed: (a, b, cc) => has(a, b, cc) && !has(a + 1, b, cc), nb: [[x, y, z - 1], [x, y + 1, z], [x, y, z + 1], [x, y - 1, z]] },
+      { c: [[x, y, z + 1], [x + 1, y, z + 1], [x + 1, y + 1, z + 1], [x, y + 1, z + 1]], fill: fills.top, exposed: (a, b, cc) => has(a, b, cc) && !has(a, b, cc + 1), nb: [[x, y - 1, z], [x + 1, y, z], [x, y + 1, z], [x - 1, y, z]] },
+    ];
+    for (const f of faces) {
+      const p = f.c.map(P);
+      p.forEach(([px, py]) => (xs.push(px), ys.push(py)));
+      if (unitLines) {
+        parts.push(`<polygon points="${pts(p)}" fill="${f.fill}" ${st2}/>`);
+        continue;
+      }
+      parts.push(`<polygon points="${pts(p)}" fill="${f.fill}" stroke="${f.fill}" stroke-width="0.6" stroke-linejoin="round"/>`);
+      if (!f.exposed(x, y, z)) continue;
+      // An edge is drawn unless the same face continues into the neighbouring cube.
+      f.c.forEach((a, i) => {
+        const [nx, ny, nz] = f.nb[i];
+        if (!f.exposed(nx, ny, nz)) line(a, f.c[(i + 1) % 4]);
+      });
+    }
   }
   return fit(parts, xs, ys);
 }
 
-const VIEW_CELL = 18;
+const VIEW_CELL = 22;
 
-function viewGrid(g: number[][], v: NonNullable<CubeStackSpec["views"]>[number], pen: Pen): Drawn {
+function viewGrid(st: Stack, v: NonNullable<CubeStackSpec["views"]>[number], unitLines: boolean, pen: Pen): Drawn {
   const parts: string[] = [];
   const s = VIEW_CELL;
-  const sq = (x: number, y: number) => `<rect x="${x}" y="${y}" width="${s}" height="${s}" fill="${pen.fill}" stroke="${pen.ink}" stroke-width="${Math.max(1.2, pen.sw * 0.75)}"/>`;
+  const sw = Math.max(1.2, pen.sw * 0.75);
+  const ink = `stroke="${pen.ink}" stroke-width="${sw}"`;
+  const seg = (x1: number, y1: number, x2: number, y2: number) => parts.push(`<line x1="${r1(x1)}" y1="${r1(y1)}" x2="${r1(x2)}" y2="${r1(y2)}" ${ink} stroke-linecap="round"/>`);
+  const cell = (x: number, y: number) => parts.push(unitLines ? `<rect x="${x}" y="${y}" width="${s}" height="${s}" fill="${pen.fill}" ${ink}/>` : `<rect x="${x}" y="${y}" width="${s}" height="${s}" fill="${pen.fill}" stroke="${pen.fill}" stroke-width="0.6"/>`);
+  const g = st.g;
   let w: number, h: number;
   if (v.blank) {
     // Empty dotted grid big enough for any view of this stack.
-    const n = Math.max(g.length, g[0].length, Math.max(...g.flat())) + 1;
+    const n = Math.max(g.length, g[0].length, Math.max(...g.flat()) + (st.caps.size ? 1 : 0)) + 1;
     w = h = n * s;
     for (let i = 0; i <= n; i++) {
       parts.push(`<line x1="${i * s}" y1="0" x2="${i * s}" y2="${h}" stroke="#9e9e9e" stroke-width="0.8" stroke-dasharray="2 3"/>`);
       parts.push(`<line x1="0" y1="${i * s}" x2="${w}" y2="${i * s}" stroke="#9e9e9e" stroke-width="0.8" stroke-dasharray="2 3"/>`);
     }
   } else if (v.view === "top") {
-    const t = stackView(g, "top") as number[][];
-    w = t[0].length * s;
-    h = t.length * s;
-    t.forEach((row, r) => row.forEach((on, c) => on && parts.push(sq(c * s, r * s))));
+    const R = g.length, C = g[0].length;
+    w = C * s;
+    h = R * s;
+    const on = (r: number, c: number) => r >= 0 && r < R && c >= 0 && c < C && (g[r][c] > 0 || st.caps.has(key(r, c)));
+    const top = (r: number, c: number) => (on(r, c) ? g[r][c] : -1);
+    for (let r = 0; r < R; r++)
+      for (let c = 0; c < C; c++) {
+        if (!on(r, c)) continue;
+        cell(c * s, r * s);
+        if (!unitLines) {
+          // Edges where the height changes (or the outline).
+          if (top(r - 1, c) !== top(r, c)) seg(c * s, r * s, (c + 1) * s, r * s);
+          if (top(r + 1, c) !== top(r, c)) seg(c * s, (r + 1) * s, (c + 1) * s, (r + 1) * s);
+          if (top(r, c - 1) !== top(r, c)) seg(c * s, r * s, c * s, (r + 1) * s);
+          if (top(r, c + 1) !== top(r, c)) seg((c + 1) * s, r * s, (c + 1) * s, (r + 1) * s);
+        }
+        const k = st.caps.get(key(r, c));
+        if (!k) continue;
+        const cx = c * s + s / 2, cy = r * s + s / 2;
+        if (k.shape === "cylinder" || k.shape === "dome" || k.shape === "cone") parts.push(`<circle cx="${cx}" cy="${cy}" r="${s / 2 - 1}" fill="none" ${ink}/>`);
+        if (k.shape === "cone") parts.push(`<circle cx="${cx}" cy="${cy}" r="1.6" fill="${pen.ink}"/>`);
+        if (k.shape === "pyramid") (seg(c * s, r * s, (c + 1) * s, (r + 1) * s), seg((c + 1) * s, r * s, c * s, (r + 1) * s));
+        if (k.shape === "roof") (k.axis ?? "x") === "x" ? seg(c * s, cy, (c + 1) * s, cy) : seg(cx, r * s, cx, (r + 1) * s);
+      }
   } else {
-    const cols = stackView(g, v.view) as number[];
-    const maxH = Math.max(...cols);
-    w = cols.length * s;
-    h = maxH * s;
-    cols.forEach((n, c) => {
-      for (let k = 0; k < n; k++) parts.push(sq(c * s, h - (k + 1) * s));
-    });
+    const sv = sideView(st, v.view);
+    const H = Math.max(...sv.heights, ...sv.caps.map((k) => k.base + k.h));
+    w = sv.heights.length * s;
+    h = H * s;
+    const base = h; // ground line
+    const face = (p: number, z: number) => (p >= 0 && p < sv.faces.length ? (sv.faces[p][z] ?? -1) : -1);
+    sv.faces.forEach((col, p) =>
+      col.forEach((depth, z) => {
+        if (depth < 0) return;
+        cell(p * s, base - (z + 1) * s);
+        if (unitLines) return;
+        // Edges where the face seen changes (a step in depth, the outline).
+        if (face(p, z - 1) !== depth) seg(p * s, base - z * s, (p + 1) * s, base - z * s);
+        if (face(p, z + 1) !== depth) seg(p * s, base - (z + 1) * s, (p + 1) * s, base - (z + 1) * s);
+        if (face(p - 1, z) !== depth) seg(p * s, base - z * s, p * s, base - (z + 1) * s);
+        if (face(p + 1, z) !== depth) seg((p + 1) * s, base - z * s, (p + 1) * s, base - (z + 1) * s);
+      }),
+    );
+    for (const k of sv.caps) {
+      const x0 = k.pos * s, y0 = base - k.base * s, hh = k.h * s;
+      const style = `fill="${pen.fill}" ${ink} stroke-linejoin="round"`;
+      if (k.outline === "rect") parts.push(`<rect x="${x0}" y="${r1(y0 - hh)}" width="${s}" height="${r1(hh)}" ${style}/>`);
+      else if (k.outline === "triangle") parts.push(`<polygon points="${pts([[x0, y0], [x0 + s, y0], [x0 + s / 2, y0 - hh]])}" ${style}/>`);
+      else parts.push(`<path d="M${x0},${r1(y0)} A${s / 2},${r1(hh)} 0 0 1 ${x0 + s},${r1(y0)} Z" ${style}/>`);
+    }
   }
-  const name = v.label ?? v.view;
+  const name = v.label ?? (v.view === "side" ? "side view" : v.view);
   parts.push(pen.text(w / 2, h + 20, name, 13));
   return { w: Math.max(w, name.length * 7), h: h + 28, body: `<g transform="translate(${r1(Math.max(0, (name.length * 7 - w) / 2))},0)">${parts.join("")}</g>` };
 }
 
 export function drawCubeStack(spec: CubeStackSpec, pen: Pen): Drawn {
-  if (!spec.heights.some((r) => r.some((h) => h > 0))) throw new Error("cube_stack: the stack has no cubes");
+  if (!spec.heights.some((r) => r.some((h) => h > 0)) && !spec.caps?.length) throw new Error("cube_stack: the stack has no cubes");
   if (spec.show_stack === false && !spec.views?.length) throw new Error("cube_stack: nothing to draw (show_stack is false and there are no views)");
-  const g = normaliseHeights(spec.heights);
+  for (const k of spec.caps ?? []) if (k.row >= spec.heights.length || k.col >= Math.max(...spec.heights.map((r) => r.length))) throw new Error(`cube_stack: cap at row ${k.row}, col ${k.col} is outside the heights grid`);
+  const st = prepareStack(spec.heights, spec.caps);
+  const unit = spec.unit_lines !== false;
   const blocks: Drawn[] = [];
-  if (spec.show_stack !== false) blocks.push(stack3d(g, spec.projection ?? "oblique", pen));
-  for (const v of spec.views ?? []) blocks.push(viewGrid(g, v, pen));
+  if (spec.show_stack !== false) blocks.push(stack3d(st, spec.projection ?? "oblique", unit, pen));
+  for (const v of spec.views ?? []) blocks.push(viewGrid(st, v, unit, pen));
   const gap = 28;
   const H = Math.max(...blocks.map((b) => b.h));
   let x = 0;
@@ -243,21 +527,42 @@ export function drawCubeStack(spec: CubeStackSpec, pen: Pen): Drawn {
   return { w: x - gap, h, body: parts.join("") };
 }
 
+const CAP_NAMES: Record<CapShape, (axis: "x" | "y") => string> = {
+  half_cylinder: (a) => `a half-cylinder (curved top running ${a === "x" ? "left–right" : "front–back"})`,
+  roof: (a) => `a triangular-prism roof (ridge running ${a === "x" ? "left–right" : "front–back"})`,
+  pyramid: () => "a square pyramid",
+  cylinder: () => "an upright cylinder",
+  cone: () => "a cone",
+  dome: () => "a dome (hemisphere)",
+};
+
+const OUTLINE_NAMES = { rect: "a rectangle", semicircle: "a semicircle", triangle: "a triangle" };
+
 export function describeCubeStack(s: CubeStackSpec): string {
-  const g = normaliseHeights(s.heights);
+  const st = prepareStack(s.heights, s.caps);
+  const { g } = st;
   const n = cubeCount(g);
   const proj = s.projection ?? "oblique";
+  const R = g.length;
+  const capText = [...st.caps.values()].map((k) => `${CAP_NAMES[k.shape](k.axis ?? "x")} on ${g[k.row][k.col] ? "top of" : "the ground at"} the column in row ${k.row + 1} of ${R} from the back, column ${k.col + 1} from the left`);
   const parts: string[] = [];
+  const what = s.unit_lines === false ? `a solid made of ${n} unit cubes, drawn as plain blocks (no lines between the cubes)` : `${n} unit cubes stacked`;
   if (s.show_stack !== false)
     parts.push(
-      `${n} unit cubes stacked and drawn in 3D (${proj} view from the front right, above)${hiddenTops(g, proj) ? " — some cubes cannot be seen from this side" : ""}; seen from above, the number of cubes in each column, back row first, left to right: ${g.map((r) => `[${r.join(", ")}]`).join(" ")} (${n} cubes in all, including any hidden behind or under others)`,
+      `${what} and drawn in 3D (${proj} view from the front right, above)${hiddenTops(g, proj) ? " — some cubes cannot be seen from this side" : ""}; seen from above, the number of cubes in each column, back row first, left to right: ${g.map((r) => `[${r.join(", ")}]`).join(" ")} (${n} cubes in all, including any hidden behind or under others)${capText.length ? `; ${capText.join("; ")}` : ""}`,
     );
-  else parts.push(`views of a stack of unit cubes (the stack itself is not drawn)`);
+  else parts.push(`views of a solid made of unit cubes (the solid itself is not drawn): seen from above, cubes in each column, back row first, left to right: ${g.map((r) => `[${r.join(", ")}]`).join(" ")}${capText.length ? `; ${capText.join("; ")}` : ""}`);
   for (const v of s.views ?? []) {
-    const name = v.label ? `"${v.label}" (${v.view} view)` : `the ${v.view} view`;
+    const name = v.label ? `"${v.label}" (${v.view === "side" ? "side (from the right)" : v.view} view)` : `the ${v.view === "side" ? "side (from the right)" : v.view} view`;
     if (v.blank) parts.push(`an empty grid labelled ${name} for drawing that view`);
-    else if (v.view === "top") parts.push(`${name}: squares seen from above, back row first: ${(stackView(g, "top") as number[][]).map((r) => r.map((on) => (on ? "■" : "□")).join("")).join(" / ")}`);
-    else parts.push(`${name}: columns of squares, left to right, of heights ${(stackView(g, v.view) as number[]).join(", ")}`);
+    else if (v.view === "top")
+      parts.push(
+        `${name}: squares seen from above, back row first: ${g.map((r, ri) => r.map((h, c) => (h > 0 || st.caps.has(key(ri, c)) ? "■" : "□")).join("")).join(" / ")}${[...st.caps.values()].map((k) => ` (${k.shape === "pyramid" ? "diagonals" : k.shape === "roof" ? "a ridge line" : k.shape === "half_cylinder" ? "no extra line" : "a circle"} in row ${k.row + 1}, column ${k.col + 1})`).join("")}`,
+      );
+    else {
+      const sv = sideView(st, v.view);
+      parts.push(`${name}: columns of squares, left to right, of heights ${sv.heights.join(", ")}${sv.caps.map((k) => `; ${OUTLINE_NAMES[k.outline]} on top of column ${k.pos + 1}`).join("")}`);
+    }
   }
   if (s.caption) parts.push(`caption "${s.caption}"`);
   return parts.join("; ");

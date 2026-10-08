@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cubeCount, hiddenTops, normaliseHeights, stackView } from "@/lib/figure/solid3d";
+import { cubeCount, hiddenTops, normaliseHeights, prepareStack, sideView, stackView } from "@/lib/figure/solid3d";
 import { buildVisual, describeVisual, VISUAL_GUIDE, VISUAL_KINDS, visualSpecSchema } from "@/lib/figure/visual";
 import { generateFromTemplate, templateSolids } from "@/lib/bank/generate";
 import { usesFigure } from "@/lib/bank/profile";
@@ -39,7 +39,7 @@ describe("cube stacks", () => {
     expect(v.verified).toBe(true);
     expect(count(v.svg, /<polygon /g)).toBe(30);
     // front view 3+2+1 squares, top view 6 squares
-    expect(count(v.svg, /<rect x="\d+" y="\d+" width="18" height="18"/g)).toBe(12);
+    expect(count(v.svg, /<rect x="\d+" y="\d+" width="22" height="22"/g)).toBe(12);
     expect(v.svg).toContain("从正面看");
     expect(v.svg).toContain('stroke-dasharray="2 3"'); // the empty grid
     const d = describeVisual(spec);
@@ -54,7 +54,7 @@ describe("cube stacks", () => {
     expect(buildVisual(visualSpecSchema.parse({ kind: "cube_stack", heights: [[2, 3], [1, 1]], projection: "isometric" })).svg).toContain("<polygon");
     const only = visualSpecSchema.parse({ kind: "cube_stack", heights: [[1, 2]], show_stack: false, views: [{ view: "front" }] });
     expect(count(buildVisual(only).svg, /<polygon /g)).toBe(0);
-    expect(describeVisual(only)).toContain("the stack itself is not drawn");
+    expect(describeVisual(only)).toContain("the solid itself is not drawn");
     expect(() => buildVisual(visualSpecSchema.parse({ kind: "cube_stack", heights: [[0, 0]] }))).toThrow(/no cubes/);
     expect(() => buildVisual(visualSpecSchema.parse({ kind: "cube_stack", heights: [[1]], show_stack: false }))).toThrow(/nothing to draw/);
     expect(visualSpecSchema.safeParse({ kind: "cube_stack", heights: [[9]] }).success).toBe(false);
@@ -64,6 +64,47 @@ describe("cube stacks", () => {
     expect(hiddenTops([[1, 1], [3, 3]])).toBe(1);
     expect(hiddenTops([[3, 3], [1, 1]])).toBe(0);
     expect(describeVisual(visualSpecSchema.parse({ kind: "cube_stack", heights: [[1, 1], [3, 3]] }))).toContain("some cubes cannot be seen");
+  });
+});
+
+describe("caps, plain blocks and plans", () => {
+  const hall = { heights: [[3, 3, 3], [2, 2, 2], [1, 1, 1]], caps: [{ row: 0, col: 1, shape: "half_cylinder", axis: "y" }] };
+
+  it("computes views with caps: outlines depend on the way the piece runs", () => {
+    const st = prepareStack(hall.heights, hall.caps as never);
+    const front = sideView(st, "front");
+    expect(front.heights).toEqual([3, 3, 3]);
+    expect(front.caps).toEqual([{ pos: 1, base: 3, outline: "semicircle", h: 0.5 }]);
+    // From the side the half-cylinder running front–back shows as a rectangle, on the back column (positions run front → back).
+    const side = sideView(st, "side");
+    expect(side.heights).toEqual([1, 2, 3]);
+    expect(side.caps).toEqual([{ pos: 2, base: 3, outline: "rect", h: 0.5 }]);
+    // A cap on a lower column behind a taller one is hidden.
+    expect(sideView(prepareStack([[1], [2]], [{ row: 0, col: 0, shape: "dome" }]), "front").caps).toEqual([]);
+    // In front of a taller column it is seen.
+    expect(sideView(prepareStack([[2], [1]], [{ row: 1, col: 0, shape: "cone" }]), "front").caps).toEqual([{ pos: 0, base: 1, outline: "triangle", h: 1 }]);
+    // Caps keep their cells when empty rows/columns are trimmed.
+    expect([...prepareStack([[0, 0], [0, 2]], [{ row: 1, col: 1, shape: "roof" }]).caps.keys()]).toEqual(["0,0"]);
+  });
+
+  it("draws plain blocks without lines between cubes, and describes caps", () => {
+    const plain = buildVisual(visualSpecSchema.parse({ kind: "cube_stack", heights: [[1, 1, 1]], unit_lines: false }));
+    const cubes = buildVisual(visualSpecSchema.parse({ kind: "cube_stack", heights: [[1, 1, 1]] }));
+    // plain: faces are not outlined, only the block's edges are drawn; with unit lines every face is outlined
+    expect(count(plain.svg, /<polygon [^>]*stroke="#1f1f1f"/g)).toBe(0);
+    expect(count(plain.svg, /<line /g)).toBeGreaterThan(8);
+    expect(count(cubes.svg, /<polygon [^>]*stroke="#1f1f1f"/g)).toBe(9);
+    const v = buildVisual(visualSpecSchema.parse({ kind: "cube_stack", ...hall, unit_lines: false, views: [{ view: "front" }, { view: "side" }, { view: "top" }] }));
+    expect(v.svg).toContain("<path d=\"M"); // the semicircle in the front view
+    expect(v.description).toContain("drawn as plain blocks");
+    expect(v.description).toContain("a half-cylinder (curved top running front–back) on top of the column in row 1 of 3 from the back, column 2 from the left");
+    expect(v.description).toContain("the front view: columns of squares, left to right, of heights 3, 3, 3; a semicircle on top of column 2");
+    expect(v.description).toContain("side (from the right) view: columns of squares, left to right, of heights 1, 2, 3; a rectangle on top of column 3");
+    for (const shape of ["half_cylinder", "roof", "pyramid", "cylinder", "cone", "dome"]) {
+      const b = buildVisual(visualSpecSchema.parse({ kind: "cube_stack", heights: [[1]], caps: [{ row: 0, col: 0, shape }], views: [{ view: "front" }, { view: "top" }] }));
+      expect(b.verified, shape).toBe(true);
+    }
+    expect(() => buildVisual(visualSpecSchema.parse({ kind: "cube_stack", heights: [[1]], caps: [{ row: 3, col: 0, shape: "dome" }] }))).toThrow(/outside/);
   });
 });
 
@@ -119,6 +160,8 @@ type Msg = { role: string; content: string | Array<{ type: string; text?: string
 const textOf = (m: Msg) => (typeof m.content === "string" ? m.content : m.content.filter((p) => p.type === "text").map((p) => p.text).join(""));
 let root: string;
 let calls: Array<{ kind: string; system: string; user: string }>;
+let repairReply: unknown;
+let extraQuestions: unknown[];
 
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "bank-solids-"));
@@ -131,13 +174,15 @@ beforeEach(() => {
   process.env.LLM_CACHE_ENABLED = "false";
   resetGlobalCache();
   calls = [];
+  repairReply = {};
+  extraQuestions = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (_u: string, init: RequestInit) => {
       const body = JSON.parse(String(init.body)) as { messages: Msg[] };
       const sys = textOf(body.messages[0]);
       const user = textOf(body.messages[body.messages.length - 1]);
-      const kind = sys.startsWith("You look at the figures") ? "template-visual" : sys.startsWith("You write new original") ? "generate" : sys.startsWith("You solve math") ? "resolve" : sys.startsWith("You review generated") ? "judge" : sys.startsWith("You analyse a class") ? "profile" : "other";
+      const kind = sys.startsWith("You look at the figures") ? "template-visual" : sys.startsWith("You write new original") ? "generate" : sys.startsWith("You solve math") ? "resolve" : sys.startsWith("You review generated") ? "judge" : sys.startsWith("You analyse a class") ? "profile" : sys.startsWith("You fix the figure specs") ? "repair" : "other";
       calls.push({ kind, system: sys, user });
       const reply = (c: unknown) => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(c) } }] }), { status: 200 });
       if (kind === "template-visual")
@@ -147,9 +192,11 @@ beforeEach(() => {
           questions: [
             { stem: "Mia builds a model from small cubes. How many small cubes did she use?", type: "multiple_choice", options: ["5", "6", "7", "8"], answer: "C", figure: { kind: "cube_stack", heights: [[3, 2], [1, 1]] } },
             { stem: "A stack has 2 cubes at the back and 1 in front. How many cubes?", type: "multiple_choice", options: ["2", "3", "4", "5"], answer: "B" },
+            ...extraQuestions,
           ],
         });
-      if (kind === "resolve") return reply({ answers: [{ n: 1, answer: "C" }, { n: 2, answer: "B" }] });
+      if (kind === "repair") return reply(repairReply);
+      if (kind === "resolve") return reply({ answers: [{ n: 1, answer: "C" }, { n: 2, answer: "B" }, { n: 3, answer: "A" }] });
       if (kind === "judge") return reply({ scores: [1, 2].map((n) => ({ n, score: 5, reason: "ok" })) });
       if (kind === "profile") return reply({ summary: "Counting cubes in a stack.", answer_form: "one option letter", stem_structure: "A stack, then a question." });
       return reply({});
@@ -178,7 +225,8 @@ describe("generating from a template with 3D figures", () => {
     ]);
     const g = await generateFromTemplate({ owner: "local", bankId: bank.id, template: { item_ids: [item.id] }, count: 2 });
     const gen = calls.find((c) => c.kind === "generate")!;
-    expect(gen.user).toMatch(/3D: the example questions show stacks of unit cubes\. Every new question MUST include a 3D figure of the same kind — \{"kind":"cube_stack",…\}/);
+    expect(gen.user).toContain("3D: the example questions show 3D figures. Every new question MUST include a program-drawn 3D figure");
+    expect(gen.user).toContain('"show_stack": false and the views');
     expect(gen.system).toContain('{"kind":"cube_stack"');
     // The solver sees the exact stack.
     expect(calls.find((c) => c.kind === "resolve")!.user).toContain("7 unit cubes");
@@ -190,5 +238,37 @@ describe("generating from a template with 3D figures", () => {
     const words = g.candidates.find((c) => c.stem.startsWith("A stack has"))!;
     expect(words.checks.figure).toMatchObject({ ok: false });
     expect(words.checks.figure!.detail).toMatch(/立体图形|3D figure/);
+  });
+
+  it("sends unusable or missing figures back once, with the error, and uses the fixed spec", async () => {
+    extraQuestions = [
+      { stem: "The plans show the front, side and top views of a hall. Which drawing shows the hall?", type: "multiple_choice", options: ["A", "B", "C", "D"], answer: "A", figure: { kind: "cards", columns: 1, cards: [{ figure: { kind: "views", front: [3, 2] } }] } },
+    ];
+    repairReply = {
+      fixes: [
+        { n: 2, figure: { kind: "cube_stack", heights: [[2], [1]] } },
+        { n: 3, figure: { kind: "cards", columns: 1, cards: [{ label: "Plans", figure: { kind: "cube_stack", heights: [[3, 3], [2, 2]], caps: [{ row: 0, col: 0, shape: "half_cylinder", axis: "y" }], unit_lines: false, show_stack: false, views: [{ view: "front" }, { view: "side" }, { view: "top" }] } }, { label: "A", figure: { kind: "cube_stack", heights: [[3, 3], [2, 2]], caps: [{ row: 0, col: 0, shape: "half_cylinder", axis: "y" }], unit_lines: false, projection: "isometric" } }] } },
+      ],
+    };
+    const bank = createBank("local", { name: "Plans", language: "en" });
+    const page = saveAsset("local", bank.id, encodePng({ data: new Uint8Array(60 * 40 * 3).fill(230), width: 60, height: 40, channels: 3 }), "png");
+    const [item] = addItems("local", bank.id, [
+      { origin: "imported", fields: { stem: "How many cubes are in the stack?", type: "multiple_choice", options: ["4", "5", "6", "7"], answer: "C", knowledge_points: [], tags: [], images: [{ asset: page, caption: "cube_stack: back row 3 1, front row 1 1" }] } },
+    ]);
+    const g = await generateFromTemplate({ owner: "local", bankId: bank.id, template: { item_ids: [item.id] }, count: 3 });
+    const repair = calls.find((c) => c.kind === "repair")!;
+    expect(repair.system).toContain('{"kind":"cube_stack"');
+    // The question without a 3D figure and the one with an unknown kind are sent back; the good one is not.
+    expect(repair.user).toContain("a 3D figure (cube_stack) is required");
+    expect(repair.user).toMatch(/cards\.0\.figure\.kind Invalid discriminator value.*\(got "views"\)/);
+    expect(repair.user).toContain('Spec given: {"kind":"cards"');
+    expect(repair.user).not.toContain("Mia builds");
+    const words = g.candidates.find((c) => c.stem.startsWith("A stack has"))!;
+    expect(words.figure?.spec).toMatchObject({ kind: "cube_stack" });
+    expect(words.checks.figure).toMatchObject({ ok: true });
+    const plans = g.candidates.find((c) => c.stem.startsWith("The plans show"))!;
+    expect(plans.figure?.source).toBe("program");
+    expect(plans.figure?.description).toContain("a semicircle on top of column 1");
+    expect(plans.checks.figure).toMatchObject({ ok: true });
   });
 });
