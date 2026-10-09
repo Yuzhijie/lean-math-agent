@@ -28,6 +28,7 @@ import { figureSpecSchema } from "./spec";
 import { describeSpeech, drawSpeech, speechSchema } from "./speech";
 import { describeStar, drawStar, starSchema } from "./star";
 import { describeTileRow, drawTileRow, tileRowSchema } from "./tiles";
+import { describeReflection, drawReflection, reflectionSchema } from "./reflection";
 
 // ── Style ───────────────────────────────────────────────────────────
 
@@ -163,7 +164,7 @@ const groupsSchema = z.object({
 });
 const geometrySchema = z.object({ kind: z.literal("geometry"), spec: figureSpecSchema });
 
-const leafSchemas = [clockSchema, numberLineSchema, barChartSchema, pictographSchema, tableSchema, gridShapeSchema, fractionSchema, groupsSchema, geometrySchema, cubeStackSchema, solidSchema, starSchema, speechSchema, tileRowSchema] as const;
+const leafSchemas = [clockSchema, numberLineSchema, barChartSchema, pictographSchema, tableSchema, gridShapeSchema, fractionSchema, groupsSchema, geometrySchema, cubeStackSchema, solidSchema, starSchema, speechSchema, tileRowSchema, reflectionSchema] as const;
 export const visualLeafSchema = z.discriminatedUnion("kind", [...leafSchemas]);
 export type VisualLeaf = z.infer<typeof visualLeafSchema>;
 
@@ -189,20 +190,20 @@ const cardsSchema = z.object({
     .min(1)
     .max(12),
 });
-/** Several figure areas, one under another (or side by side): e.g. priced item cards, then the answer choices. */
+/** Drawn by the model when no kind fits: not program-drawn. */
+const svgSchema = z.object({ kind: z.literal("svg"), svg: z.string().min(20).max(60_000), description: z.string().min(1).max(2000) });
+/** Several figure areas, one under another (or side by side): e.g. priced item cards, then the answer choices. A part may be model-drawn ("svg"). */
 const groupSchema = z.object({
   kind: z.literal("group"),
   direction: z.enum(["vertical", "horizontal"]).optional(),
-  parts: z.array(z.discriminatedUnion("kind", [...leafSchemas, cardsSchema])).min(2).max(4),
+  parts: z.array(z.discriminatedUnion("kind", [...leafSchemas, cardsSchema, svgSchema])).min(2).max(4),
   caption: label.optional(),
 });
-/** Drawn by the model when no kind fits: not program-drawn. */
-const svgSchema = z.object({ kind: z.literal("svg"), svg: z.string().min(20).max(60_000), description: z.string().min(1).max(2000) });
 
 export const visualSpecSchema = z.discriminatedUnion("kind", [...leafSchemas, cardsSchema, groupSchema, svgSchema]);
 export type VisualSpec = z.infer<typeof visualSpecSchema>;
 
-export const VISUAL_KINDS = ["clock", "number_line", "bar_chart", "pictograph", "table", "grid_shape", "fraction", "groups", "geometry", "cube_stack", "solid", "star", "speech", "tile_row", "cards", "group", "svg"] as const;
+export const VISUAL_KINDS = ["clock", "number_line", "bar_chart", "pictograph", "table", "grid_shape", "fraction", "groups", "geometry", "cube_stack", "solid", "star", "speech", "tile_row", "reflection", "cards", "group", "svg"] as const;
 
 /** Every figure in a spec: itself, the parts of a group and the figures on cards. */
 export function specNodes(spec: unknown): Array<Record<string, unknown> & { kind: string }> {
@@ -613,6 +614,8 @@ function leaf(spec: VisualLeaf, t: Theme): Box & { verified?: boolean; issues?: 
       return drawSpeech(spec, { ...pen(t), accent: t.accent });
     case "tile_row":
       return drawTileRow(spec, { ...pen(t), accent: t.accent });
+    case "reflection":
+      return drawReflection(spec, { ...pen(t), accent: t.accent });
   }
 }
 
@@ -674,8 +677,19 @@ function cards(spec: z.infer<typeof cardsSchema>, t: Theme): Box & { verified: b
   return { w: cols * cw + (cols - 1) * gap + 2, h: rows * ch + (rows - 1) * gap + 2, body: parts.join(""), verified: inner.every((b) => !b || b.verified !== false), issues };
 }
 
+/** A model-drawn SVG as one area of a group: nested, at its own size (at most 420 wide). */
+function svgPart(p: z.infer<typeof svgSchema>): Box {
+  const clean = sanitizeSvg(p.svg);
+  if (!clean) throw new Error("a model-drawn part is not a valid <svg> element");
+  const vb = /viewBox\s*=\s*["']\s*(-?[\d.]+)[\s,]+(-?[\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/.exec(clean);
+  const [x, y, w0, h0] = vb ? vb.slice(1).map(Number) : [0, 0, 400, 300];
+  const k = Math.min(1, 420 / (w0 || 400));
+  const inner = clean.replace(/^<svg[^>]*>/i, "").replace(/<\/svg>\s*$/i, "");
+  return { w: w0 * k, h: h0 * k, body: `<svg x="0" y="0" width="${r1(w0 * k)}" height="${r1(h0 * k)}" viewBox="${x} ${y} ${w0} ${h0}">${inner}</svg>` };
+}
+
 function group(spec: z.infer<typeof groupSchema>, t: Theme): Box & { verified: boolean; issues: string[] } {
-  const boxes = spec.parts.map((p) => (p.kind === "cards" ? cards(p, t) : leaf(p, t)));
+  const boxes = spec.parts.map((p) => (p.kind === "cards" ? cards(p, t) : p.kind === "svg" ? svgPart(p) : leaf(p, t)));
   const across = spec.direction === "horizontal";
   const gap = 26;
   const parts: string[] = [];
@@ -740,7 +754,9 @@ export function buildVisual(spec: VisualSpec, style: FigureStyle = DEFAULT_STYLE
     `<rect x="0" y="0" width="${W}" height="${H}" fill="${t.paper}"/>` +
     (framed ? frameRect(t, pad / 2, pad / 2, W - pad, H - pad) : "") +
     `<g transform="translate(${pad + fpad},${pad + fpad})">${box.body}</g></svg>`;
-  return { svg, description: describeVisual(spec), source: "program", verified: (box as { verified?: boolean }).verified !== false, issues: (box as { issues?: string[] }).issues ?? [] };
+  // A group with a model-drawn part is not program-drawn as a whole: it is checked like a model drawing.
+  const modelPart = spec.kind === "group" && spec.parts.some((p) => p.kind === "svg");
+  return { svg, description: describeVisual(spec), source: modelPart ? "model" : "program", verified: !modelPart && (box as { verified?: boolean }).verified !== false, issues: (box as { issues?: string[] }).issues ?? [] };
 }
 
 const time12 = (h: number, m: number) => `${h % 12 === 0 ? 12 : h % 12}:${String(m).padStart(2, "0")}`;
@@ -791,6 +807,8 @@ function describeLeaf(s: VisualLeaf): string {
       return describeSpeech(s);
     case "tile_row":
       return describeTileRow(s);
+    case "reflection":
+      return describeReflection(s);
   }
 }
 
@@ -805,7 +823,7 @@ export function describeVisual(spec: VisualSpec): string {
   if (spec.kind === "svg") return spec.description;
   if (spec.kind === "cards") return describeCards(spec);
   if (spec.kind === "group")
-    return `${spec.parts.length} figure areas ${spec.direction === "horizontal" ? "side by side" : "one under another"}: ${spec.parts.map((p, i) => `area ${i + 1}: ${p.kind === "cards" ? describeCards(p) : describeLeaf(p)}`).join("; ")}${spec.caption ? `; caption "${spec.caption}"` : ""}`;
+    return `${spec.parts.length} figure areas ${spec.direction === "horizontal" ? "side by side" : "one under another"}: ${spec.parts.map((p, i) => `area ${i + 1}: ${p.kind === "cards" ? describeCards(p) : p.kind === "svg" ? p.description : describeLeaf(p)}`).join("; ")}${spec.caption ? `; caption "${spec.caption}"` : ""}`;
   return describeLeaf(spec);
 }
 
@@ -825,7 +843,8 @@ export const VISUAL_GUIDE = `FIGURES — when a question needs a figure, add "fi
 - {"kind":"star","points":3–12,"tip_angle":degrees (under 180 − 360/points),"divide"?:"none"|"tips"|"inner" (lines from the centre to every tip → identical concave quadrilaterals; to every inner corner → identical kites),"show_division"?:bool,"symmetry_lines"?:bool,"show_piece"?:bool (one piece drawn beside the star),"piece_labels"?:{"centre"?:s,"tip"?:s,"inner"?:s} (e.g. "38°", "?"),"tip_label"?:s,"caption"?:s} — a star drawn to scale; every angle follows from "points" and "tip_angle" (piece cut to the tips: 360/points at the centre, tip_angle/2 at each tip, 360 − 360/points − tip_angle at the inner corner), so the angles in the question must be these
 - {"kind":"speech","speakers":[{"text":s,"name"?:s}] (1–3),"choices"?:[s] (2–6, drawn underneath with empty circles),"caption"?:s} — someone saying something: a simple child figure with a speech bubble beside the head (the program lays it out so nothing covers anything)
 - {"kind":"tile_row","tile":"triangle"|"square"|"hexagon","tiles":int (tiles drawn),"shaded"?:int (first ones filled),"dashed_from"?:int (tiles from this one drawn dashed),"continues"?:bool (dashed lines: the row goes on, its length not shown),"side_label"?:s,"caption"?:s} — equal tiles side by side in a row (equilateral triangles alternate up and down). Around the outside a row of n tiles has n + 2 sides (triangles; odd n ≥ 3 makes a trapezium, even n a parallelogram), 2n + 2 (squares), 4n + 2 (hexagons); the program checks the question's numbers against this
+- {"kind":"reflection","grid":n (2–6),"cells":[[row,col],…] (the shape's squares, 0-based; use a shape with no line of symmetry),"first_line"?:"vertical"|"horizontal" (line l; m is the other),"labels"?:{"first"?:"l","second"?:"m"},"targets"?:bool (empty boxes in the other corners, default true),"cards":["original"|"flip_h"|"flip_v"|"rotate_180"|"rotate_90"|"rotate_270",…] (2–6 numbered cards, each the shape after that change),"show_grid"?:bool,"caption"?:s} — "reflected in line l, then in line m": the shape top-left, lines l and m, target boxes, cards underneath. After reflecting in a vertical l the shape is "flip_h" (top-right box); after both it is "rotate_180" (bottom-right box); exactly one card should show each; the program checks the answer's cards
 - {"kind":"cards","columns":1-4,"cards":[{"label"?:s,"figure"?:<one of the kinds above>,"icon"?:"circle"|"star"|"square"|"triangle"|"heart"|"apple"|"flower","caption"?:s,"answer_box"?:bool,"checkbox"?:bool}]} — a sheet of cards, e.g. sequence cards each with a clock and an activity, item cards with a name and a price ("label": "$1.50", "caption": "orange juice", a simple "icon" instead of a picture), or answer choices to tick ("columns": 1, "checkbox": true)
 - {"kind":"group","direction"?:"vertical"|"horizontal","parts":[<a kind above or cards>, …] (2–4),"caption"?:s} — several figure areas, e.g. the priced item cards and, under them, the answer choices with checkboxes
 - {"kind":"svg","svg":"<svg …>…</svg>","description":"exact description of everything drawn"} — ONLY when no kind above fits; simple line drawing, viewBox about 400×300, no text that gives the answer away; nothing may cover anything else (no shape over a face, a figure or text), and everything stays inside the picture.
-Rules: the figure must show exactly the information the question needs (no more, no less, nothing that gives the answer away unless the template does the same); refer to it in the stem the way the examples do; prefer the same kind and layout of figure as the examples.`;
+Rules: labels, captions and titles are short texts drawn on the figure (at most 40 characters) — never put a description of the figure in them; the figure must show exactly the information the question needs (no more, no less, nothing that gives the answer away unless the template does the same); refer to it in the stem the way the examples do; prefer the same kind and layout of figure as the examples.`;

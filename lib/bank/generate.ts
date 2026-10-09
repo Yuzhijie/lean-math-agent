@@ -39,6 +39,7 @@ import { tablesIn, withoutTables, type ParsedTable } from "../markdown-table";
 import { allStarAngles, type StarSpec } from "../figure/star";
 import { svgOverlaps } from "../figure/svg-overlap";
 import { outsideSides, rowShape, type TileRowSpec } from "../figure/tiles";
+import { reflectionAnswer, type ReflectionSpec } from "../figure/reflection";
 
 const MAX_COUNT = 10;
 const EXEMPLARS = 5;
@@ -632,6 +633,51 @@ export function tileRowCheck(c: Pick<Draft, "stem" | "type" | "options" | "answe
   return { mismatch: false, detail: lt(`程序核对：${n} 块外围 ${sides} 条边，周长 ${sides} × ${side} = ${perimeter}`, `checked by the program: ${n} tiles have ${sides} outside sides, perimeter ${sides} × ${side} = ${perimeter}`) };
 }
 
+/** Card numbers the answer puts in each place: [after the first reflection, after both]. */
+function placedCards(answer: string, firstAt: "top-right" | "bottom-left"): { first?: number; both?: number } {
+  const text = answer.normalize("NFKC");
+  const segs = text.split(/[;；\n，、,]|\bthen\b|\band\b|然后|再|和|→|->/i).map((x) => x.trim()).filter(Boolean);
+  const out: { first?: number; both?: number; order: number[] } = { order: [] };
+  for (const seg of segs) {
+    const card = /(?:card|卡片?|第)\s*(\d)/i.exec(seg)?.[1] ?? /^\s*(\d)\b/.exec(seg)?.[1];
+    if (!card) continue;
+    const n = Number(card);
+    out.order.push(n);
+    const where = /(upper|top|上)[\s-]*(right|右)|右上/i.test(seg) ? "top-right" : /(lower|bottom|下)[\s-]*(left|左)|左下/i.test(seg) ? "bottom-left" : /(lower|bottom|下)[\s-]*(right|右)|右下/i.test(seg) ? "bottom-right" : null;
+    if (where === firstAt) out.first = n;
+    else if (where === "bottom-right") out.both = n;
+  }
+  // Without places: the first card named goes after the first reflection, the second after both.
+  if (out.first === undefined && out.both === undefined && out.order.length >= 2) return { first: out.order[0], both: out.order[1] };
+  return { first: out.first, both: out.both };
+}
+
+/**
+ * "Reflected in line l, then in line m": with a reflection figure, the program knows which card shows
+ * the shape after each reflection. Exactly one card must fit each place (and the shape must not be
+ * symmetric), and the answer must name those cards. Null when not applicable.
+ */
+export function reflectionCheck(c: Pick<Draft, "type" | "options" | "answer" | "figure">): { mismatch: boolean; detail: string } | null {
+  const spec = specNodes(c.figure?.spec).find((n) => n.kind === "reflection") as unknown as ReflectionSpec | undefined;
+  if (!spec) return null;
+  const a = reflectionAnswer(spec);
+  const place = (p: string) => lt({ "top-right": "右上", "bottom-left": "左下", "bottom-right": "右下" }[p] ?? p, p);
+  if (a.symmetric) return { mismatch: true, detail: lt("图形是对称的，翻折前后看不出区别，换一个不对称的图形", "the shape is symmetric, so the reflections cannot be told apart; use a shape with no line of symmetry") };
+  if (a.duplicateCards.length)
+    return { mismatch: true, detail: lt(`有的卡片看起来一样（卡片 ${a.duplicateCards.join("、")} 与前面的卡片相同），换别的变换或形状`, `some cards look the same (card ${a.duplicateCards.join(", ")} repeats an earlier card); use other changes or another shape`) };
+  if (a.firstCards.length !== 1 || a.bothCards.length !== 1)
+    return {
+      mismatch: true,
+      detail: lt(`卡片不对：第一次翻折后的图形应恰有一张（现有 ${a.firstCards.length} 张），两次翻折后的也应恰有一张（现有 ${a.bothCards.length} 张）`, `the cards do not work: exactly one card should show the shape after the first reflection (found ${a.firstCards.length}) and exactly one after both (found ${a.bothCards.length})`),
+    };
+  const text = c.type === "multiple_choice" && c.options?.length ? (c.options[LETTERS.indexOf(answerLetter(c.answer, c.options.length) ?? "")] ?? c.answer) : c.answer;
+  const got = placedCards(text, a.afterFirst);
+  const want = `card ${a.firstCards[0]} → ${a.afterFirst}, card ${a.bothCards[0]} → ${a.afterBoth}`;
+  if (got.first === undefined || got.both === undefined) return { mismatch: true, detail: lt(`答案没有说清哪张卡放哪里；正确的是：卡片 ${a.firstCards[0]} 放${place(a.afterFirst)}，卡片 ${a.bothCards[0]} 放右下`, `the answer does not say which card goes where; correct: ${want}`) };
+  if (got.first !== a.firstCards[0] || got.both !== a.bothCards[0]) return { mismatch: true, detail: lt(`正确的是：卡片 ${a.firstCards[0]} 放${place(a.afterFirst)}，卡片 ${a.bothCards[0]} 放右下（答案是卡片 ${got.first} 和 ${got.both}）`, `correct: ${want} (the answer has cards ${got.first} and ${got.both})`) };
+  return { mismatch: false, detail: lt(`程序核对：卡片 ${a.firstCards[0]} 放${place(a.afterFirst)}，卡片 ${a.bothCards[0]} 放右下`, `checked by the program: ${want}`) };
+}
+
 /** Money in cents ("$1.50", "50c", "2元", "¥3.5", "1.20"), or null. */
 function money(text: string): number | null {
   const t = text.normalize("NFKC");
@@ -695,11 +741,13 @@ export function selectionCheck(c: Pick<Draft, "stem" | "type" | "options" | "ans
 }
 
 function answerCheck(c: Draft, independent: string | undefined, resolveError: string | undefined): Check {
-  const sel = selectionCheck(c) ?? tileRowCheck(c);
+  const sel = selectionCheck(c) ?? tileRowCheck(c) ?? reflectionCheck(c);
   if (sel?.mismatch) return check(false, sel.detail);
   const arith = sel ?? arithmeticCheck(c);
   if (arith?.mismatch) return check(false, arith.detail);
   const extra = arith ? ` ${arith.detail}` : "";
+  // Checked by the program: enough for answers no solver can compare (e.g. "card 1 top right, card 4 bottom right").
+  if (sel && c.type !== "multiple_choice" && c.type !== "numeric") return check(true, sel.detail);
   if (c.type !== "multiple_choice" && c.type !== "numeric") {
     return check(true, lt(`${typeName(c.type)}的答案无法自动核对，请人工检查`, `${typeName(c.type)} answers are not checked automatically; please review`) + extra, true);
   }

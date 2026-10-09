@@ -154,6 +154,8 @@ question is reworded once (same numbers, options and figure) before it is checke
 Tiles placed side by side in a row (triangles, squares, hexagons) are drawn by the program, and the
 program checks the perimeter against the number of tiles (and that an even number of triangles is
 not called a trapezium).
+"Reflected in line l, then in line m" questions are drawn by the program (the shape, the two lines,
+target boxes and shape cards), and the program checks which cards the answer puts in which box.
 "Select all" questions keep their whole answer (e.g. A, D). When such a question gives a total
 ("she spent exactly $5"), the program tries every combination of the options' prices: exactly one
 combination must make the total, and it must be the answer. When the template questions have 3D figures,
