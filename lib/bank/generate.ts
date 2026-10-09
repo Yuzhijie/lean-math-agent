@@ -38,6 +38,7 @@ import type { CandidateFigure } from "./types";
 import { tablesIn, withoutTables, type ParsedTable } from "../markdown-table";
 import { allStarAngles, type StarSpec } from "../figure/star";
 import { svgOverlaps } from "../figure/svg-overlap";
+import { outsideSides, rowShape, type TileRowSpec } from "../figure/tiles";
 
 const MAX_COUNT = 10;
 const EXEMPLARS = 5;
@@ -244,7 +245,8 @@ const RESOLVE_SYSTEM = `You solve math questions independently and carefully. Fo
 Return JSON only: {"answers": [{"n": number, "answer": string}]} with one entry per question number.`;
 
 const JUDGE_SYSTEM = `You review generated math questions against the profile of the question type they should belong to.
-Score each question 1–5 for fit: 5 = clearly the same type (same skill, knowledge points, grade, difficulty, answer form, stem style); 3 = acceptable; 1 = a different kind of question, wrong difficulty or grade, or badly posed.
+Score each question 1–5 for fit: 5 = clearly the same type (same skill, knowledge points, grade, difficulty, answer form, stem style, figure layout); 3 = acceptable; 1 = a different kind of question, wrong difficulty or grade, or badly posed.
+Judge the type and layout only: the answer key is checked separately (an independent solver and the program), so do not lower the score because you think the answer is wrong.
 Give a short reason (one sentence, Chinese).
 Return JSON only: {"scores": [{"n": number, "score": 1-5, "reason": string}]} with one entry per question number.`;
 
@@ -391,8 +393,21 @@ function valueAt(raw: unknown, path: Array<string | number>): unknown {
 }
 
 /** Draw a question's figure spec; an unusable spec becomes `figureIssue`. */
-function drawFigure(raw: unknown, style: FigureStyle): { figure?: CandidateFigure; figureIssue?: string } {
-  if (raw === undefined || raw === null) return {};
+/** Names models use for constructions the geometry spec has under another name. */
+function normaliseSpec(raw: unknown): unknown {
+  if (Array.isArray(raw)) return raw.map(normaliseSpec);
+  if (!raw || typeof raw !== "object") return raw;
+  const o = Object.fromEntries(Object.entries(raw as Record<string, unknown>).map(([k, v]) => [k, normaliseSpec(v)]));
+  if ((o.op === "equilateral_triangle" || o.op === "regular_triangle") && Array.isArray(o.ids) && o.ids.length === 3) {
+    const sides = o.sides && typeof o.sides === "object" ? Object.values(o.sides as Record<string, unknown>).find((v) => typeof v === "number") : undefined;
+    return { op: "regular_polygon", ids: o.ids, side: typeof o.side === "number" ? o.side : typeof o.length === "number" ? o.length : (sides ?? 4) };
+  }
+  return o;
+}
+
+function drawFigure(rawSpec: unknown, style: FigureStyle): { figure?: CandidateFigure; figureIssue?: string } {
+  if (rawSpec === undefined || rawSpec === null) return {};
+  const raw = normaliseSpec(rawSpec);
   const parsed = visualSpecSchema.safeParse(raw);
   if (!parsed.success) {
     const i = parsed.error.issues[0];
@@ -484,16 +499,24 @@ async function repairFigures(drafts: Draft[], figures: FigurePlan, inLang: <T>(f
     return [];
   }
   const fixed: number[] = [];
+  const tried = new Map<Draft, string>();
   for (const f of res.fixes) {
     const d = drafts[Math.round(f.n) - 1];
     if (!d || !todo.some((t) => t.d === d) || f.figure === undefined || f.figure === null) continue;
     const drawn = drawFigure(f.figure, figures.style);
-    if (!drawn.figure) continue;
+    if (!drawn.figure) {
+      tried.set(d, drawn.figureIssue ?? "");
+      continue;
+    }
     d.figure = drawn.figure;
     d.figureIssue = drawn.figureIssue;
     d.figureRaw = f.figure;
     fixed.push(drafts.indexOf(d));
   }
+  // Say on the check what the repair round did when it did not help.
+  for (const { d } of todo)
+    if (!d.figure && d.figureIssue && !fixed.includes(drafts.indexOf(d)) && !/重画|redraw/.test(d.figureIssue))
+      d.figureIssue = `${d.figureIssue} — ${tried.has(d) ? lt(`重画一次仍无效：${tried.get(d)}`, `still unusable after one redraw: ${tried.get(d)}`) : lt("重画一次，模型没有给出新图", "one redraw asked, the model gave no new figure")}`;
   return fixed;
 }
 
@@ -560,6 +583,55 @@ function arithmeticCheck(c: Draft): { mismatch: boolean; detail: string } | null
   return { mismatch: false, detail: lt(`算式核对通过（${r.expression} = ${r.computed}）`, `arithmetic verified (${r.expression} = ${r.computed})`) };
 }
 
+/** The value an answer stands for: the option text for a letter, else the answer itself. */
+function answerValue(c: Pick<Draft, "type" | "options" | "answer">): number | null {
+  if (c.type === "multiple_choice" && c.options?.length) {
+    const l = answerLetter(c.answer, c.options.length);
+    return l ? parseNumber(c.options[LETTERS.indexOf(l)]) : null;
+  }
+  return parseNumber(c.answer);
+}
+
+/**
+ * Tiles in a row: the perimeter must be (sides around the outside) × (side length) for the number
+ * of tiles, and a row of triangles named a trapezium / parallelogram must have an odd / even count.
+ * Works when the figure is a tile_row and the stem gives the side and either the perimeter (answer:
+ * the number of tiles) or the number of tiles (answer: the perimeter). Null when not applicable.
+ */
+export function tileRowCheck(c: Pick<Draft, "stem" | "type" | "options" | "answer" | "figure">): { mismatch: boolean; detail: string } | null {
+  const row = specNodes(c.figure?.spec).find((n) => n.kind === "tile_row") as unknown as TileRowSpec | undefined;
+  if (!row) return null;
+  const stem = withoutTables(c.stem).normalize("NFKC");
+  const side = parseNumber(row.side_label ?? "") ?? (() => {
+    const m = /(?:sides?|边长?)[^\d]{0,20}?(\d+(?:\.\d+)?)\s*(?:cm|mm|m\b|厘米|米)/i.exec(stem) ?? /(\d+(?:\.\d+)?)\s*(?:cm|mm|m|厘米|米)\s*(?:long|长)/i.exec(stem);
+    return m ? parseFloat(m[1]) : null;
+  })();
+  if (side === null) return null;
+  const perM = /(?:perimeter|周长)[^\d]{0,40}?(\d+(?:\.\d+)?)/i.exec(stem);
+  const tilesM = /(\d+)\s*(?:\w+\s+)?(?:tiles|块|个)/i.exec(stem);
+  const ans = answerValue(c);
+  if (ans === null) return null;
+  let n: number, perimeter: number;
+  if (perM) {
+    n = ans;
+    perimeter = parseFloat(perM[1]);
+  } else if (tilesM) {
+    n = parseInt(tilesM[1], 10);
+    perimeter = ans;
+  } else return null;
+  if (!Number.isInteger(n) || n < 1) return null;
+  const sides = outsideSides(row.tile, n);
+  const shape = rowShape(row.tile, n);
+  const shapeNames = lt({ trapezium: "梯形", parallelogram: "平行四边形", triangle: "三角形", square: "正方形", rectangle: "长方形", hexagon: "六边形", "row of hexagons": "一排六边形" }[shape] ?? shape, shape);
+  if (Math.abs(sides * side - perimeter) > 1e-6)
+    return { mismatch: true, detail: lt(`${n} 块拼成一排，外围有 ${sides} 条边，周长应为 ${sides} × ${side} = ${sides * side}，不是 ${perimeter}`, `${n} tiles in a row have ${sides} sides around the outside, so the perimeter is ${sides} × ${side} = ${sides * side}, not ${perimeter}`) };
+  if (row.tile === "triangle" && /trapezi|trapezoid|梯形/i.test(stem) && shape !== "trapezium")
+    return { mismatch: true, detail: lt(`${n} 个三角形拼成的是${shapeNames}，不是梯形`, `${n} triangles in a row make a ${shape}, not a trapezium`) };
+  if (row.tile === "triangle" && /parallelogram|平行四边形/i.test(stem) && shape !== "parallelogram")
+    return { mismatch: true, detail: lt(`${n} 个三角形拼成的是${shapeNames}，不是平行四边形`, `${n} triangles in a row make a ${shape}, not a parallelogram`) };
+  return { mismatch: false, detail: lt(`程序核对：${n} 块外围 ${sides} 条边，周长 ${sides} × ${side} = ${perimeter}`, `checked by the program: ${n} tiles have ${sides} outside sides, perimeter ${sides} × ${side} = ${perimeter}`) };
+}
+
 /** Money in cents ("$1.50", "50c", "2元", "¥3.5", "1.20"), or null. */
 function money(text: string): number | null {
   const t = text.normalize("NFKC");
@@ -623,7 +695,7 @@ export function selectionCheck(c: Pick<Draft, "stem" | "type" | "options" | "ans
 }
 
 function answerCheck(c: Draft, independent: string | undefined, resolveError: string | undefined): Check {
-  const sel = selectionCheck(c);
+  const sel = selectionCheck(c) ?? tileRowCheck(c);
   if (sel?.mismatch) return check(false, sel.detail);
   const arith = sel ?? arithmeticCheck(c);
   if (arith?.mismatch) return check(false, arith.detail);
@@ -651,7 +723,7 @@ function numbersIn(text: string): string {
 }
 
 /** Stems too close to a bank question are reworded once (same numbers, options, figure and answer). Returns the drafts changed. */
-async function rewordTooClose(drafts: Draft[], bankItems: Item[], inLang: <T>(fn: () => Promise<T>) => Promise<T>): Promise<number> {
+async function rewordTooClose(drafts: Draft[], bankItems: Item[], inLang: <T>(fn: () => Promise<T>) => Promise<T>, notes = new Map<number, string>()): Promise<number> {
   const index = new StemIndex<string>();
   for (const it of bankItems) index.add(it.stem, it.stem);
   const close = drafts.map((d, i) => ({ d, i, near: index.nearest(d.stem) })).filter((x) => x.near && x.near.score >= TOO_CLOSE);
@@ -668,24 +740,37 @@ async function rewordTooClose(drafts: Draft[], bankItems: Item[], inLang: <T>(fn
         noCache: true,
       }),
     );
-  } catch {
+  } catch (e) {
+    for (const x of close) notes.set(x.i, lt(`改写失败：${errText(e)}`, `rewording failed: ${errText(e)}`));
     return 0;
   }
+  for (const x of close) notes.set(x.i, lt("改写一次，模型没有给出新题干", "one rewording asked, the model gave none"));
   let changed = 0;
   for (const r of res.stems) {
     const x = close.find((c) => c.i === Math.round(r.n) - 1);
     const stem = r.stem.trim();
-    if (!x || !stem || numbersIn(stem) !== numbersIn(x.d.stem)) continue; // a rewording must keep every number
-    if (isSelectAll(x.d.stem) !== isSelectAll(stem)) continue;
+    if (!x || !stem) continue;
+    if (numbersIn(stem) !== numbersIn(x.d.stem)) {
+      notes.set(x.i, lt("改写后数字变了，未采用", "the rewording changed a number and was not used")); // a rewording must keep every number
+      continue;
+    }
+    if (isSelectAll(x.d.stem) !== isSelectAll(stem)) {
+      notes.set(x.i, lt("改写后不再是“选出所有”题，未采用", "the rewording dropped the select-all form and was not used"));
+      continue;
+    }
     const after = index.nearest(stem);
-    if (after && after.score >= x.near!.score) continue;
+    if (after && after.score >= x.near!.score) {
+      notes.set(x.i, lt("改写后没有更不同，未采用", "the rewording was not less similar and was not used"));
+      continue;
+    }
     x.d.stem = stem;
+    notes.delete(x.i);
     changed++;
   }
   return changed;
 }
 
-function noveltyChecks(drafts: Draft[], bankItems: Item[]): Check[] {
+function noveltyChecks(drafts: Draft[], bankItems: Item[], notes = new Map<number, string>()): Check[] {
   const index = new StemIndex<string>();
   for (const it of bankItems) {
     const label = it.source?.label ? `${it.source.label}: ` : "";
@@ -695,7 +780,7 @@ function noveltyChecks(drafts: Draft[], bankItems: Item[]): Check[] {
     const near = index.nearest(d.stem);
     index.add(lt(`本批第 ${i + 1} 道候选题`, `candidate ${i + 1} of this batch`), d.stem);
     const pct = near ? Math.round(near.score * 100) : 0;
-    if (near && near.score >= TOO_CLOSE) return check(false, lt(`与${near.item}过于相似（${pct}%）`, `too close to ${near.item} (${pct}%)`));
+    if (near && near.score >= TOO_CLOSE) return check(false, lt(`与${near.item}过于相似（${pct}%）`, `too close to ${near.item} (${pct}%)`) + (notes.has(i) ? ` — ${notes.get(i)}` : ""));
     return check(true, near ? lt(`最相近的题目相似度 ${pct}%`, `closest question is ${pct}% similar`) : lt("没有相近的题目", "no similar question"));
   });
 }
@@ -851,7 +936,8 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
   // Figures the program could not draw (or a required kind left out) go back to the writer once, with the error.
   if (figures.on) await repairFigures(drafts, figures, inLang);
   // Stems that read like a bank question are reworded once (same numbers, options, figure, answer).
-  await rewordTooClose(drafts, listItems(owner, bankId), inLang);
+  const rewordNotes = new Map<number, string>();
+  await rewordTooClose(drafts, listItems(owner, bankId), inLang, rewordNotes);
   // Model-drawn figures (no kind fitted): the vision model checks them against their description.
   const svgChecks = figures.on ? await checkModelFigures(drafts) : new Map<number, Check>();
   // A model-drawn figure that does not match, or a figure whose angles contradict the question: one more repair round.
@@ -893,7 +979,7 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
   if (judged.status === "fulfilled") for (const s of judged.value.scores) scores.set(Math.round(s.n), { score: s.score, reason: s.reason.trim() });
 
   // 3. Checks.
-  const novelty = noveltyChecks(drafts, listItems(owner, bankId));
+  const novelty = noveltyChecks(drafts, listItems(owner, bankId), rewordNotes);
   const candidates: Candidate[] = drafts.map((d, i) => {
     const n = i + 1;
     const fitScore = scores.get(n);

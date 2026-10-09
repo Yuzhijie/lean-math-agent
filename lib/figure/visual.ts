@@ -27,6 +27,7 @@ import { cubeStackSchema, describeCubeStack, describeSolid, drawCubeStack, drawS
 import { figureSpecSchema } from "./spec";
 import { describeSpeech, drawSpeech, speechSchema } from "./speech";
 import { describeStar, drawStar, starSchema } from "./star";
+import { describeTileRow, drawTileRow, tileRowSchema } from "./tiles";
 
 // ── Style ───────────────────────────────────────────────────────────
 
@@ -162,7 +163,7 @@ const groupsSchema = z.object({
 });
 const geometrySchema = z.object({ kind: z.literal("geometry"), spec: figureSpecSchema });
 
-const leafSchemas = [clockSchema, numberLineSchema, barChartSchema, pictographSchema, tableSchema, gridShapeSchema, fractionSchema, groupsSchema, geometrySchema, cubeStackSchema, solidSchema, starSchema, speechSchema] as const;
+const leafSchemas = [clockSchema, numberLineSchema, barChartSchema, pictographSchema, tableSchema, gridShapeSchema, fractionSchema, groupsSchema, geometrySchema, cubeStackSchema, solidSchema, starSchema, speechSchema, tileRowSchema] as const;
 export const visualLeafSchema = z.discriminatedUnion("kind", [...leafSchemas]);
 export type VisualLeaf = z.infer<typeof visualLeafSchema>;
 
@@ -201,7 +202,7 @@ const svgSchema = z.object({ kind: z.literal("svg"), svg: z.string().min(20).max
 export const visualSpecSchema = z.discriminatedUnion("kind", [...leafSchemas, cardsSchema, groupSchema, svgSchema]);
 export type VisualSpec = z.infer<typeof visualSpecSchema>;
 
-export const VISUAL_KINDS = ["clock", "number_line", "bar_chart", "pictograph", "table", "grid_shape", "fraction", "groups", "geometry", "cube_stack", "solid", "star", "speech", "cards", "group", "svg"] as const;
+export const VISUAL_KINDS = ["clock", "number_line", "bar_chart", "pictograph", "table", "grid_shape", "fraction", "groups", "geometry", "cube_stack", "solid", "star", "speech", "tile_row", "cards", "group", "svg"] as const;
 
 /** Every figure in a spec: itself, the parts of a group and the figures on cards. */
 export function specNodes(spec: unknown): Array<Record<string, unknown> & { kind: string }> {
@@ -610,6 +611,8 @@ function leaf(spec: VisualLeaf, t: Theme): Box & { verified?: boolean; issues?: 
       return drawStar(spec, { ...pen(t), accent: t.accent });
     case "speech":
       return drawSpeech(spec, { ...pen(t), accent: t.accent });
+    case "tile_row":
+      return drawTileRow(spec, { ...pen(t), accent: t.accent });
   }
 }
 
@@ -786,6 +789,8 @@ function describeLeaf(s: VisualLeaf): string {
       return describeStar(s);
     case "speech":
       return describeSpeech(s);
+    case "tile_row":
+      return describeTileRow(s);
   }
 }
 
@@ -819,6 +824,7 @@ export const VISUAL_GUIDE = `FIGURES — when a question needs a figure, add "fi
 - {"kind":"solid","shape":"cube"|"cuboid"|"triangular_prism"|"square_pyramid"|"triangular_pyramid"|"cylinder"|"cone"|"sphere"|"hemisphere","length"?:n,"width"?:n,"height"?:n,"radius"?:n (proportions only),"labels"?:{"length"?:s,"width"?:s,"height"?:s,"radius"?:s} (text written on the edges, e.g. "6 cm"),"hidden_edges"?:bool,"projection"?:"oblique"|"isometric","caption"?:s} — a 3D solid with hidden edges dashed; length = left–right, width = front–back, height = up
 - {"kind":"star","points":3–12,"tip_angle":degrees (under 180 − 360/points),"divide"?:"none"|"tips"|"inner" (lines from the centre to every tip → identical concave quadrilaterals; to every inner corner → identical kites),"show_division"?:bool,"symmetry_lines"?:bool,"show_piece"?:bool (one piece drawn beside the star),"piece_labels"?:{"centre"?:s,"tip"?:s,"inner"?:s} (e.g. "38°", "?"),"tip_label"?:s,"caption"?:s} — a star drawn to scale; every angle follows from "points" and "tip_angle" (piece cut to the tips: 360/points at the centre, tip_angle/2 at each tip, 360 − 360/points − tip_angle at the inner corner), so the angles in the question must be these
 - {"kind":"speech","speakers":[{"text":s,"name"?:s}] (1–3),"choices"?:[s] (2–6, drawn underneath with empty circles),"caption"?:s} — someone saying something: a simple child figure with a speech bubble beside the head (the program lays it out so nothing covers anything)
+- {"kind":"tile_row","tile":"triangle"|"square"|"hexagon","tiles":int (tiles drawn),"shaded"?:int (first ones filled),"dashed_from"?:int (tiles from this one drawn dashed),"continues"?:bool (dashed lines: the row goes on, its length not shown),"side_label"?:s,"caption"?:s} — equal tiles side by side in a row (equilateral triangles alternate up and down). Around the outside a row of n tiles has n + 2 sides (triangles; odd n ≥ 3 makes a trapezium, even n a parallelogram), 2n + 2 (squares), 4n + 2 (hexagons); the program checks the question's numbers against this
 - {"kind":"cards","columns":1-4,"cards":[{"label"?:s,"figure"?:<one of the kinds above>,"icon"?:"circle"|"star"|"square"|"triangle"|"heart"|"apple"|"flower","caption"?:s,"answer_box"?:bool,"checkbox"?:bool}]} — a sheet of cards, e.g. sequence cards each with a clock and an activity, item cards with a name and a price ("label": "$1.50", "caption": "orange juice", a simple "icon" instead of a picture), or answer choices to tick ("columns": 1, "checkbox": true)
 - {"kind":"group","direction"?:"vertical"|"horizontal","parts":[<a kind above or cards>, …] (2–4),"caption"?:s} — several figure areas, e.g. the priced item cards and, under them, the answer choices with checkboxes
 - {"kind":"svg","svg":"<svg …>…</svg>","description":"exact description of everything drawn"} — ONLY when no kind above fits; simple line drawing, viewBox about 400×300, no text that gives the answer away; nothing may cover anything else (no shape over a face, a figure or text), and everything stays inside the picture.

@@ -151,6 +151,9 @@ over a face, a shape over text — is caught by the program and redrawn.
 Questions whose template has several figure areas (priced item cards, then answer choices with
 checkboxes) are drawn with the same areas, and a new question that copies the wording of a bank
 question is reworded once (same numbers, options and figure) before it is checked.
+Tiles placed side by side in a row (triangles, squares, hexagons) are drawn by the program, and the
+program checks the perimeter against the number of tiles (and that an even number of triangles is
+not called a trapezium).
 "Select all" questions keep their whole answer (e.g. A, D). When such a question gives a total
 ("she spent exactly $5"), the program tries every combination of the options' prices: exactly one
 combination must make the total, and it must be the answer. When the template questions have 3D figures,
