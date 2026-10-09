@@ -42,6 +42,8 @@ import { outsideSides, rowShape, type TileRowSpec } from "../figure/tiles";
 import { reflectionAnswer, type ReflectionSpec } from "../figure/reflection";
 
 const MAX_COUNT = 10;
+/** Writing rounds per generation: the first, plus extra ones while fewer than the requested number pass. */
+const MAX_ROUNDS = 3;
 const EXEMPLARS = 5;
 const JUDGE_PASS = 3;
 
@@ -939,7 +941,6 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
   const bank = getBank(owner, bankId);
   if (!bank.allow_model) throw new BankError(lt("该题库不允许将内容发送给模型服务", "this bank does not allow sending its content to the model service"), 403);
   const count = Math.min(MAX_COUNT, Math.max(1, Math.floor(Number(args.count) || 1)));
-  const ask = Math.ceil(count * 1.5);
   const { label, profile, exemplars, note: templateNote, matched } = await resolveTemplate(owner, bankId, template);
   const inLang = <T>(fn: () => Promise<T>) => inBankLanguage(bank, fn);
 
@@ -961,7 +962,7 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
     ...(areaCount(exemplars) > 1 ? { areas: areaCount(exemplars) } : {}),
   };
   const figureNote = visuals?.note ? lt(`未能读取模板图形（${visuals.note}），新题按文字出`, `the template's figures could not be read (${visuals.note}); questions were written from the text`) : undefined;
-  const note = [templateNote, figureNote].filter(Boolean).join(lt("；", "; ")) || undefined;
+  const baseNote = [templateNote, figureNote].filter(Boolean).join(lt("；", "; ")) || undefined;
 
   // 1. Write candidates.
   const exemplarText = exemplars.length
@@ -972,85 +973,119 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
         })
         .join("\n\n")}`
     : "No example questions: follow the profile.";
-  const user = [`PROFILE\n${profileText(profile, figures, hints)}`, exemplarText, `Write ${ask} new question(s) of this type.`].join("\n\n");
   const system = figures.on ? `${GENERATE_SYSTEM.replace(FIGURE_RULE, FIGURE_RULE_WITH_SPECS)}\n\n${VISUAL_GUIDE}` : GENERATE_SYSTEM;
-  let generated: z.infer<typeof generatedSchema>;
-  try {
-    generated = await inLang(() => chatJson({ system, user, schema: generatedSchema, schemaName: "SameTypeQuestions", temperature: 0.8, noCache: true, ...(figures.on ? { maxTokens: 12000 } : {}) }));
-  } catch (e) {
-    throw new BankError(lt(`生成失败：${errText(e)}`, `generation failed: ${errText(e)}`), 502);
-  }
-  const drafts = generated.questions.slice(0, ask * 2).map((q) => toDraft(q, profile, figures.style));
-  // Figures the program could not draw (or a required kind left out) go back to the writer once, with the error.
-  if (figures.on) await repairFigures(drafts, figures, inLang);
-  // Stems that read like a bank question are reworded once (same numbers, options, figure, answer).
-  const rewordNotes = new Map<number, string>();
-  await rewordTooClose(drafts, listItems(owner, bankId), inLang, rewordNotes);
-  // Model-drawn figures (no kind fitted): the vision model checks them against their description.
-  const svgChecks = figures.on ? await checkModelFigures(drafts) : new Map<number, Check>();
-  // A model-drawn figure that does not match, or a figure whose angles contradict the question: one more repair round.
-  if (figures.on && drafts.some((d, i) => (svgChecks.get(i) && !svgChecks.get(i)!.ok && !svgChecks.get(i)!.skipped) || (d.figure?.source === "program" && angleCheck(d)?.ok === false))) {
-    const fixed = await repairFigures(drafts, figures, inLang, svgChecks);
-    for (const i of fixed) svgChecks.delete(i);
-    const again = await checkModelFigures(fixed.map((i) => drafts[i]));
-    for (const [k, c] of again) svgChecks.set(fixed[k], c);
-  }
 
-  // 2. Independent re-solve and fit judge (in parallel; neither sees the other).
-  const solvable = drafts.map((d, i) => ({ d, n: i + 1 })).filter(({ d }) => d.type === "multiple_choice" || d.type === "numeric");
-  const resolveP = solvable.length
-    ? inLang(() =>
-        chatJson({
-          system: RESOLVE_SYSTEM,
-          user: `Questions:\n\n${solvable.map(({ d, n }) => describeItem(withFigureText(d), n, false)).join("\n\n")}`,
-          schema: resolveSchema,
-          schemaName: "IndependentAnswers",
-          temperature: 0,
-          noCache: true,
-        }),
-      )
-    : Promise.resolve({ answers: [] });
-  const judgeP = inLang(() =>
-    chatJson({
-      system: JUDGE_SYSTEM,
-      user: `PROFILE\n${profileText(profile, figures, hints)}\n\nGenerated questions:\n\n${listForModel(drafts.map(withFigureText), true)}`,
-      schema: judgeSchema,
-      schemaName: "FitScores",
-      temperature: 0,
-      noCache: true,
-    }),
-  );
-  const [resolved, judged] = await Promise.allSettled([resolveP, judgeP]);
-  const answers = new Map<number, string>();
-  if (resolved.status === "fulfilled") for (const a of resolved.value.answers) answers.set(Math.round(a.n), a.answer.trim());
-  const scores = new Map<number, { score: number; reason: string }>();
-  if (judged.status === "fulfilled") for (const s of judged.value.scores) scores.set(Math.round(s.n), { score: s.score, reason: s.reason.trim() });
+  /** One round: write `ask` questions, repair, reword, check. `earlier` = candidates of earlier rounds (not to be repeated). */
+  const round = async (ask: number, earlier: Candidate[]): Promise<Candidate[]> => {
+    const earlierText = earlier.length
+      ? `EARLIER ATTEMPTS — write different questions (new contexts and numbers), and avoid what made these fail:\n${earlier
+          .map((c) => {
+            const bad = Object.values(c.checks).filter((k) => !k.ok && !k.skipped).map((k) => k.detail);
+            return `- "${clip(c.stem.replace(/\s+/g, " "), 140)}"${bad.length ? ` — failed: ${clip(bad.join("; "), 300)}` : " — passed"}`;
+          })
+          .join("\n")}`
+      : "";
+    const user = [`PROFILE\n${profileText(profile, figures, hints)}`, exemplarText, earlierText, `Write ${ask} new question(s) of this type.`].filter(Boolean).join("\n\n");
+    let generated: z.infer<typeof generatedSchema>;
+    try {
+      generated = await inLang(() => chatJson({ system, user, schema: generatedSchema, schemaName: "SameTypeQuestions", temperature: 0.8, noCache: true, ...(figures.on ? { maxTokens: 12000 } : {}) }));
+    } catch (e) {
+      throw new BankError(lt(`生成失败：${errText(e)}`, `generation failed: ${errText(e)}`), 502);
+    }
+    const drafts = generated.questions.slice(0, ask * 2).map((q) => toDraft(q, profile, figures.style));
+    // Figures the program could not draw (or a required kind left out) go back to the writer once, with the error.
+    if (figures.on) await repairFigures(drafts, figures, inLang);
+    // Stems that read like a bank question are reworded once (same numbers, options, figure, answer).
+    const rewordNotes = new Map<number, string>();
+    await rewordTooClose(drafts, listItems(owner, bankId), inLang, rewordNotes);
+    // Model-drawn figures (no kind fitted): the vision model checks them against their description.
+    const svgChecks = figures.on ? await checkModelFigures(drafts) : new Map<number, Check>();
+    // A model-drawn figure that does not match, or a figure whose angles contradict the question: one more repair round.
+    if (figures.on && drafts.some((d, i) => (svgChecks.get(i) && !svgChecks.get(i)!.ok && !svgChecks.get(i)!.skipped) || (d.figure?.source === "program" && angleCheck(d)?.ok === false))) {
+      const fixed = await repairFigures(drafts, figures, inLang, svgChecks);
+      for (const i of fixed) svgChecks.delete(i);
+      const again = await checkModelFigures(fixed.map((i) => drafts[i]));
+      for (const [k, c] of again) svgChecks.set(fixed[k], c);
+    }
 
-  // 3. Checks.
-  const novelty = noveltyChecks(drafts, listItems(owner, bankId), rewordNotes);
-  const candidates: Candidate[] = drafts.map((d, i) => {
-    const n = i + 1;
-    const fitScore = scores.get(n);
-    const fit =
-      judged.status === "rejected"
-        ? check(true, lt(`匹配度评审未完成：${errText(judged.reason)}`, `fit review failed: ${errText(judged.reason)}`), true)
-        : !fitScore
-          ? check(true, lt("评审没有给出这道题的分数", "the review gave no score for this question"), true)
-          : check(fitScore.score >= JUDGE_PASS, `${lt("匹配度", "fit")} ${fitScore.score}/5${fitScore.reason ? ` — ${fitScore.reason}` : ""}`);
-    const figure = figures.on || d.figure || d.figureIssue ? figureCheck(d, svgChecks.get(i), figures.tables, figures.solids) : undefined;
-    const checks = {
-      format: formatCheck(d, profile),
-      answer: answerCheck(d, answers.get(n), resolved.status === "rejected" ? errText(resolved.reason) : undefined),
-      novelty: novelty[i],
-      fit,
-      ...(figure ? { figure } : {}),
-    };
-    const passed = Object.values(checks).every((c) => c.skipped || c.ok);
-    const { figureIssue: _issue, figureRaw: _raw, ...candidate } = d;
-    void _issue;
-    void _raw;
-    return { ...candidate, checks, passed };
-  });
+    // 2. Independent re-solve and fit judge (in parallel; neither sees the other).
+    const solvable = drafts.map((d, i) => ({ d, n: i + 1 })).filter(({ d }) => d.type === "multiple_choice" || d.type === "numeric");
+    const resolveP = solvable.length
+      ? inLang(() =>
+          chatJson({
+            system: RESOLVE_SYSTEM,
+            user: `Questions:\n\n${solvable.map(({ d, n }) => describeItem(withFigureText(d), n, false)).join("\n\n")}`,
+            schema: resolveSchema,
+            schemaName: "IndependentAnswers",
+            temperature: 0,
+            noCache: true,
+          }),
+        )
+      : Promise.resolve({ answers: [] });
+    const judgeP = inLang(() =>
+      chatJson({
+        system: JUDGE_SYSTEM,
+        user: `PROFILE\n${profileText(profile, figures, hints)}\n\nGenerated questions:\n\n${listForModel(drafts.map(withFigureText), true)}`,
+        schema: judgeSchema,
+        schemaName: "FitScores",
+        temperature: 0,
+        noCache: true,
+      }),
+    );
+    const [resolved, judged] = await Promise.allSettled([resolveP, judgeP]);
+    const answers = new Map<number, string>();
+    if (resolved.status === "fulfilled") for (const a of resolved.value.answers) answers.set(Math.round(a.n), a.answer.trim());
+    const scores = new Map<number, { score: number; reason: string }>();
+    if (judged.status === "fulfilled") for (const s of judged.value.scores) scores.set(Math.round(s.n), { score: s.score, reason: s.reason.trim() });
+
+    // 3. Checks.
+    // Earlier rounds' questions count as existing questions for the novelty check.
+    const novelty = noveltyChecks(drafts, [...listItems(owner, bankId), ...earlier.map((c) => ({ stem: c.stem }) as Item)], rewordNotes);
+    const candidates: Candidate[] = drafts.map((d, i) => {
+      const n = i + 1;
+      const fitScore = scores.get(n);
+      const fit =
+        judged.status === "rejected"
+          ? check(true, lt(`匹配度评审未完成：${errText(judged.reason)}`, `fit review failed: ${errText(judged.reason)}`), true)
+          : !fitScore
+            ? check(true, lt("评审没有给出这道题的分数", "the review gave no score for this question"), true)
+            : check(fitScore.score >= JUDGE_PASS, `${lt("匹配度", "fit")} ${fitScore.score}/5${fitScore.reason ? ` — ${fitScore.reason}` : ""}`);
+      const figure = figures.on || d.figure || d.figureIssue ? figureCheck(d, svgChecks.get(i), figures.tables, figures.solids) : undefined;
+      const checks = {
+        format: formatCheck(d, profile),
+        answer: answerCheck(d, answers.get(n), resolved.status === "rejected" ? errText(resolved.reason) : undefined),
+        novelty: novelty[i],
+        fit,
+        ...(figure ? { figure } : {}),
+      };
+      const passed = Object.values(checks).every((c) => c.skipped || c.ok);
+      const { figureIssue: _issue, figureRaw: _raw, ...candidate } = d;
+      void _issue;
+      void _raw;
+      return { ...candidate, checks, passed };
+    });
+    return candidates;
+  };
+
+  // Rounds: when fewer than `count` questions pass, write more (at most two more rounds), telling the writer what failed.
+  const all: Candidate[] = [];
+  for (let r = 0; r < MAX_ROUNDS; r++) {
+    const need = count - all.filter((c) => c.passed).length;
+    if (need <= 0) break;
+    try {
+      all.push(...(await round(r === 0 ? Math.ceil(count * 1.5) : Math.min(MAX_COUNT, need + 1), all)));
+    } catch (e) {
+      if (r === 0) throw e;
+      break; // keep what earlier rounds produced
+    }
+  }
+  const candidates = all;
+  const passedCount = candidates.filter((c) => c.passed).length;
+  const shortNote =
+    passedCount < count
+      ? lt(`要求 ${count} 道，通过全部检查的有 ${passedCount} 道（已补写 ${MAX_ROUNDS - 1} 轮）；未通过的题可展开查看原因`, `${count} requested, ${passedCount} passed every check (after ${MAX_ROUNDS - 1} extra rounds); the others are shown with their check results`)
+      : undefined;
+  const note = [baseNote, shortNote].filter(Boolean).join(lt("；", "; ")) || undefined;
 
   // 4. Passed first (at most `count`), then the failed ones so the UI can show why.
   const passed = candidates.filter((c) => c.passed).slice(0, count);

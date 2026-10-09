@@ -156,6 +156,8 @@ program checks the perimeter against the number of tiles (and that an even numbe
 not called a trapezium).
 "Reflected in line l, then in line m" questions are drawn by the program (the shape, the two lines,
 target boxes and shape cards), and the program checks which cards the answer puts in which box.
+When fewer questions pass the checks than were asked for, generation writes more (up to two more
+rounds), telling the model what went wrong with the earlier ones.
 "Select all" questions keep their whole answer (e.g. A, D). When such a question gives a total
 ("she spent exactly $5"), the program tries every combination of the options' prices: exactly one
 combination must make the total, and it must be the answer. When the template questions have 3D figures,

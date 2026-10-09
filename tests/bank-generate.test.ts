@@ -171,13 +171,39 @@ describe("parseNumber", () => {
 });
 
 describe("same-type generation", () => {
+  it("writes more rounds while fewer than the requested number pass, telling the writer what failed", async () => {
+    const { bank, cat } = setup();
+    const first = replies.generate as { questions: unknown[] };
+    const more = [
+      { questions: [{ stem: "A shop sells 15 pens and then 9 more. How many pens did it sell?", type: "multiple_choice", options: ["6", "24", "25", "21"], answer: "B", solution: "15 + 9 = 24" }] },
+      { questions: [{ stem: "There are 40 chairs in 5 equal rows. How many chairs are in each row?", type: "multiple_choice", options: ["6", "8", "9", "35"], answer: "B", solution: "40 ÷ 5 = 8" }] },
+    ];
+    let writes = 0;
+    Object.defineProperty(replies, "generate", { get: () => (writes === 0 ? (writes++, first) : more[writes++ - 1] ?? { questions: [] }), configurable: true });
+    const g = await generateFromTemplate({ owner: "local", bankId: bank.id, template: { category_id: cat.id }, count: 3 });
+    const writeCalls = callsOf("generate");
+    expect(writeCalls).toHaveLength(3);
+    const second = writeCalls[1].messages[writeCalls[1].messages.length - 1].content;
+    expect(second).toContain("EARLIER ATTEMPTS");
+    expect(second).toMatch(/garden.*failed:/s);
+    expect(second).toContain("Write 3 new question(s)");
+    expect(g.candidates.filter((c) => c.passed).map((c) => c.stem)).toEqual([expect.stringMatching(/baker/), expect.stringMatching(/pens/), expect.stringMatching(/chairs/)]);
+    expect(g.candidates.slice(0, 3).every((c) => c.passed)).toBe(true);
+    expect(g.note ?? "").not.toMatch(/requested|要求/);
+  });
+
   it("checks every candidate and puts passed ones first", async () => {
     const { bank, cat } = setup();
+    // One writing round only here (extra rounds are tested below): later rounds get an unusable reply.
+    const firstRound = replies.generate;
+    let writes = 0;
+    Object.defineProperty(replies, "generate", { get: () => (writes++ === 0 ? firstRound : { questions: [] }), configurable: true });
     const g = await generateFromTemplate({ owner: "local", bankId: bank.id, template: { category_id: cat.id }, count: 3 });
     expect(g.mode).toBe("same_type");
     expect(g.requested).toBe(3);
     expect(g.template_label).toBe("One-step problems");
     expect(g.candidates).toHaveLength(4);
+    expect(g.note).toMatch(/3 requested, 1 passed|要求 3 道，通过全部检查的有 1 道/);
 
     const [good, ...failed] = g.candidates;
     expect(good.stem).toMatch(/baker/);
@@ -199,8 +225,8 @@ describe("same-type generation", () => {
     expect(three.checks.format.ok).toBe(false);
     expect(three.checks.format.detail).toMatch(/3/);
 
-    // One call of each kind; 1.5 × 3 → 5 candidates requested; the solver never sees the proposed answers.
-    expect(callsOf("generate")).toHaveLength(1);
+    // One solve and one review; 1.5 × 3 → 5 candidates requested in the first round (the extra round got an unusable reply); the solver never sees the proposed answers.
+    expect(callsOf("generate").length).toBeGreaterThan(1);
     expect(callsOf("generate")[0].messages[1].content).toContain("Write 5 new question(s)");
     expect(callsOf("generate")[0].messages[1].content).toContain("do NOT copy");
     const solve = callsOf("resolve");
