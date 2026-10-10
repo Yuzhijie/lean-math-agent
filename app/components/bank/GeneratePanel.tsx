@@ -325,7 +325,7 @@ function CandidateCard({
       <div className="break-words text-sm leading-relaxed">
         <MathText text={c.stem} />
       </div>
-      {c.figure && <QuestionFigure svg={c.figure.svg} source={c.figure.source} verified={c.figure.verified} />}
+      {c.figure && <QuestionFigure svg={c.figure.svg} source={c.figure.source} verified={c.figure.verified} compact />}
       {c.options && c.options.length > 0 && (
         <ol className="space-y-0.5 text-sm">
           {c.options.map((o, i) => (

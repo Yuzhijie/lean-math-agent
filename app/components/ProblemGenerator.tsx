@@ -51,7 +51,9 @@ import {
   Info,
   AlertTriangle,
   Loader2,
+  MoreHorizontal,
 } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 /** What a generated problem carries over when it is used: its computed figure, or the model's SVG. */
 export interface UsedProblemFigure {
@@ -483,6 +485,14 @@ function ProblemCard({
       setAdopt({ state: "error", message: e instanceof Error ? e.message : String(e) });
     }
   }
+  const use = () =>
+    onUse(
+      bank?.figure
+        ? { fallbackSvg: bank.figure.svg, description: bank.figure.description }
+        : figure || problem.diagram_svg
+          ? { figure, fallbackSvg: problem.diagram_svg }
+          : undefined,
+    );
   const status = bank ? cardStatus(bank) : undefined;
   const issues = bank ? checkIssues(bank) : [];
   const checkNames: Record<CheckKey, string> = {
@@ -584,7 +594,7 @@ function ProblemCard({
         {/* Diagram */}
         {/* Computed + checked figure; the model's own SVG is only a fallback. */}
         {bank?.figure ? (
-          <QuestionFigure svg={bank.figure.svg} source={bank.figure.source} verified={bank.figure.verified} />
+          <QuestionFigure svg={bank.figure.svg} source={bank.figure.source} verified={bank.figure.verified} compact />
         ) : (
           <FigurePanel key={problem.id} problemText={problem.statement} fallbackSvg={problem.diagram_svg} onFigure={setFigure} />
         )}
@@ -649,67 +659,49 @@ function ProblemCard({
           </div>
         )}
 
-        {/* Actions */}
-        <div className="flex flex-wrap items-center gap-2 pt-1">
-          <Button
-            size="sm"
-            onClick={() =>
-              onUse(
-                bank?.figure
-                  ? { fallbackSvg: bank.figure.svg, description: bank.figure.description }
-                  : figure || problem.diagram_svg
-                    ? { figure, fallbackSvg: problem.diagram_svg }
-                    : undefined,
-              )
-            }
-            disabled={disabled}
-            className="gap-1.5"
-          >
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            {tr("使用此题", "Use this problem")}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => setShowHints(!showHints)}
-            className="gap-1.5"
-          >
-            {showHints ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-            {showHints ? tr("隐藏提示", "Hide hints") : tr("查看提示", "Show hints")}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => setShowAnswer(!showAnswer)}
-            className="gap-1.5"
-          >
-            {showAnswer ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-            {showAnswer ? tr("隐藏答案", "Hide answer") : tr("查看答案", "Show answer")}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={onFormalize}
-            disabled={disabled}
-            className="gap-1.5"
-          >
-            <FileCode className="h-3.5 w-3.5" />
-            {tr("形式化", "Formalize")}
-          </Button>
+        {/* Actions: one main action (bank questions: add to the bank; otherwise: use it), the rest smaller */}
+        <div className="flex flex-wrap items-center gap-2 pt-1" data-testid="card-actions">
           {bank && (
             <Button
               size="sm"
-              variant="outline"
               onClick={() => void addToBank()}
               disabled={adopt.state === "done"}
               loading={adopt.state === "busy"}
+              variant={adopt.state === "done" ? "outline" : "default"}
               className="gap-1.5"
               title={bank.passed ? undefined : tr("这道题未通过全部检查，加入后会标记为“未核对”", "This question did not pass all checks; it will be marked unchecked")}
             >
-              <BookPlus className="h-3.5 w-3.5" />
+              {adopt.state === "done" ? <CircleCheck className="h-3.5 w-3.5" /> : <BookPlus className="h-3.5 w-3.5" />}
               {adopt.state === "done" ? tr("已加入题库", "Added to bank") : tr("加入题库", "Add to bank")}
             </Button>
           )}
+          <Button size="sm" variant={bank ? "outline" : "default"} onClick={use} disabled={disabled} className="gap-1.5">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            {tr("使用此题", "Use this problem")}
+          </Button>
+          <div className="ml-auto flex items-center gap-0.5">
+            {problem.hints.length > 0 && (
+              <IconToggle on={showHints} onClick={() => setShowHints(!showHints)} label={showHints ? tr("隐藏提示", "Hide hints") : tr("查看提示", "Show hints")}>
+                <Lightbulb className="h-4 w-4" />
+              </IconToggle>
+            )}
+            <IconToggle on={showAnswer} onClick={() => setShowAnswer(!showAnswer)} label={showAnswer ? tr("隐藏答案", "Hide answer") : tr("查看答案", "Show answer")}>
+              {showAnswer ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </IconToggle>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="ghost" className="h-8 w-8 p-0" aria-label={tr("更多操作", "More actions")} title={tr("更多操作", "More actions")}>
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={onFormalize} disabled={disabled} className="gap-2">
+                  <FileCode className="h-3.5 w-3.5" />
+                  {tr("形式化（Lean 证明）", "Formalize (Lean proof)")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
         {adopt.state === "error" && <p className="text-xs text-destructive">{adopt.message}</p>}
 
@@ -876,5 +868,22 @@ function ResultSummary({
         </span>
       )}
     </div>
+  );
+}
+
+/** Small icon button that shows/hides something (hints, answer); the label is its tooltip. */
+function IconToggle({ on, onClick, label, children }: { on: boolean; onClick: () => void; label: string; children: React.ReactNode }) {
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      onClick={onClick}
+      aria-label={label}
+      aria-pressed={on}
+      title={label}
+      className={cn("h-8 w-8 p-0", on && "bg-primary/10 text-primary")}
+    >
+      {children}
+    </Button>
   );
 }
