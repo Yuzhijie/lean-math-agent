@@ -10,6 +10,7 @@ import { MethodList } from "./components/MethodList";
 import { MethodComparison } from "./components/MethodComparison";
 import { PipelineProgress } from "./components/PipelineProgress";
 import { ProblemGenerator, type UsedProblemFigure } from "./components/ProblemGenerator";
+import { useBanks } from "./components/BankTemplateControls";
 import { SessionHistory } from "./components/SessionHistory";
 import { LocaleSwitcher } from "./components/LocaleSwitcher";
 import { StepCard } from "./components/StepCard";
@@ -27,6 +28,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import { FigurePanel } from "./components/FigurePanel";
 import { DiagramSvg } from "./components/DiagramSvg";
+import { QuestionFigure } from "./components/QuestionFigure";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import {
   Calculator,
@@ -47,6 +49,7 @@ import {
   Columns3,
   Pencil,
   Library,
+  Wand2,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -100,7 +103,6 @@ export default function Home() {
     error,
     autoformalizeDetail,
     validationResults,
-    showGenerator,
     nlSolution,
     leanProofAttempt,
     solvedProblemType,
@@ -112,6 +114,18 @@ export default function Home() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [showComparison, setShowComparison] = useState(false);
   const [stepsExpanded, setStepsExpanded] = useState(false);
+  // What the page is for right now: solving a problem, or generating questions (from the bank / built-in).
+  // Wide screens show the generator and the solver side by side; narrow screens show one at a time.
+  const [workspace, setWorkspace] = useState<"solve" | "bank" | "builtin">("solve");
+  const [generatorMode, setGeneratorMode] = useState<"bank" | "builtin">("bank");
+  const generating = workspace !== "solve";
+  const { banks } = useBanks();
+  const hasBank = !!banks?.length;
+  const problemCardRef = useRef<HTMLDivElement>(null);
+  const pickWorkspace = (w: "solve" | "bank" | "builtin") => {
+    setWorkspace(w);
+    if (w !== "solve") setGeneratorMode(w);
+  };
   // After "使用此题" the raw input box is hidden and only the rendered problem is shown.
   const [inputHidden, setInputHidden] = useState(false);
   // Figure carried over from the generator; shown under the problem while its text is unchanged.
@@ -123,6 +137,12 @@ export default function Home() {
     dispatch({ type: "SET_PROBLEM_FIGURES", figures: figure?.description ? { refs: [], text, description: figure.description } : null });
     setInputHidden(true);
     setUsedFigure(figure ? { ...figure, text } : null);
+  };
+  /** "使用此题" in the generator: narrow screens switch to solving; then the problem card scrolls into view. */
+  const useFromGenerator = (text: string, figure?: UsedProblemFigure) => {
+    useProblemFromGenerator(text, figure);
+    if (!window.matchMedia("(min-width: 1280px)").matches) setWorkspace("solve");
+    requestAnimationFrame(() => problemCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
 
   // "使用此题" from the question bank (/bank) arrives as ?problem=<text>, with the question's
@@ -168,6 +188,7 @@ export default function Home() {
   const handleLoadSession = (sessionId: string) => {
     void loadSession(sessionId);
     setHistoryOpen(false);
+    if (!window.matchMedia("(min-width: 1280px)").matches) setWorkspace("solve");
   };
 
   const hasResults = !!(nlSolution || leanProofAttempt || methods.length > 0);
@@ -239,38 +260,63 @@ export default function Home() {
                   <Library className="h-3.5 w-3.5" />
                   <span className="hidden sm:inline">{tr("题库", "Bank")}</span>
                 </Link>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => dispatch({ type: "TOGGLE_GENERATOR" })}
-                  disabled={!!busy}
-                  className="gap-1.5"
-                >
-                  <Sparkles className="h-3.5 w-3.5" />
-                  <span className="hidden sm:inline">
-                    {showGenerator ? tr("收起", "Hide") : tr("生成题目", "Generate problem")}
-                  </span>
-                </Button>
               </div>
             </div>
           </div>
         </header>
 
         {/* ── Main Content ──────────────────────────────────────────── */}
-        <main className="mx-auto max-w-6xl px-4 sm:px-6 py-6 space-y-6">
-          {/* Problem Generator (collapsible) */}
-          {showGenerator && (
-            <div className="animate-slide-down">
-              <ProblemGenerator
-                onUseProblem={useProblemFromGenerator}
-                onFormalize={useProblemFromGenerator}
-                disabled={!!busy}
-              />
+        <main className={cn("mx-auto px-4 sm:px-6 py-6 space-y-5", generating ? "max-w-6xl xl:max-w-[1480px]" : "max-w-6xl")}>
+          {/* What to do: solve a problem, or generate questions */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <div role="radiogroup" aria-label={tr("要做什么", "What to do")} className="inline-flex rounded-lg border border-border/60 bg-card/60 p-1" data-testid="workspace-switch">
+              {(
+                [
+                  ["solve", <Calculator key="i" className="h-4 w-4" />, tr("求解一道题", "Solve a problem"), undefined],
+                  ["bank", <Library key="i" className="h-4 w-4" />, tr("从题库出题", "From the bank"), hasBank ? undefined : tr("题库中还没有题目：先在“题库”页面导入", "No bank questions yet: import some on the Bank page first")],
+                  ["builtin", <Wand2 key="i" className="h-4 w-4" />, tr("内置出题", "Built-in generator"), undefined],
+                ] as const
+              ).map(([w, icon, label, off]) => (
+                <button
+                  key={w}
+                  type="button"
+                  role="radio"
+                  aria-checked={workspace === w}
+                  disabled={!!off}
+                  title={off}
+                  onClick={() => pickWorkspace(w)}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+                    workspace === w ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                  )}
+                >
+                  {icon}
+                  {label}
+                </button>
+              ))}
             </div>
-          )}
+            {generating && (
+              <p className="hidden text-xs text-muted-foreground xl:block">
+                {tr("左边出题，右边求解：点“使用此题”会把题目放到右边。", "Generate on the left, solve on the right: “Use this problem” puts it on the right.")}
+              </p>
+            )}
+          </div>
 
+          <div className={cn(generating && "xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] xl:items-start xl:gap-6")}>
+          {/* Generator: kept mounted while solving, so its results are still there when you come back */}
+          <section className={cn(!generating && "hidden", "@container")} aria-label={tr("出题", "Generate")}>
+            <ProblemGenerator
+              mode={generatorMode}
+              onUseProblem={useFromGenerator}
+              onFormalize={useFromGenerator}
+              disabled={!!busy}
+            />
+          </section>
+
+          {/* Solver */}
+          <section className={cn("@container space-y-6", generating && "max-xl:hidden")} aria-label={tr("求解", "Solve")}>
           {/* Problem Input Card */}
-          <Card className="animate-fade-in">
+          <Card className="animate-fade-in scroll-mt-20" ref={problemCardRef}>
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="flex items-center gap-2 text-base">
@@ -319,7 +365,7 @@ export default function Home() {
                       </Button>
                     )}
                   </div>
-                  <div className="mt-1.5 text-sm">
+                  <div className="mt-1.5 whitespace-pre-line text-sm">
                     <MathText text={problemText} />
                   </div>
                   {usedFigure && usedFigure.text === problemText && (
@@ -327,7 +373,12 @@ export default function Home() {
                       {usedFigure.figure ? (
                         <FigurePanel problemText={problemText} initialFigure={usedFigure.figure} />
                       ) : usedFigure.fallbackSvg ? (
-                        <DiagramSvg svg={usedFigure.fallbackSvg} />
+                        usedFigure.description ? (
+                          // A generated question's figure (program-drawn, on paper): a thumbnail that opens full size.
+                          <QuestionFigure svg={usedFigure.fallbackSvg} compact />
+                        ) : (
+                          <DiagramSvg svg={usedFigure.fallbackSvg} />
+                        )
                       ) : usedFigure.images?.length ? (
                         <div className="flex flex-wrap gap-3" data-testid="problem-images">
                           {usedFigure.images.map((im) => (
@@ -575,7 +626,7 @@ export default function Home() {
                         </Button>
                       </div>
                     )}
-                    <div className="grid grid-cols-1 md:grid-cols-[minmax(220px,0.85fr)_minmax(280px,1.15fr)] gap-4">
+                    <div className="grid grid-cols-1 @2xl:grid-cols-[minmax(220px,0.85fr)_minmax(280px,1.15fr)] gap-4">
                       <MethodList
                         methods={methods}
                         scores={state.methodScores}
@@ -673,7 +724,7 @@ export default function Home() {
                     </div>
 
                     {/* Steps + Lean side by side */}
-                    <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-border">
+                    <div className="grid grid-cols-1 @4xl:grid-cols-2 divide-y @4xl:divide-y-0 @4xl:divide-x divide-border">
                       <StepPane
                         steps={steps}
                         selectedIndex={state.selectedStepIndex ?? undefined}
@@ -850,6 +901,8 @@ export default function Home() {
               </CardContent>
             </Card>
           )}
+          </section>
+          </div>
         </main>
 
         {/* ── Session History Sidebar ──────────────────────────────── */}

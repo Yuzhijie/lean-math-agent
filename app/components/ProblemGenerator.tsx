@@ -66,6 +66,8 @@ export interface UsedProblemFigure {
 }
 
 type Props = {
+  /** Set by the page (its "what to do" switch): the generator then shows no method switch of its own. */
+  mode?: "bank" | "builtin";
   onUseProblem: (problemText: string, figure?: UsedProblemFigure) => void;
   onFormalize: (problemText: string) => void;
   disabled?: boolean;
@@ -106,7 +108,7 @@ function getLabels(tr: Tr) {
   return { GRADE_LABELS, DIFFICULTY_LABELS, DOMAIN_LABELS };
 }
 
-export function ProblemGenerator({ onUseProblem, onFormalize, disabled }: Props) {
+export function ProblemGenerator({ mode: modeProp, onUseProblem, onFormalize, disabled }: Props) {
   const { tr } = useI18n();
   const { GRADE_LABELS, DIFFICULTY_LABELS, DOMAIN_LABELS } = getLabels(tr);
   const [gradeLevel, setGradeLevel] = useState<GradeLevel>("high");
@@ -120,12 +122,20 @@ export function ProblemGenerator({ onUseProblem, onFormalize, disabled }: Props)
   // Method 2: built-in generation by level / difficulty / domain (unchanged).
   const { banks } = useBanks();
   const [mode, setMode] = useState<"bank" | "builtin" | null>(null);
-  const activeMode = mode ?? (banks?.length ? "bank" : "builtin");
+  const activeMode = modeProp === "bank" && banks && !banks.length ? "builtin" : (modeProp ?? mode ?? (banks?.length ? "bank" : "builtin"));
   const [bankValue, setBankValue] = useState<BankTemplateValue>({ bankId: "", grade: "", difficulty: 0, topic: "" });
   const bankId = bankValue.bankId || banks?.[0]?.id || "";
   const [match, setMatch] = useState<{ exact: number; topic: number } | null>(null);
   const onMatchChange = useCallback((m: { exact: number; topic: number } | null) => setMatch(m), []);
   const [resultNote, setResultNote] = useState<string | null>(null);
+  // The page switched method: results of the other method no longer apply.
+  const [shownMode, setShownMode] = useState(activeMode);
+  if (shownMode !== activeMode) {
+    setShownMode(activeMode);
+    setProblems([]);
+    setResultNote(null);
+    setError(null);
+  }
   // Bank mode: candidates that failed a check are kept but hidden behind a toggle.
   const [showFailed, setShowFailed] = useState(false);
   const failedBank = problems.filter((p) => p.bank && !p.bank.passed);
@@ -245,7 +255,7 @@ export function ProblemGenerator({ onUseProblem, onFormalize, disabled }: Props)
             <Sparkles className="h-4 w-4 text-primary" />
             <h2 className="text-sm font-semibold text-foreground">{tr("题目生成器", "Problem generator")}</h2>
           </div>
-          <div role="radiogroup" aria-label={tr("出题方式", "Generation method")} className="inline-flex rounded-md border border-border/60 p-0.5 text-xs">
+          {!modeProp && <div role="radiogroup" aria-label={tr("出题方式", "Generation method")} className="inline-flex rounded-md border border-border/60 p-0.5 text-xs">
             {(
               [
                 ["bank", <Library key="i" className="h-3.5 w-3.5" />, tr("以本地题库为模板", "Local bank as template")],
@@ -274,11 +284,11 @@ export function ProblemGenerator({ onUseProblem, onFormalize, disabled }: Props)
                 {text}
               </button>
             ))}
-          </div>
+          </div>}
         </div>
 
         {/* Controls */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 @lg:grid-cols-4 @3xl:grid-cols-5 gap-3">
           {activeMode === "bank" && banks?.length ? (
             <BankTemplateControls
               banks={banks}

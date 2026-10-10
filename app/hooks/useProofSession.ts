@@ -61,7 +61,6 @@ export interface ProofSessionState {
   busy: string | null;
   error: string | null;
   leanView: "full" | "step";
-  showGenerator: boolean;
 }
 
 export type UiPhase = "idle" | "enumerated" | "planned" | "proving" | "verified";
@@ -77,7 +76,6 @@ export type Action =
   // input
   | { type: "SET_PROBLEM_TEXT"; text: string }
   | { type: "SET_PROBLEM_FIGURES"; figures: ProofSessionState["problemFigures"] }
-  | { type: "TOGGLE_GENERATOR" }
 
   // async lifecycle
   | { type: "REQUEST"; operation: string }
@@ -208,7 +206,6 @@ export const INITIAL_STATE: ProofSessionState = {
   busy: null,
   error: null,
   leanView: "full",
-  showGenerator: false,
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -295,8 +292,6 @@ function reducer(
     case "SET_PROBLEM_FIGURES":
       return { ...state, problemFigures: action.figures, figureDescription: null };
 
-    case "TOGGLE_GENERATOR":
-      return { ...state, showGenerator: !state.showGenerator };
 
     // ── Async lifecycle ────────────────────────────────────────────
     case "REQUEST":

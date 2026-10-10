@@ -25,7 +25,7 @@ AI-powered Lean 4 math theorem prover + problem solver. Single-page Next.js app.
 
 ```
 app/
-  page.tsx                          # Single-page client app (useReducer state)
+  page.tsx                          # Single-page client app (useReducer state); a "what to do" switch at the top (求解一道题 / 从题库出题 / 内置出题): on ≥1280px the generator and the solver sit side by side, narrower screens show one (the generator stays mounted, so its results survive); "使用此题" switches to solving on narrow screens and scrolls to the problem card; result grids use container queries (@2xl/@4xl) so they fit a half-width column
   layout.tsx                        # Root layout (fonts, dark theme, KaTeX CSS, providers)
   providers.tsx                     # SessionProvider wrapper (NextAuth + I18n)
   globals.css                       # Tailwind v4 theme + CSS variables + animations
