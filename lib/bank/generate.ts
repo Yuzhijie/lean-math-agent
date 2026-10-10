@@ -936,11 +936,31 @@ const errText = (e: unknown) => clip(e instanceof Error ? e.message : String(e),
 
 // ── Generation ──────────────────────────────────────────────────────
 
-export async function generateFromTemplate(args: { owner: string; bankId: string; template: TemplateRef; count: number }): Promise<Generation> {
+/** Where a generation is, for a progress display (details follow the request language). */
+export interface GenerationProgress {
+  stage: "template" | "figures" | "writing" | "repairing" | "rewording" | "checking_figures" | "solving" | "round_done";
+  /** 1-based round; absent before the first round. */
+  round?: number;
+  rounds: number;
+  requested: number;
+  /** Questions that passed every check so far (after a round). */
+  passed?: number;
+  detail: string;
+}
+
+export async function generateFromTemplate(args: { owner: string; bankId: string; template: TemplateRef; count: number; onProgress?: (p: GenerationProgress) => void }): Promise<Generation> {
   const { owner, bankId, template } = args;
   const bank = getBank(owner, bankId);
   if (!bank.allow_model) throw new BankError(lt("该题库不允许将内容发送给模型服务", "this bank does not allow sending its content to the model service"), 403);
   const count = Math.min(MAX_COUNT, Math.max(1, Math.floor(Number(args.count) || 1)));
+  const progress = (p: Omit<GenerationProgress, "rounds" | "requested">) => {
+    try {
+      args.onProgress?.({ ...p, rounds: MAX_ROUNDS, requested: count });
+    } catch {
+      /* a progress listener never stops the generation */
+    }
+  };
+  progress({ stage: "template", detail: lt("正在选取模板题…", "Picking the template questions…") });
   const { label, profile, exemplars, note: templateNote, matched } = await resolveTemplate(owner, bankId, template);
   const inLang = <T>(fn: () => Promise<T>) => inBankLanguage(bank, fn);
 
@@ -948,7 +968,10 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
   const hints = templateHints(exemplars);
   // 0. Template figures (scans / photos): the vision model reads what they show and their style.
   let visuals: TemplateVisuals | undefined;
-  if (hasTemplateImages(exemplars)) visuals = await readTemplateVisuals(owner, bankId, exemplars, hints);
+  if (hasTemplateImages(exemplars)) {
+    progress({ stage: "figures", detail: lt("正在读取模板图形…", "Reading the template's figures…") });
+    visuals = await readTemplateVisuals(owner, bankId, exemplars, hints);
+  }
   const tables = templateTables(exemplars, visuals?.itemKinds ?? []);
   const solids = templateSolids(exemplars, visuals?.kinds ?? []);
   const figures: FigurePlan = {
@@ -976,7 +999,9 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
   const system = figures.on ? `${GENERATE_SYSTEM.replace(FIGURE_RULE, FIGURE_RULE_WITH_SPECS)}\n\n${VISUAL_GUIDE}` : GENERATE_SYSTEM;
 
   /** One round: write `ask` questions, repair, reword, check. `earlier` = candidates of earlier rounds (not to be repeated). */
-  const round = async (ask: number, earlier: Candidate[]): Promise<Candidate[]> => {
+  const round = async (ask: number, earlier: Candidate[], r: number): Promise<Candidate[]> => {
+    const step = (stage: GenerationProgress["stage"], zh: string, en: string) => progress({ stage, round: r, detail: lt(`第 ${r} 轮 · ${zh}`, `Round ${r} · ${en}`) });
+    step("writing", `正在写题（${ask} 道）…`, `writing ${ask} question${ask === 1 ? "" : "s"}…`);
     const earlierText = earlier.length
       ? `EARLIER ATTEMPTS — write different questions (new contexts and numbers), and avoid what made these fail:\n${earlier
           .map((c) => {
@@ -994,14 +1019,18 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
     }
     const drafts = generated.questions.slice(0, ask * 2).map((q) => toDraft(q, profile, figures.style));
     // Figures the program could not draw (or a required kind left out) go back to the writer once, with the error.
+    if (figures.on && drafts.some((d) => d.figureIssue || figureCheck(d, undefined, figures.tables, figures.solids)?.ok === false)) step("repairing", "正在修正图形…", "fixing figures…");
     if (figures.on) await repairFigures(drafts, figures, inLang);
     // Stems that read like a bank question are reworded once (same numbers, options, figure, answer).
     const rewordNotes = new Map<number, string>();
+    step("rewording", "正在查重…", "checking for duplicates…");
     await rewordTooClose(drafts, listItems(owner, bankId), inLang, rewordNotes);
     // Model-drawn figures (no kind fitted): the vision model checks them against their description.
+    if (figures.on) step("checking_figures", "正在检查图形…", "checking figures…");
     const svgChecks = figures.on ? await checkModelFigures(drafts) : new Map<number, Check>();
     // A model-drawn figure that does not match, or a figure whose angles contradict the question: one more repair round.
     if (figures.on && drafts.some((d, i) => (svgChecks.get(i) && !svgChecks.get(i)!.ok && !svgChecks.get(i)!.skipped) || (d.figure?.source === "program" && angleCheck(d)?.ok === false))) {
+      step("repairing", "正在重画有问题的图形…", "redrawing figures that failed…");
       const fixed = await repairFigures(drafts, figures, inLang, svgChecks);
       for (const i of fixed) svgChecks.delete(i);
       const again = await checkModelFigures(fixed.map((i) => drafts[i]));
@@ -1009,6 +1038,7 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
     }
 
     // 2. Independent re-solve and fit judge (in parallel; neither sees the other).
+    step("solving", "正在独立解题并评审…", "solving independently and reviewing…");
     const solvable = drafts.map((d, i) => ({ d, n: i + 1 })).filter(({ d }) => d.type === "multiple_choice" || d.type === "numeric");
     const resolveP = solvable.length
       ? inLang(() =>
@@ -1073,7 +1103,9 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
     const need = count - all.filter((c) => c.passed).length;
     if (need <= 0) break;
     try {
-      all.push(...(await round(r === 0 ? Math.ceil(count * 1.5) : Math.min(MAX_COUNT, need + 1), all)));
+      all.push(...(await round(r === 0 ? Math.ceil(count * 1.5) : Math.min(MAX_COUNT, need + 1), all, r + 1)));
+      const ok = all.filter((c) => c.passed).length;
+      progress({ stage: "round_done", round: r + 1, passed: ok, detail: lt(`第 ${r + 1} 轮完成：已通过 ${Math.min(ok, count)} / ${count} 道${ok < count && r + 1 < MAX_ROUNDS ? "，继续补写" : ""}`, `Round ${r + 1} done: ${Math.min(ok, count)} of ${count} passed${ok < count && r + 1 < MAX_ROUNDS ? "; writing more" : ""}`) });
     } catch (e) {
       if (r === 0) throw e;
       break; // keep what earlier rounds produced

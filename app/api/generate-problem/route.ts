@@ -32,6 +32,8 @@ const bankSourceSchema = z.object({
   category_id: z.string().min(1).max(64).optional(),
   knowledge_point: z.string().max(80).optional(),
   count: z.number().int().min(1).max(10).default(3),
+  /** Stream progress as NDJSON lines ({type: "progress" | "result" | "error"}) instead of one JSON reply. */
+  stream: z.boolean().optional(),
 });
 
 /** Method 1: the local question bank as the template (Level / Difficulty / Topic pick the template questions). */
@@ -41,7 +43,8 @@ async function generateFromBank(body: unknown) {
     const first = parsed.error.issues[0];
     return NextResponse.json({ error: `invalid request: ${first?.path.join(".")} ${first?.message}` }, { status: 400 });
   }
-  const { bank_id, count, ...selection } = parsed.data;
+  const { bank_id, count, stream, ...selection } = parsed.data;
+  if (stream) return streamFromBank(bank_id, count, selection);
   try {
     const owner = await requestOwner();
     const result = await generateProblemsFromBank({ owner, bankId: bank_id, selection: { grade: selection.grade, difficulty: selection.difficulty, category_id: selection.category_id, knowledge_point: selection.knowledge_point }, count });
@@ -51,6 +54,46 @@ async function generateFromBank(body: unknown) {
     console.error("[generate-problem/bank] caught error:", e);
     return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 502 });
   }
+}
+
+/** Same as generateFromBank, with progress lines while the model works (the generation takes minutes). */
+async function streamFromBank(bankId: string, count: number, selection: Omit<z.infer<typeof bankSourceSchema>, "source" | "bank_id" | "count" | "stream">) {
+  const owner = await requestOwner();
+  const encoder = new TextEncoder();
+  const body = new ReadableStream({
+    async start(controller) {
+      const send = (data: Record<string, unknown>) => {
+        try {
+          controller.enqueue(encoder.encode(`${JSON.stringify(data)}\n`));
+        } catch {
+          /* the client went away */
+        }
+      };
+      // Keeps proxies from closing a quiet connection during long model calls.
+      const beat = setInterval(() => send({ type: "ping" }), 15_000);
+      try {
+        const result = await generateProblemsFromBank({
+          owner,
+          bankId,
+          selection: { grade: selection.grade, difficulty: selection.difficulty, category_id: selection.category_id, knowledge_point: selection.knowledge_point },
+          count,
+          onProgress: (p) => send({ type: "progress", ...p }),
+        });
+        send({ type: "result", ...result });
+      } catch (e) {
+        if (!(e instanceof BankError)) console.error("[generate-problem/bank] caught error:", e);
+        send({ type: "error", error: e instanceof Error ? e.message : String(e), status: e instanceof BankError ? e.status : 502 });
+      } finally {
+        clearInterval(beat);
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
+      }
+    },
+  });
+  return new Response(body, { headers: { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-cache", "X-Accel-Buffering": "no" } });
 }
 
 async function handlePOST(req: Request) {

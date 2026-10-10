@@ -138,6 +138,51 @@ describe("POST /api/generate-problem with source bank", () => {
     expect(gen).toMatch(/Difficulty \(1–5\): 2/);
   });
 
+  it("streams progress lines, then the result; errors come as a line too", async () => {
+    const { bankId, fractions } = seed();
+    process.env.LLM_API_KEY = "k";
+    process.env.LLM_BASE_URL = "https://llm.test/v1";
+    process.env.LLM_MODEL = "m";
+    process.env.LLM_LOG_LEVEL = "silent";
+    process.env.LLM_CACHE_ENABLED = "false";
+    resetGlobalCache();
+    const reply = (content: unknown) => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }), { status: 200 });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_u: string, init: RequestInit) => {
+        const msgs = JSON.parse(String(init.body)).messages as Array<{ content: string }>;
+        const sys = msgs[0].content;
+        if (sys.startsWith("You analyse a class")) return reply({ summary: "Fraction of a quantity, Year 4.", knowledge_points: ["Fractions"] });
+        if (sys.startsWith("You review generated")) return reply({ scores: [1, 2, 3].map((n) => ({ n, score: 5, reason: "fits" })) });
+        // Only the first question's answer agrees: one of two passes in every round.
+        if (sys.startsWith("You solve math questions")) return reply({ answers: [{ n: 1, answer: "C" }, { n: 2, answer: "A" }] });
+        const k = Math.random().toString(36).slice(2, 7);
+        return reply({ questions: [
+          { stem: `Mia ate 2/5 of ${k.length * 6} grapes in shop ${k}. How many?`, type: "multiple_choice", options: ["6", "10", "12", "15"], answer: "C", difficulty: 2 },
+          { stem: `A rope of 40 m (${k}) is cut into quarters. How long is each piece?`, type: "multiple_choice", options: ["8 m", "10 m", "12 m", "20 m"], answer: "B", difficulty: 2 },
+        ] });
+      }),
+    );
+    const res = await generatePOST(json({ source: "bank", bank_id: bankId, grade: "Year 4", difficulty: 2, category_id: fractions, count: 2, stream: true }));
+    expect(res.headers.get("content-type")).toMatch(/ndjson/);
+    const lines = (await res.text()).trim().split("\n").map((l) => JSON.parse(l) as Record<string, unknown>);
+    const progress = lines.filter((l) => l.type === "progress");
+    expect(progress[0]).toMatchObject({ stage: "template", rounds: 3, requested: 2 });
+    expect(progress.map((p) => p.stage)).toEqual(expect.arrayContaining(["writing", "rewording", "solving", "round_done"]));
+    expect(progress.filter((p) => p.stage === "round_done").map((p) => p.round)).toEqual([1, 2]);
+    expect(progress.find((p) => p.stage === "round_done")).toMatchObject({ passed: 1, detail: expect.stringMatching(/1 \/ 2|1 of 2/) });
+    const result = lines[lines.length - 1] as { type: string; requested: number; note?: string; problems: Array<{ bank: { passed: boolean } }> };
+    expect(result.type).toBe("result");
+    expect(result.requested).toBe(2);
+    expect(result.problems.filter((p) => p.bank.passed)).toHaveLength(2);
+    // the generator shows "N requested, M passed" itself
+    expect(result.note ?? "").not.toMatch(/requested|要求/);
+
+    const bad = await generatePOST(json({ source: "bank", bank_id: bankId, knowledge_point: "Probability", stream: true }));
+    const last = JSON.parse((await bad.text()).trim().split("\n").pop()!) as { type: string; error: string; status: number };
+    expect(last).toMatchObject({ type: "error", status: 404, error: expect.stringMatching(/Probability/) });
+  });
+
   it("reports a topic with no questions instead of generating something unrelated", async () => {
     const { bankId } = seed();
     process.env.LLM_API_KEY = "k";

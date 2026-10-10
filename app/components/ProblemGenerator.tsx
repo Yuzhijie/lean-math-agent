@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type {
   GradeLevel,
   DifficultyLevel,
@@ -13,6 +13,7 @@ import { QuestionFigure } from "./QuestionFigure";
 import { FigurePanel } from "./FigurePanel";
 import { BankTemplateControls, MatchHint, useBanks, type BankTemplateValue } from "./BankTemplateControls";
 import type { SolvedFigure } from "@/lib/figure/spec";
+import { cardStatus, checkIssues, readNdjson, type CheckKey, type ProgressLine } from "@/lib/bank/generation-view";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -48,6 +49,8 @@ import {
   CircleCheck,
   CircleX,
   Info,
+  AlertTriangle,
+  Loader2,
 } from "lucide-react";
 
 /** What a generated problem carries over when it is used: its computed figure, or the model's SVG. */
@@ -124,9 +127,22 @@ export function ProblemGenerator({ onUseProblem, onFormalize, disabled }: Props)
   // Bank mode: candidates that failed a check are kept but hidden behind a toggle.
   const [showFailed, setShowFailed] = useState(false);
   const failedBank = problems.filter((p) => p.bank && !p.bank.passed);
+  const passedBank = problems.filter((p) => p.bank?.passed);
+  const isBankResult = problems.some((p) => p.bank);
   // When nothing passed, show the failed ones right away (with their check results) instead of an empty list.
   const nonePassed = failedBank.length > 0 && failedBank.length === problems.length;
   const shown = problems.filter((p) => !p.bank || p.bank.passed || showFailed || nonePassed);
+  // How many were asked for (the summary says when fewer came back), and where the generation is.
+  const [requested, setRequested] = useState(0);
+  const [progress, setProgress] = useState<ProgressLine | null>(null);
+  const [steps, setSteps] = useState<string[]>([]);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!busy || startedAt === null) return;
+    const t = setInterval(() => setElapsed(Math.round((Date.now() - startedAt) / 1000)), 1000);
+    return () => clearInterval(t);
+  }, [busy, startedAt]);
 
   async function generate() {
     setError(null);
@@ -134,6 +150,12 @@ export function ProblemGenerator({ onUseProblem, onFormalize, disabled }: Props)
     setProblems([]);
     setResultNote(null);
     setShowFailed(false);
+    setProgress(null);
+    setSteps([]);
+    setStartedAt(Date.now());
+    setElapsed(0);
+    const asked = activeMode === "bank" ? Math.min(10, Math.max(1, count || 1)) : count;
+    setRequested(asked);
     try {
       // Client-side timeout: generous enough for server maxDuration (330s)
       // plus network overhead. The server's deadline-aware retry loop will
@@ -153,7 +175,8 @@ export function ProblemGenerator({ onUseProblem, onFormalize, disabled }: Props)
                 difficulty: bankValue.difficulty || undefined,
                 category_id: bankValue.topic.startsWith("cat:") ? bankValue.topic.slice(4) : undefined,
                 knowledge_point: bankValue.topic.startsWith("kp:") ? bankValue.topic.slice(3) : undefined,
-                count: Math.min(10, Math.max(1, count || 1)),
+                count: asked,
+                stream: true,
               }
             : {
                 grade_level: gradeLevel,
@@ -165,19 +188,36 @@ export function ProblemGenerator({ onUseProblem, onFormalize, disabled }: Props)
         signal: controller.signal,
       });
 
-      clearTimeout(timeoutId);
-
-      const data = (await res.json()) as {
+      type Reply = {
         problems?: GeneratedProblem[];
         error?: string;
         note?: string;
         matched?: number;
         template_label?: string;
+        requested?: number;
       };
-      if (!res.ok) {
-        throw new Error(data.error ?? tr("生成失败", "Generation failed"));
+      let data: Reply = {};
+      if (res.ok && res.body && (res.headers.get("content-type") ?? "").includes("ndjson")) {
+        // Bank mode streams progress lines, then the result (or an error).
+        await readNdjson(res.body, (line) => {
+          if (line.type === "progress") {
+            const p = line as unknown as ProgressLine;
+            setProgress(p);
+            setSteps((s) => (s[s.length - 1] === p.detail ? s : [...s, p.detail]));
+          } else if (line.type === "result") data = line as Reply;
+          else if (line.type === "error") data = { error: String(line.error ?? "") || tr("生成失败", "Generation failed") };
+        });
+        clearTimeout(timeoutId);
+        if (data.error || !data.problems) throw new Error(data.error ?? tr("生成中断，请重试", "Generation was interrupted; please try again"));
+      } else {
+        data = (await res.json()) as Reply;
+        clearTimeout(timeoutId);
+        if (!res.ok) {
+          throw new Error(data.error ?? tr("生成失败", "Generation failed"));
+        }
       }
       setProblems(data.problems ?? []);
+      if (data.requested) setRequested(data.requested);
       if (data.template_label) {
         setResultNote(
           [tr(`模板：${data.template_label}（${data.matched ?? 0} 道题库题）`, `Template: ${data.template_label} (${data.matched ?? 0} bank questions)`), data.note].filter(Boolean).join(" "),
@@ -191,6 +231,7 @@ export function ProblemGenerator({ onUseProblem, onFormalize, disabled }: Props)
       }
     } finally {
       setBusy(false);
+      setProgress(null);
     }
   }
 
@@ -349,6 +390,10 @@ export function ProblemGenerator({ onUseProblem, onFormalize, disabled }: Props)
 
         {activeMode === "bank" && banks?.length ? <MatchHint match={match} value={bankValue} /> : null}
 
+        {busy && (
+          <GenerationProgressView mode={activeMode} progress={progress} steps={steps} elapsed={elapsed} requested={requested} />
+        )}
+
         {error && (
           <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive animate-fade-in">
             {error}
@@ -359,9 +404,15 @@ export function ProblemGenerator({ onUseProblem, onFormalize, disabled }: Props)
         {problems.length > 0 && (
           <div className="space-y-3 animate-slide-up">
             <Separator />
-            <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-              {tr("生成结果", "Results")} ({shown.length})
-            </p>
+            <ResultSummary
+              bank={isBankResult}
+              requested={requested}
+              total={problems.length}
+              passed={passedBank.length}
+              failed={failedBank.length}
+              showFailed={showFailed || nonePassed}
+              onToggleFailed={nonePassed ? undefined : () => setShowFailed(!showFailed)}
+            />
             {resultNote && (
               <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
                 <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -377,20 +428,14 @@ export function ProblemGenerator({ onUseProblem, onFormalize, disabled }: Props)
                 disabled={disabled}
               />
             ))}
-            {nonePassed && (
-              <p className="text-xs text-warning">
-                {tr("这次生成的题都没有通过全部检查，请看每题的检查结果，或重新生成。", "None of the generated questions passed every check; see each question's check results, or generate again.")}
-              </p>
-            )}
-            {failedBank.length > 0 && !nonePassed && (
+            {failedBank.length > 0 && !nonePassed && !showFailed && (
               <button
                 type="button"
-                className="text-xs text-muted-foreground underline-offset-2 hover:underline"
-                onClick={() => setShowFailed(!showFailed)}
+                className="flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-border/70 py-2 text-xs text-muted-foreground hover:border-border hover:text-foreground"
+                onClick={() => setShowFailed(true)}
               >
-                {showFailed
-                  ? tr("隐藏未通过检查的题", "Hide questions that failed the checks")
-                  : tr(`另有 ${failedBank.length} 道题未通过检查（显示）`, `${failedBank.length} more question${failedBank.length === 1 ? "" : "s"} failed the checks (show)`)}
+                <ChevronDown className="h-3.5 w-3.5" />
+                {tr(`查看 ${failedBank.length} 道未通过的题和原因`, `Show the ${failedBank.length} question${failedBank.length === 1 ? "" : "s"} that failed, and why`)}
               </button>
             )}
           </div>
@@ -438,7 +483,9 @@ function ProblemCard({
       setAdopt({ state: "error", message: e instanceof Error ? e.message : String(e) });
     }
   }
-  const checkNames: Record<"format" | "answer" | "novelty" | "fit" | "figure", string> = {
+  const status = bank ? cardStatus(bank) : undefined;
+  const issues = bank ? checkIssues(bank) : [];
+  const checkNames: Record<CheckKey, string> = {
     format: tr("格式", "Format"),
     answer: tr("答案", "Answer"),
     novelty: tr("查重", "Duplicate"),
@@ -452,15 +499,20 @@ function ProblemCard({
         {/* Header */}
         {bank ? (
           <div className="flex flex-wrap items-center gap-2">
-            {bank.passed ? (
-              <Badge variant="success" className="gap-1">
+            {status === "ok" ? (
+              <Badge variant="success" className="gap-1" data-testid="card-status">
                 <CircleCheck className="h-3 w-3" />
-                {tr("已通过检查", "Checks passed")}
+                {tr("可用", "Ready to use")}
+              </Badge>
+            ) : status === "review" ? (
+              <Badge variant="warning" className="gap-1" data-testid="card-status">
+                <AlertTriangle className="h-3 w-3" />
+                {tr("需人工看", "Needs a look")}
               </Badge>
             ) : (
-              <Badge variant="warning" className="gap-1">
+              <Badge variant="destructive" className="gap-1" data-testid="card-status">
                 <CircleX className="h-3 w-3" />
-                {tr("未通过检查", "Checks not passed")}
+                {tr("未通过", "Failed")}
               </Badge>
             )}
             {bank.grade && <Badge variant="info">{bank.grade}</Badge>}
@@ -486,6 +538,28 @@ function ProblemCard({
               </span>
             </div>
           </div>
+        )}
+
+        {/* Why it failed / what to look at: shown without opening the details */}
+        {issues.length > 0 && (
+          <ul className="space-y-1" data-testid="card-issues">
+            {issues.map((i) => (
+              <li
+                key={`${i.kind}-${i.key}`}
+                className={cn(
+                  "flex items-start gap-1.5 rounded-md border px-2 py-1 text-xs leading-relaxed",
+                  i.kind === "failed" ? "border-destructive/30 bg-destructive/5 text-destructive" : "border-warning/30 bg-warning/5 text-warning",
+                )}
+              >
+                {i.kind === "failed" ? <CircleX className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+                <span>
+                  <span className="font-semibold">{checkNames[i.key]}</span>
+                  {tr("：", ": ")}
+                  <span className="text-foreground/80">{i.detail}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
         )}
 
         {/* Statement (bank problems: stem, then one option per line) */}
@@ -665,5 +739,142 @@ function ProblemCard({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+// ── Generation progress and result summary ───────────────────────────
+
+const STAGES = ["writing", "repairing", "rewording", "checking_figures", "solving"] as const;
+
+function GenerationProgressView({
+  mode,
+  progress,
+  steps,
+  elapsed,
+  requested,
+}: {
+  mode: "bank" | "builtin";
+  progress: ProgressLine | null;
+  steps: string[];
+  elapsed: number;
+  requested: number;
+}) {
+  const { tr } = useI18n();
+  const stageNames: Record<(typeof STAGES)[number], string> = {
+    writing: tr("写题", "Write"),
+    repairing: tr("修图", "Fix figures"),
+    rewording: tr("查重", "Duplicates"),
+    checking_figures: tr("看图", "Check figures"),
+    solving: tr("解题评审", "Solve & review"),
+  };
+  const time = elapsed >= 60 ? tr(`${Math.floor(elapsed / 60)} 分 ${elapsed % 60} 秒`, `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`) : tr(`${elapsed} 秒`, `${elapsed}s`);
+  const current = progress && (STAGES as readonly string[]).includes(progress.stage) ? STAGES.indexOf(progress.stage as (typeof STAGES)[number]) : progress?.stage === "round_done" ? STAGES.length : -1;
+  return (
+    <div className="space-y-2 rounded-md border border-primary/20 bg-primary/5 px-3 py-2.5 animate-fade-in" data-testid="generation-progress" aria-live="polite">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+        <span className="flex items-center gap-2 text-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+          {progress?.detail ?? (mode === "bank" ? tr("正在准备…", "Getting ready…") : tr(`正在生成 ${requested} 道题…`, `Generating ${requested} problem${requested === 1 ? "" : "s"}…`))}
+        </span>
+        <span className="text-xs tabular-nums text-muted-foreground">
+          {progress?.round ? tr(`第 ${progress.round} / ${progress.rounds} 轮 · `, `Round ${progress.round} of ${progress.rounds} · `) : ""}
+          {tr(`已用 ${time}`, `${time} elapsed`)}
+        </span>
+      </div>
+      {mode === "bank" && progress?.round ? (
+        <ol className="flex flex-wrap items-center gap-1 text-[11px]">
+          {STAGES.map((st, i) => (
+            <li
+              key={st}
+              className={cn(
+                "rounded px-1.5 py-0.5",
+                i < current ? "bg-success/10 text-success" : i === current ? "bg-primary/15 font-semibold text-primary" : "text-muted-foreground/70",
+              )}
+            >
+              {i < current ? "✓ " : ""}
+              {stageNames[st]}
+            </li>
+          ))}
+        </ol>
+      ) : null}
+      {steps.length > 1 && (
+        <details className="text-[11px] text-muted-foreground">
+          <summary className="cursor-pointer select-none">{tr(`已完成 ${steps.length - 1} 步`, `${steps.length - 1} step${steps.length === 2 ? "" : "s"} done`)}</summary>
+          <ol className="mt-1 list-inside list-decimal space-y-0.5">
+            {steps.slice(0, -1).map((d, i) => (
+              <li key={i}>{d}</li>
+            ))}
+          </ol>
+        </details>
+      )}
+      <p className="text-[11px] text-muted-foreground">
+        {mode === "bank"
+          ? tr("每道题都会经过独立解题、查重和图形检查，通常需要 1–5 分钟。", "Every question is solved independently and checked for duplicates and figures; this usually takes 1–5 minutes.")
+          : tr("通常需要 30 秒到 2 分钟。", "This usually takes 30 seconds to 2 minutes.")}
+      </p>
+    </div>
+  );
+}
+
+function ResultSummary({
+  bank,
+  requested,
+  total,
+  passed,
+  failed,
+  showFailed,
+  onToggleFailed,
+}: {
+  bank: boolean;
+  requested: number;
+  total: number;
+  passed: number;
+  failed: number;
+  showFailed: boolean;
+  onToggleFailed?: () => void;
+}) {
+  const { tr } = useI18n();
+  if (!bank) {
+    const short = requested > 0 && total < requested;
+    return (
+      <p className={cn("text-xs", short ? "text-warning" : "text-muted-foreground")} data-testid="result-summary">
+        <span className="font-bold uppercase tracking-wider">{tr("生成结果", "Results")}</span>{" "}
+        {short ? tr(`要求 ${requested} 道，只生成了 ${total} 道`, `${requested} requested, only ${total} generated`) : `(${total})`}
+      </p>
+    );
+  }
+  const usable = Math.min(passed, requested || passed);
+  const short = usable < requested;
+  return (
+    <div
+      className={cn(
+        "flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border px-3 py-2 text-sm",
+        passed === 0 ? "border-destructive/30 bg-destructive/5" : short ? "border-warning/30 bg-warning/5" : "border-success/30 bg-success/5",
+      )}
+      data-testid="result-summary"
+    >
+      {passed === 0 ? <CircleX className="h-4 w-4 text-destructive" /> : short ? <AlertTriangle className="h-4 w-4 text-warning" /> : <CircleCheck className="h-4 w-4 text-success" />}
+      <span className="font-medium text-foreground">
+        {tr(`要求 ${requested} 道，通过 ${usable} 道`, `${requested} requested, ${usable} passed`)}
+      </span>
+      {failed > 0 && (
+        <span className="text-muted-foreground">
+          {tr(`另有 ${failed} 道未通过`, `${failed} more failed`)}
+          {onToggleFailed && (
+            <>
+              {" "}
+              <button type="button" className="text-primary underline-offset-2 hover:underline" onClick={onToggleFailed}>
+                {showFailed ? tr("（收起）", "(hide)") : tr("（查看）", "(show)")}
+              </button>
+            </>
+          )}
+        </span>
+      )}
+      {passed === 0 && (
+        <span className="w-full text-xs text-muted-foreground">
+          {tr("下面每道题都写了没通过的原因；可以换个主题或难度再生成。", "Each question below says why it failed; try another topic or difficulty and generate again.")}
+        </span>
+      )}
+    </div>
   );
 }

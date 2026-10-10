@@ -46,7 +46,7 @@ app/
     MethodDetail.tsx                # Method inspiration + pros/cons
     MethodList.tsx                  # Scrollable method list with confidence
     PricingCards.tsx                # Subscription plan cards
-    ProblemGenerator.tsx            # Problem generator: method 1 (default when a bank has questions) = local bank as template — Level/Difficulty/Topic pick bank questions sent to the model as the template, results with checks + "Add to bank"; method 2 = built-in by grade/difficulty/domain
+    ProblemGenerator.tsx            # Problem generator: method 1 (default when a bank has questions) = local bank as template — Level/Difficulty/Topic pick bank questions sent to the model as the template, results with checks + "Add to bank"; method 2 = built-in by grade/difficulty/domain. Bank mode streams progress (`stream: true` → NDJSON progress/result/error lines; round, stage chips, elapsed time); the result summary says "N requested, M passed, K failed (show)"; each card shows a status (可用 / 需人工看 / 未通过) and its failed or to-review checks inline (lib/bank/generation-view.ts)
     BankTemplateControls.tsx        # Level / Difficulty / Topic pickers from the bank (template-options), live count of matching template questions
     StepPane.tsx                    # Proof step list with status badges
   bank/page.tsx                     # Question bank page: banks + category tree, item list/editor, import wizard, generate panel
@@ -64,7 +64,7 @@ app/
     banks/…                         # Question banks: CRUD, imports (draft → review → commit), items, categories, profile, generate, generations (adopt), export, assets
     figure/route.ts                 # Figure for a session's problem (generate → solve coordinates → check claims; cached on the session)
     evaluate/route.ts               # Multi-agent method scoring
-    generate-problem/route.ts       # Problem generation: source "bank" (local bank as template) or built-in by params
+    generate-problem/route.ts       # Problem generation: source "bank" (local bank as template) or built-in by params; bank + `stream: true` → NDJSON progress lines (GenerationProgress), then the result
     intuition/route.ts              # Post-proof learning review
     lean-attempt/route.ts           # Last solving step, started by hand: Lean 4 formalization of a solved computational / optimization / find-all problem
     knowledge/search/route.ts       # Knowledge graph search
@@ -130,7 +130,8 @@ lib/
     profile.ts                      # Template profile of a class (programmatic + model summary), exemplar selection
     generate.ts                     # Same-type generation (同类创编) from a category, picked items or style template; checks: format, independent answer, novelty vs bank, fit
     select.ts                       # Template selection by level/difficulty/topic (category incl. sub-categories, or knowledge point); widens difficulty ±1 → any → level any, never the topic; generator pickers (template-options)
-    generator-bridge.ts             # /api/generate-problem source "bank": generation from a selection → GeneratedProblem cards with bank meta (checks, generation id)
+    generator-bridge.ts             # /api/generate-problem source "bank": generation from a selection → GeneratedProblem cards with bank meta (checks, generation id); passes `onProgress` through, returns `requested`, leaves the "N requested, M passed" sentence out of the note
+    generation-view.ts              # Browser-side: card status (ok / review / failed), inline check issues, NDJSON reader
     http.ts                         # bankRoute(): owner from NextAuth session (else "local"), request language, error mapping
     template-visual.ts              # Template figures (scans/photos: item images or page image) read by the vision model before generation: per-example figure description + kind, style (FigureStyle), layout; never imitates illustrations/logos
     problem-figures.ts              # Figures sent with a problem (bank images, `figures: [{bank_id, asset}]` on /api/solve-stream, /api/solve, /api/enumerate): read once by the vision model into a description appended to problem_text (session.figure_description); failures fall back to text-only with a note

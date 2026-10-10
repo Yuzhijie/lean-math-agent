@@ -7,8 +7,9 @@
  * "Add to bank" work from the same card.
  */
 import type { BankProblemMeta, DifficultyLevel, GeneratedProblem, GradeLevel } from "../types";
-import { answerLetters, generateFromTemplate } from "./generate";
+import { answerLetters, generateFromTemplate, type GenerationProgress } from "./generate";
 import { LETTERS } from "./profile";
+import { isEnglish } from "../llm/output-locale";
 import type { TemplateSelection } from "./select";
 import type { Candidate } from "./types";
 
@@ -46,13 +47,16 @@ function answerOf(c: Candidate): string {
   return c.solution?.trim() ? `${a}\n\n${c.solution.trim()}` : a;
 }
 
+const SHORT_NOTE = /^要求 \d+ 道，通过全部检查|^\d+ requested, \d+ passed every check/;
+
 export async function generateProblemsFromBank(args: {
   owner: string;
   bankId: string;
   selection: TemplateSelection;
   count: number;
-}): Promise<{ problems: GeneratedProblem[]; generation_id: string; template_label: string; note?: string; matched?: number }> {
-  const g = await generateFromTemplate({ owner: args.owner, bankId: args.bankId, template: { selection: args.selection }, count: args.count });
+  onProgress?: (p: GenerationProgress) => void;
+}): Promise<{ problems: GeneratedProblem[]; generation_id: string; template_label: string; note?: string; matched?: number; requested: number }> {
+  const g = await generateFromTemplate({ owner: args.owner, bankId: args.bankId, template: { selection: args.selection }, count: args.count, onProgress: args.onProgress });
   const problems = g.candidates.map((c): GeneratedProblem => {
     const bank: BankProblemMeta = {
       bank_id: args.bankId,
@@ -85,5 +89,7 @@ export async function generateProblemsFromBank(args: {
       bank,
     };
   });
-  return { problems, generation_id: g.id, template_label: g.template_label, note: g.note, matched: g.matched };
+  // The generator shows "N requested, M passed" itself: that part of the note is left out here.
+  const note = g.note?.split(/；|; /).filter((part) => !SHORT_NOTE.test(part)).join(isEnglish() ? "; " : "；") || undefined;
+  return { problems, generation_id: g.id, template_label: g.template_label, note, matched: g.matched, requested: g.requested };
 }
