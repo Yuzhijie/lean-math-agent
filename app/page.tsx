@@ -9,9 +9,9 @@ import { MethodDetail } from "./components/MethodDetail";
 import { MethodList } from "./components/MethodList";
 import { MethodComparison } from "./components/MethodComparison";
 import { PipelineProgress } from "./components/PipelineProgress";
-import { ProblemGenerator, type UsedProblemFigure } from "./components/ProblemGenerator";
+import { ProblemGenerator, type GenerationSummary, type UsedProblemFigure } from "./components/ProblemGenerator";
 import { useBanks } from "./components/BankTemplateControls";
-import { SessionHistory } from "./components/SessionHistory";
+import { SessionHistory, SessionHistoryList } from "./components/SessionHistory";
 import { LocaleSwitcher } from "./components/LocaleSwitcher";
 import { StepCard } from "./components/StepCard";
 import { StepPane } from "./components/StepPane";
@@ -50,7 +50,11 @@ import {
   Pencil,
   Library,
   Wand2,
+  ImageUp,
+  X,
+  PanelLeftClose,
 } from "lucide-react";
+import { ProblemExamples } from "./components/ProblemExamples";
 import Link from "next/link";
 
 export default function Home() {
@@ -84,7 +88,7 @@ export default function Home() {
     solveAll,
     attemptLean,
     switchMethod,
-    useGeneratedProblem,
+    useGeneratedProblem: loadGeneratedProblem,
     loadSession,
     retryLastAction,
   } = useProofActions(state, dispatch);
@@ -122,32 +126,95 @@ export default function Home() {
   const { banks } = useBanks();
   const hasBank = !!banks?.length;
   const problemCardRef = useRef<HTMLDivElement>(null);
+  // History sidebar on wide screens (≥1280px while solving; ≥1760px next to the generator); the History button
+  // shows/hides it there, and opens the slide-out panel on narrower screens. Remembered in this browser.
+  const [historyPinned, setHistoryPinned] = useState(true);
+  useEffect(() => {
+    try {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- read once from this browser after mount
+      if (localStorage.getItem("history-sidebar") === "hidden") setHistoryPinned(false);
+    } catch {
+      /* storage unavailable */
+    }
+  }, []);
+  const pinHistory = (on: boolean) => {
+    setHistoryPinned(on);
+    try {
+      localStorage.setItem("history-sidebar", on ? "shown" : "hidden");
+    } catch {
+      /* storage unavailable */
+    }
+  };
+  const onHistoryButton = () => {
+    const wide = window.matchMedia(generating ? "(min-width: 1760px)" : "(min-width: 1280px)").matches;
+    if (wide) pinHistory(!historyPinned);
+    else setHistoryOpen(true);
+  };
+  const [lastGeneration, setLastGeneration] = useState<GenerationSummary | null>(null);
   const pickWorkspace = (w: "solve" | "bank" | "builtin") => {
     setWorkspace(w);
     if (w !== "solve") setGeneratorMode(w);
   };
-  // After "使用此题" the raw input box is hidden and only the rendered problem is shown.
-  const [inputHidden, setInputHidden] = useState(false);
-  // Figure carried over from the generator; shown under the problem while its text is unchanged.
-  const [usedFigure, setUsedFigure] = useState<(UsedProblemFigure & { text: string }) | null>(null);
-  const useProblemFromGenerator = (text: string, figure?: UsedProblemFigure) => {
-    useGeneratedProblem(text);
+  // Figure that came with the problem (generator, bank, or a pasted image); it stays while the text is edited,
+  // and goes when the box is emptied, another problem is picked, or "移除图形" is pressed.
+  const [usedFigure, setUsedFigure] = useState<UsedProblemFigure | null>(null);
+  const applyProblem = (text: string, figure?: UsedProblemFigure) => {
+    loadGeneratedProblem(text);
     // A generated question's figure comes with its exact description, which is added to the problem when solving;
     // bank figures (images) are registered by the caller and read by the vision model.
     dispatch({ type: "SET_PROBLEM_FIGURES", figures: figure?.description ? { refs: [], text, description: figure.description } : null });
-    setInputHidden(true);
-    setUsedFigure(figure ? { ...figure, text } : null);
+    setUsedFigure(figure ?? null);
+  };
+  const removeFigure = () => {
+    dispatch({ type: "SET_PROBLEM_FIGURES", figures: null });
+    setUsedFigure(null);
+  };
+  const isUntouched = !problemText.trim() || (Object.values(SAMPLE_PROBLEM) as string[]).includes(problemText);
+  const pickExample = (text: string) => {
+    removeFigure();
+    dispatch({ type: "SET_PROBLEM_TEXT", text });
+  };
+
+  // A problem pasted / dropped / uploaded as an image: the vision model reads the text (and describes any figure).
+  const [readingImage, setReadingImage] = useState(false);
+  const [imageError, setImageError] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const readImage = async (file: File) => {
+    setImageError(null);
+    if (!/^image\/(png|jpe?g|gif|webp)$/.test(file.type)) {
+      setImageError(tr("只支持 PNG、JPEG、GIF、WebP 图片（iPhone 的 HEIC 请先导出为 JPEG 或截屏）", "Only PNG, JPEG, GIF and WebP images (export iPhone HEIC photos as JPEG, or take a screenshot)"));
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setImageError(tr("图片太大（最大 10 MB）", "The image is too large (10 MB at most)"));
+      return;
+    }
+    setReadingImage(true);
+    try {
+      const form = new FormData();
+      form.set("image", file);
+      const res = await fetch("/api/read-problem-image", { method: "POST", body: form });
+      const data = (await res.json()) as { text?: string; figure?: string; error?: string };
+      if (!res.ok || !data.text) throw new Error(data.error ?? tr("读取图片失败", "Reading the image failed"));
+      const url = URL.createObjectURL(file);
+      applyProblem(data.text, { images: [{ url, caption: tr("题目图片", "Problem image") }], ...(data.figure ? { description: data.figure } : {}) });
+    } catch (e) {
+      setImageError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setReadingImage(false);
+    }
   };
   /** "使用此题" in the generator: narrow screens switch to solving; then the problem card scrolls into view. */
   const useFromGenerator = (text: string, figure?: UsedProblemFigure) => {
-    useProblemFromGenerator(text, figure);
+    applyProblem(text, figure);
     if (!window.matchMedia("(min-width: 1280px)").matches) setWorkspace("solve");
     requestAnimationFrame(() => problemCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
 
   // "使用此题" from the question bank (/bank) arrives as ?problem=<text>, with the question's
   // figures as ?bank=<id>&fig=<asset>… (images cut from the original page).
-  const applyProblemFromBank = useProblemFromGenerator;
+  const applyProblemFromBank = applyProblem;
   const problemParamHandled = useRef(false);
   useEffect(() => {
     if (problemParamHandled.current) return;
@@ -187,6 +254,7 @@ export default function Home() {
 
   const handleLoadSession = (sessionId: string) => {
     void loadSession(sessionId);
+    removeFigure();
     setHistoryOpen(false);
     if (!window.matchMedia("(min-width: 1280px)").matches) setWorkspace("solve");
   };
@@ -249,8 +317,8 @@ export default function Home() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => setHistoryOpen(true)}
-                  disabled={!!busy}
+                  onClick={onHistoryButton}
+                  aria-label={tr("历史记录", "History")}
                   className="gap-1.5"
                 >
                   <History className="h-3.5 w-3.5" />
@@ -266,7 +334,57 @@ export default function Home() {
         </header>
 
         {/* ── Main Content ──────────────────────────────────────────── */}
-        <main className={cn("mx-auto px-4 sm:px-6 py-6 space-y-5", generating ? "max-w-6xl xl:max-w-[1480px]" : "max-w-6xl")}>
+        <div className="flex justify-center">
+        {/* ── History sidebar (wide screens) ─────────────────────────── */}
+        <aside
+          className={cn(
+            "sticky top-14 h-[calc(100vh-3.5rem)] w-64 shrink-0 flex-col gap-3 border-r border-border/50 py-6 pl-4 pr-3",
+            historyPinned ? (generating ? "hidden min-[1760px]:flex" : "hidden xl:flex") : "hidden",
+          )}
+          aria-label={tr("历史记录", "History")}
+          data-testid="history-sidebar"
+        >
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+              <History className="h-4 w-4 text-primary" />
+              {tr("历史记录", "History")}
+            </span>
+            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => pinHistory(false)} aria-label={tr("收起历史", "Hide history")} title={tr("收起历史", "Hide history")}>
+              <PanelLeftClose className="h-4 w-4" />
+            </Button>
+          </div>
+          {lastGeneration && (
+            <button
+              type="button"
+              onClick={() => pickWorkspace(lastGeneration.mode)}
+              className="rounded-lg border border-border/60 p-2.5 text-left text-xs transition-colors hover:border-primary/30 hover:bg-accent/10"
+              data-testid="last-generation"
+            >
+              <span className="flex items-center gap-1.5 font-medium text-foreground">
+                <Sparkles className="h-3.5 w-3.5 text-primary" />
+                {tr("最近一次出题", "Latest generation")}
+              </span>
+              <span className="mt-1 block text-muted-foreground">
+                {lastGeneration.mode === "bank"
+                  ? tr(`要求 ${lastGeneration.requested} 道，通过 ${Math.min(lastGeneration.passed, lastGeneration.requested)} 道`, `${lastGeneration.requested} requested, ${Math.min(lastGeneration.passed, lastGeneration.requested)} passed`)
+                  : tr(`生成了 ${lastGeneration.passed} 道`, `${lastGeneration.passed} generated`)}
+                {lastGeneration.failed ? tr(`，${lastGeneration.failed} 道未通过`, `, ${lastGeneration.failed} failed`) : ""}
+              </span>
+              {lastGeneration.label && <span className="mt-0.5 block truncate text-[11px] text-muted-foreground/80">{lastGeneration.label}</span>}
+            </button>
+          )}
+          <SessionHistoryList
+            active
+            compact
+            disabled={!!busy}
+            currentId={state.sessionId}
+            refreshKey={`${state.sessionId ?? ""}:${phase}`}
+            onLoadSession={handleLoadSession}
+            scrollClassName="min-h-0 flex-1"
+          />
+        </aside>
+
+        <main className={cn("min-w-0 flex-1 px-4 sm:px-6 py-6 space-y-5", generating ? "max-w-6xl xl:max-w-[1480px]" : "max-w-6xl")}>
           {/* What to do: solve a problem, or generate questions */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
             <div role="radiogroup" aria-label={tr("要做什么", "What to do")} className="inline-flex rounded-lg border border-border/60 bg-card/60 p-1" data-testid="workspace-switch">
@@ -308,6 +426,7 @@ export default function Home() {
             <ProblemGenerator
               mode={generatorMode}
               onUseProblem={useFromGenerator}
+              onResults={setLastGeneration}
               onFormalize={useFromGenerator}
               disabled={!!busy}
             />
@@ -332,43 +451,95 @@ export default function Home() {
               </div>
             </CardHeader>
             <CardContent className="space-y-3">
-              {!inputHidden && (
-              <Textarea
-                value={problemText}
-                onChange={(e) =>
-                  dispatch({ type: "SET_PROBLEM_TEXT", text: e.target.value })
-                }
-                disabled={!!busy}
-                rows={3}
-                placeholder={tr("输入数学问题，支持 LaTeX 公式（如 $x^2 + y^2 = z^2$）...", "Enter a math problem; LaTeX is supported (e.g. $x^2 + y^2 = z^2$)...")}
-                className="min-h-[80px] text-base leading-relaxed"
-              />
+              {/* Problem box: type, paste or drop an image; the rendered problem (and its figure) shows underneath as you type */}
+              <div
+                className="relative"
+                onDragOver={(e) => {
+                  if (busy || readingImage || !Array.from(e.dataTransfer.items).some((i) => i.type.startsWith("image/"))) return;
+                  e.preventDefault();
+                  setDragging(true);
+                }}
+                onDragLeave={(e) => {
+                  if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+                }}
+                onDrop={(e) => {
+                  const file = Array.from(e.dataTransfer.files).find((f) => f.type.startsWith("image/"));
+                  setDragging(false);
+                  if (!file || busy || readingImage) return;
+                  e.preventDefault();
+                  void readImage(file);
+                }}
+              >
+                <Textarea
+                  value={problemText}
+                  onChange={(e) => {
+                    dispatch({ type: "SET_PROBLEM_TEXT", text: e.target.value });
+                    // Emptying the box drops the figure (the reducer drops it from the request too).
+                    if (!e.target.value.trim()) setUsedFigure(null);
+                  }}
+                  onPaste={(e) => {
+                    const file = Array.from(e.clipboardData.files).find((f) => f.type.startsWith("image/"));
+                    if (!file) return;
+                    e.preventDefault();
+                    void readImage(file);
+                  }}
+                  disabled={!!busy || readingImage}
+                  rows={3}
+                  placeholder={tr("输入数学问题（支持 LaTeX，如 $x^2 + y^2 = z^2$），或粘贴 / 拖入一张题目图片…", "Type a math problem (LaTeX works, e.g. $x^2 + y^2 = z^2$), or paste / drop a picture of one…")}
+                  className="min-h-[80px] text-base leading-relaxed"
+                  data-testid="problem-input"
+                />
+                {(dragging || readingImage) && (
+                  <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 rounded-md border-2 border-dashed border-primary/60 bg-background/85 text-sm text-primary" data-testid="image-drop">
+                    {readingImage ? (
+                      <>
+                        <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                        {tr("正在从图片读题…", "Reading the problem from the image…")}
+                      </>
+                    ) : (
+                      <>
+                        <ImageUp className="h-4 w-4" />
+                        {tr("松开即可从图片读题", "Drop to read the problem from the image")}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+              {imageError && (
+                <p className="flex items-start gap-1.5 text-xs text-destructive" data-testid="image-error">
+                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  {imageError}
+                </p>
               )}
 
-              {/* Math preview */}
-              {(inputHidden || containsMath(problemText)) && (
-                <div className="rounded-md border border-border/60 bg-muted/30 p-3 animate-fade-in">
+              {/* Examples while the box is empty or still holds the sample */}
+              {!busy && isUntouched && <ProblemExamples onPick={pickExample} disabled={readingImage} />}
+
+              {/* Live preview: rendered maths, options one per line, and the problem's figure */}
+              {problemText.trim() && (containsMath(problemText) || problemText.includes("\n") || usedFigure) && (
+                <div className="rounded-md border border-border/60 bg-muted/30 p-3 animate-fade-in" data-testid="problem-preview">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                      {tr("问题", "Problem")}
+                      {tr("预览", "Preview")}
                     </span>
-                    {inputHidden && (
+                    {usedFigure && (
                       <Button
                         variant="ghost"
                         size="sm"
                         className="h-6 gap-1 px-2 text-xs"
                         disabled={!!busy}
-                        onClick={() => setInputHidden(false)}
+                        onClick={removeFigure}
+                        title={tr("这道题不再带这个图形", "Stop sending this figure with the problem")}
                       >
-                        <Pencil className="h-3 w-3" />
-                        {tr("编辑", "Edit")}
+                        <X className="h-3 w-3" />
+                        {tr("移除图形", "Remove figure")}
                       </Button>
                     )}
                   </div>
                   <div className="mt-1.5 whitespace-pre-line text-sm">
                     <MathText text={problemText} />
                   </div>
-                  {usedFigure && usedFigure.text === problemText && (
+                  {usedFigure && (
                     <div className="mt-3">
                       {usedFigure.figure ? (
                         <FigurePanel problemText={problemText} initialFigure={usedFigure.figure} />
@@ -383,19 +554,19 @@ export default function Home() {
                         <div className="flex flex-wrap gap-3" data-testid="problem-images">
                           {usedFigure.images.map((im) => (
                             <a key={im.url} href={im.url} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-md border border-border/60 bg-white" title={tr("查看大图", "Open full size")}>
-                              {/* eslint-disable-next-line @next/next/no-img-element -- bank assets are served by our API */}
-                              <img src={im.url} alt={im.caption ?? ""} className="block max-h-72 max-w-full object-contain" />
+                              {/* eslint-disable-next-line @next/next/no-img-element -- bank assets / a local image the user pasted */}
+                              <img src={im.url} alt={im.caption ?? ""} className="block max-h-56 max-w-full object-contain" />
                             </a>
                           ))}
                         </div>
                       ) : null}
-                      {usedFigure.images?.length && state.figureDescription ? (
+                      {usedFigure.images?.length && (state.figureDescription || usedFigure.description) ? (
                         <details className="mt-2 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs" open data-testid="figure-description">
                           <summary className="cursor-pointer select-none font-medium text-primary">
                             {tr("模型读取的图形信息（已加入题目，用于求解）", "The figure as read by the model (added to the problem for solving)")}
                           </summary>
                           <div className="mt-1.5 whitespace-pre-wrap leading-relaxed text-muted-foreground">
-                            <MathText text={state.figureDescription} />
+                            <MathText text={(state.figureDescription || usedFigure.description)!} />
                           </div>
                         </details>
                       ) : usedFigure.images?.length ? (
@@ -408,28 +579,77 @@ export default function Home() {
                 </div>
               )}
 
-              {/* Action buttons */}
+              {/* Action buttons, with what each one does */}
               <div className="flex flex-wrap items-center gap-2 pt-1">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span tabIndex={-1} className="inline-flex">
+                      <Button
+                        onClick={() => void solveAll()}
+                        disabled={!!busy || readingImage || !problemText.trim()}
+                        loading={busy === "solve-all"}
+                        className="gap-1.5"
+                        aria-describedby="solve-help"
+                      >
+                        <Play className="h-3.5 w-3.5" />
+                        {tr("一键求解", "Solve")}
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="max-w-xs">
+                    {tr("自动判断题型（计算、证明、最值、求所有解），直接给出一份完整解答；证明题还会尝试用 Lean 形式化验证。", "Works out the kind of problem (computation, proof, optimization, find-all) and gives one complete solution; proofs are also checked formally in Lean.")}
+                  </TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span tabIndex={-1} className="inline-flex">
+                      <Button
+                        variant="outline"
+                        onClick={() => void enumerate()}
+                        disabled={!!busy || readingImage || !problemText.trim()}
+                        loading={busy === "enumerate"}
+                        className="gap-1.5"
+                        aria-describedby="enumerate-help"
+                      >
+                        <ListOrdered className="h-3.5 w-3.5" />
+                        {tr("枚举解法", "Enumerate methods")}
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="max-w-xs">
+                    {tr("先列出几种不同的解题思路并评分，你选一种后再逐步规划、证明。适合想比较方法或学习思路时用。", "Lists several different approaches with scores first; you pick one and then plan and prove it step by step. Good for comparing methods or learning.")}
+                  </TooltipContent>
+                </Tooltip>
                 <Button
-                  onClick={() => void solveAll()}
-                  disabled={!!busy || !problemText.trim()}
-                  loading={busy === "solve-all"}
-                  className="gap-1.5"
+                  variant="ghost"
+                  size="sm"
+                  className="gap-1.5 text-muted-foreground"
+                  disabled={!!busy || readingImage}
+                  onClick={() => imageInputRef.current?.click()}
+                  title={tr("上传一张题目图片（截图或照片），自动读出题目", "Upload a picture of a problem (screenshot or photo) and read it")}
                 >
-                  <Play className="h-3.5 w-3.5" />
-                  {tr("一键求解", "Solve")}
+                  <ImageUp className="h-3.5 w-3.5" />
+                  {tr("从图片读题", "From an image")}
                 </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => void enumerate()}
-                  disabled={!!busy || !problemText.trim()}
-                  loading={busy === "enumerate"}
-                  className="gap-1.5"
-                >
-                  <ListOrdered className="h-3.5 w-3.5" />
-                  {tr("枚举解法", "Enumerate methods")}
-                </Button>
+                <input
+                  ref={imageInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/gif,image/webp"
+                  className="hidden"
+                  data-testid="image-input"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = "";
+                    if (file) void readImage(file);
+                  }}
+                />
               </div>
+              <p className="sr-only" id="solve-help">
+                {tr("一键求解：自动判断题型，直接给出完整解答。", "Solve: works out the kind of problem and gives one complete solution.")}
+              </p>
+              <p className="sr-only" id="enumerate-help">
+                {tr("枚举解法：先列出几种思路，选一种再逐步证明。", "Enumerate methods: lists approaches first; pick one and prove it step by step.")}
+              </p>
 
               {/* Error banner */}
               {error && (
@@ -904,6 +1124,7 @@ export default function Home() {
           </section>
           </div>
         </main>
+        </div>
 
         {/* ── Session History Sidebar ──────────────────────────────── */}
         <SessionHistory

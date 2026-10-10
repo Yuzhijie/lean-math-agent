@@ -69,9 +69,21 @@ type Props = {
   /** Set by the page (its "what to do" switch): the generator then shows no method switch of its own. */
   mode?: "bank" | "builtin";
   onUseProblem: (problemText: string, figure?: UsedProblemFigure) => void;
+  /** After each generation: a summary for the page's history sidebar. */
+  onResults?: (r: GenerationSummary) => void;
   onFormalize: (problemText: string) => void;
   disabled?: boolean;
 };
+
+export interface GenerationSummary {
+  mode: "bank" | "builtin";
+  requested: number;
+  /** Bank mode: passed every check; built-in: generated. */
+  passed: number;
+  failed: number;
+  label?: string;
+  at: number;
+}
 
 type Tr = (zh: string, en: string) => string;
 
@@ -108,7 +120,7 @@ function getLabels(tr: Tr) {
   return { GRADE_LABELS, DIFFICULTY_LABELS, DOMAIN_LABELS };
 }
 
-export function ProblemGenerator({ mode: modeProp, onUseProblem, onFormalize, disabled }: Props) {
+export function ProblemGenerator({ mode: modeProp, onUseProblem, onFormalize, onResults, disabled }: Props) {
   const { tr } = useI18n();
   const { GRADE_LABELS, DIFFICULTY_LABELS, DOMAIN_LABELS } = getLabels(tr);
   const [gradeLevel, setGradeLevel] = useState<GradeLevel>("high");
@@ -228,8 +240,18 @@ export function ProblemGenerator({ mode: modeProp, onUseProblem, onFormalize, di
           throw new Error(data.error ?? tr("生成失败", "Generation failed"));
         }
       }
-      setProblems(data.problems ?? []);
+      const got = data.problems ?? [];
+      setProblems(got);
       if (data.requested) setRequested(data.requested);
+      const bankPassed = got.filter((p) => p.bank?.passed).length;
+      onResults?.({
+        mode: activeMode,
+        requested: data.requested ?? asked,
+        passed: activeMode === "bank" ? bankPassed : got.length,
+        failed: activeMode === "bank" ? got.filter((p) => p.bank && !p.bank.passed).length : 0,
+        label: data.template_label,
+        at: Date.now(),
+      });
       if (data.template_label) {
         setResultNote(
           [tr(`模板：${data.template_label}（${data.matched ?? 0} 道题库题）`, `Template: ${data.template_label} (${data.matched ?? 0} bank questions)`), data.note].filter(Boolean).join(" "),

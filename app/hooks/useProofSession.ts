@@ -287,7 +287,12 @@ function reducer(
 
     // ── Input ──────────────────────────────────────────────────────
     case "SET_PROBLEM_TEXT":
-      return { ...state, problemText: action.text };
+      // Figures that came with the problem stay with it while the text is edited (gone when it is emptied).
+      return {
+        ...state,
+        problemText: action.text,
+        problemFigures: state.problemFigures && action.text.trim() ? { ...state.problemFigures, text: action.text } : null,
+      };
 
     case "SET_PROBLEM_FIGURES":
       return { ...state, problemFigures: action.figures, figureDescription: null };

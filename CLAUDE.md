@@ -25,7 +25,7 @@ AI-powered Lean 4 math theorem prover + problem solver. Single-page Next.js app.
 
 ```
 app/
-  page.tsx                          # Single-page client app (useReducer state); a "what to do" switch at the top (求解一道题 / 从题库出题 / 内置出题): on ≥1280px the generator and the solver sit side by side, narrower screens show one (the generator stays mounted, so its results survive); "使用此题" switches to solving on narrow screens and scrolls to the problem card; result grids use container queries (@2xl/@4xl) so they fit a half-width column
+  page.tsx                          # Single-page client app (useReducer state); a "what to do" switch at the top (求解一道题 / 从题库出题 / 内置出题): on ≥1280px the generator and the solver sit side by side, narrower screens show one (the generator stays mounted, so its results survive); "使用此题" switches to solving on narrow screens and scrolls to the problem card; result grids use container queries (@2xl/@4xl) so they fit a half-width column. History sidebar on wide screens (≥1280px solving, ≥1760px next to the generator; History button shows/hides it, remembered in localStorage; slide-out panel on narrower screens; latest generation summary on top; sessions cannot be opened while something runs). Problem box: examples while empty/untouched (ProblemExamples), paste / drop / upload a picture of a problem → /api/read-problem-image fills the text and keeps the image + figure description (sent as figure_text), live preview under the box (options one per line, the figure stays while editing, "移除图形"), tooltips on Solve / Enumerate
   layout.tsx                        # Root layout (fonts, dark theme, KaTeX CSS, providers)
   providers.tsx                     # SessionProvider wrapper (NextAuth + I18n)
   globals.css                       # Tailwind v4 theme + CSS variables + animations
@@ -49,6 +49,8 @@ app/
     ProblemGenerator.tsx            # Problem generator: method 1 (default when a bank has questions) = local bank as template — Level/Difficulty/Topic pick bank questions sent to the model as the template, results with checks + "Add to bank"; method 2 = built-in by grade/difficulty/domain. Bank mode streams progress (`stream: true` → NDJSON progress/result/error lines; round, stage chips, elapsed time); the result summary says "N requested, M passed, K failed (show)"; each card shows a status (可用 / 需人工看 / 未通过) and its failed or to-review checks inline (lib/bank/generation-view.ts); actions: one main button ("加入题库" for bank questions, else "使用此题"), hints/answer as icon toggles, formalize under "⋯"; figures are thumbnails (QuestionFigure `compact`, max 14rem) that open full size in a dialog (also on the bank page)
     BankTemplateControls.tsx        # Level / Difficulty / Topic pickers from the bank (template-options), live count of matching template questions
     StepPane.tsx                    # Proof step list with status badges
+    SessionHistory.tsx              # Past sessions: SessionHistoryList (search, list, pagination; compact, disabled, current) in the page sidebar and in the slide-out Sheet
+    ProblemExamples.tsx             # Example problems (compute, geometry, proof, optimize, word problem) under an empty problem box
   bank/page.tsx                     # Question bank page: banks + category tree, item list/editor, import wizard, generate panel
   auth/
     signin/page.tsx                 # Sign-in page (credentials + OAuth)
@@ -64,6 +66,7 @@ app/
     banks/…                         # Question banks: CRUD, imports (draft → review → commit), items, categories, profile, generate, generations (adopt), export, assets
     figure/route.ts                 # Figure for a session's problem (generate → solve coordinates → check claims; cached on the session)
     evaluate/route.ts               # Multi-agent method scoring
+    read-problem-image/route.ts     # POST multipart `image`: the vision model transcribes the problem (lib/problem-image.ts) and describes its figure; nothing stored
     generate-problem/route.ts       # Problem generation: source "bank" (local bank as template) or built-in by params; bank + `stream: true` → NDJSON progress lines (GenerationProgress), then the result
     intuition/route.ts              # Post-proof learning review
     lean-attempt/route.ts           # Last solving step, started by hand: Lean 4 formalization of a solved computational / optimization / find-all problem
@@ -308,7 +311,7 @@ npm run premises:build         # Index the sandbox's Mathlib for premise retriev
 
 ### 🔲 High Priority (make existing features more usable)
 1. **Proof step tree visualization** — Current StepPane is a flat list; should show tree structure with branching
-2. **Session history sidebar** — List past sessions, click to restore (data is on disk but no UI)
+2. ~~**Session history sidebar**~~ — done: sidebar on wide screens, slide-out panel otherwise
 3. **Real-time progress** — Replace polling with SSE or WebSocket for solve pipeline events
 4. **Error UX** — Better error boundaries, loading states, retry buttons
 

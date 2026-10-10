@@ -105,7 +105,59 @@ function getStageConfig(tr: Tr): Record<string, { label: string; variant: StageV
 
 // ── Component ─────────────────────────────────────────────────────────
 
+/** Slide-out history panel (narrow screens and the header's History button). */
 export function SessionHistory({ open, onOpenChange, onLoadSession, refreshKey }: Props) {
+  const { tr } = useI18n();
+  const [total, setTotal] = useState(0);
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="left" className="p-0 w-[340px] sm:max-w-[340px]">
+        <SheetHeader className="px-6 pt-6 pb-4">
+          <div className="flex items-center justify-between">
+            <SheetTitle className="flex items-center gap-2 text-base">
+              <Clock className="h-4 w-4 text-primary" />
+              {tr("历史记录", "History")}
+            </SheetTitle>
+            {/* The "clear all" button was removed together with the
+                unauthenticated DELETE /api/sessions endpoint: sessions are
+                not yet scoped to a user, so it wiped every user's history.
+                Individual sessions can still be deleted from the list. */}
+          </div>
+          <SheetDescription>
+            {tr("浏览并恢复之前的求解会话", "Browse and restore previous solving sessions")}{total > 0 && tr(` (${total} 条)`, ` (${total})`)}
+          </SheetDescription>
+        </SheetHeader>
+        <SessionHistoryList
+          active={open}
+          refreshKey={refreshKey}
+          onTotal={setTotal}
+          onLoadSession={(id) => {
+            onLoadSession(id);
+            onOpenChange(false);
+          }}
+          scrollClassName="h-[calc(100vh-220px)]"
+        />
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+type ListProps = {
+  /** Load (and refresh) only while shown. */
+  active: boolean;
+  onLoadSession: (sessionId: string) => void;
+  refreshKey?: string | null;
+  /** While something is running, sessions cannot be opened. */
+  disabled?: boolean;
+  /** The session shown on the page, highlighted. */
+  currentId?: string | null;
+  onTotal?: (total: number) => void;
+  compact?: boolean;
+  scrollClassName?: string;
+};
+
+/** Search + list + pagination of past sessions; used by the slide-out panel and the page's sidebar. */
+export function SessionHistoryList({ active: open, onLoadSession, refreshKey, disabled, currentId, onTotal, compact, scrollClassName }: ListProps) {
   const { tr, locale } = useI18n();
   const stageConfig = getStageConfig(tr);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -177,10 +229,13 @@ export function SessionHistory({ open, onOpenChange, onLoadSession, refreshKey }
   }, [open, refreshKey, page, debouncedQuery, tr]);
 
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
+  useEffect(() => {
+    onTotal?.(total);
+  }, [total, onTotal]);
 
   const handleLoad = (id: string) => {
+    if (disabled) return;
     onLoadSession(id);
-    onOpenChange(false);
   };
 
   const handleDelete = async (id: string, e: React.MouseEvent) => {
@@ -200,27 +255,10 @@ export function SessionHistory({ open, onOpenChange, onLoadSession, refreshKey }
   };
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="left" className="p-0 w-[340px] sm:max-w-[340px]">
-        <SheetHeader className="px-6 pt-6 pb-4">
-          <div className="flex items-center justify-between">
-            <SheetTitle className="flex items-center gap-2 text-base">
-              <Clock className="h-4 w-4 text-primary" />
-              {tr("历史记录", "History")}
-            </SheetTitle>
-            {/* The "clear all" button was removed together with the
-                unauthenticated DELETE /api/sessions endpoint: sessions are
-                not yet scoped to a user, so it wiped every user's history.
-                Individual sessions can still be deleted from the list. */}
-          </div>
-          <SheetDescription>
-            {tr("浏览并恢复之前的求解会话", "Browse and restore previous solving sessions")}{total > 0 && tr(` (${total} 条)`, ` (${total})`)}
-          </SheetDescription>
-        </SheetHeader>
-
+      <div className="flex min-h-0 flex-col">
         {/* Search input */}
-        {(total > 0 || searchQuery) && !loading && (
-          <div className="px-4 pb-3">
+        {(total > 0 || searchQuery) && (
+          <div className={cn(compact ? "px-1 pb-2" : "px-4 pb-3")}>
             <div className="relative">
               <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -233,7 +271,7 @@ export function SessionHistory({ open, onOpenChange, onLoadSession, refreshKey }
           </div>
         )}
 
-        <ScrollArea className="h-[calc(100vh-220px)] px-3 pb-3">
+        <ScrollArea className={cn(scrollClassName, compact ? "px-0 pb-2" : "px-3 pb-3")}>
           {/* Loading */}
           {loading && (
             <div className="space-y-3 px-1">
@@ -299,8 +337,14 @@ export function SessionHistory({ open, onOpenChange, onLoadSession, refreshKey }
                     key={session.id}
                     type="button"
                     onClick={() => handleLoad(session.id)}
+                    aria-disabled={disabled}
+                    aria-current={session.id === currentId ? "true" : undefined}
+                    title={disabled ? tr("正在求解，完成后才能打开其他会话", "Solving is running; open another session when it finishes") : undefined}
                     className={cn(
-                      "w-full text-left rounded-lg border border-border/60 p-3",
+                      "w-full text-left rounded-lg border border-border/60",
+                      compact ? "p-2.5" : "p-3",
+                      session.id === currentId && "border-primary/50 bg-primary/5",
+                      disabled && "cursor-not-allowed opacity-60",
                       "transition-all duration-200",
                       "hover:bg-accent/10 hover:border-primary/30",
                       "focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1",
@@ -329,7 +373,7 @@ export function SessionHistory({ open, onOpenChange, onLoadSession, refreshKey }
                     </span>
 
                     {/* Problem text */}
-                    <p className="text-sm leading-relaxed text-card-foreground line-clamp-2 mb-2 pr-6">
+                    <p className={cn("leading-relaxed text-card-foreground line-clamp-2 mb-2 pr-6", compact ? "text-xs" : "text-sm")}>
                       <MathText text={session.problem_text} />
                     </p>
 
@@ -374,7 +418,7 @@ export function SessionHistory({ open, onOpenChange, onLoadSession, refreshKey }
 
         {/* Pagination controls */}
         {!loading && totalPages > 1 && (
-          <div className="flex items-center justify-between px-6 py-3 border-t border-border">
+          <div className={cn("flex items-center justify-between border-t border-border", compact ? "px-1 py-2" : "px-6 py-3")}>
             <Button
               variant="ghost"
               size="sm"
@@ -400,7 +444,6 @@ export function SessionHistory({ open, onOpenChange, onLoadSession, refreshKey }
             </Button>
           </div>
         )}
-      </SheetContent>
-    </Sheet>
+      </div>
   );
 }
