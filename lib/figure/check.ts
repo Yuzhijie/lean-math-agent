@@ -7,6 +7,7 @@
  */
 import { lt } from "../llm/output-locale";
 import { LogicError, solveLogic } from "./logic";
+import { solveStrategy, StrategyError } from "./strategy";
 import { dist, FigureError, solveFigure, type SolveResult } from "./solve";
 import type { Claim, ClaimResult, FigureSpec, Point2, SolvedFigure } from "./spec";
 
@@ -133,6 +134,16 @@ export function buildFigure(spec: FigureSpec): SolvedFigure {
       throw new FigureError(e instanceof LogicError ? e.message : String(e));
     }
   }
+  let strategy: SolvedFigure["strategy"];
+  if (spec.strategy) {
+    try {
+      const r = solveStrategy(spec.strategy, lt);
+      strategy = r.solved;
+      claims.push(...r.checks);
+    } catch (e) {
+      throw new FigureError(e instanceof StrategyError ? e.message : String(e));
+    }
+  }
   return {
     spec,
     points: solved.points,
@@ -141,5 +152,6 @@ export function buildFigure(spec: FigureSpec): SolvedFigure {
     verified: claims.every((c) => c.ok),
     warnings: solved.warnings,
     logic,
+    ...(strategy ? { strategy } : {}),
   };
 }

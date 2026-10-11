@@ -26,7 +26,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
-import { FigurePanel } from "./components/FigurePanel";
+import { FigurePanel, figureSteps } from "./components/FigurePanel";
 import { DiagramSvg } from "./components/DiagramSvg";
 import { QuestionFigure } from "./components/QuestionFigure";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
@@ -118,6 +118,15 @@ export default function Home() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [showComparison, setShowComparison] = useState(false);
   const [stepsExpanded, setStepsExpanded] = useState(false);
+  // The solution figure's current step, linked to the step cards (per session, so a new session starts fresh).
+  const [figureView, setFigureView] = useState<{ session: string | null; step: number | null; steps: number[] }>({ session: null, step: null, steps: [] });
+  const figStep = figureView.session === state.sessionId ? figureView.step : null;
+  const figSteps = figureView.session === state.sessionId ? figureView.steps : [];
+  const figureBoxRef = useRef<HTMLDivElement>(null);
+  const showStepOnFigure = (n: number) => {
+    setFigureView((v) => ({ session: state.sessionId, steps: v.session === state.sessionId ? v.steps : [], step: n }));
+    figureBoxRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
   // What the page is for right now: solving a problem, or generating questions (from the bank / built-in).
   // Wide screens show the generator and the solver side by side; narrow screens show one at a time.
   const [workspace, setWorkspace] = useState<"solve" | "bank" | "builtin">("solve");
@@ -748,7 +757,18 @@ export default function Home() {
                     </CardHeader>
                     <CardContent className="space-y-5">
                       {/* Figure (geometry / function graphs), computed and checked server-side */}
-                      {state.sessionId && <FigurePanel key={state.sessionId} sessionId={state.sessionId} />}
+                      {state.sessionId && (
+                        <div ref={figureBoxRef} className="scroll-mt-20">
+                          <FigurePanel
+                            key={state.sessionId}
+                            sessionId={state.sessionId}
+                            step={figStep}
+                            onStepChange={(step) => setFigureView((v) => ({ session: state.sessionId, steps: v.session === state.sessionId ? v.steps : [], step }))}
+                            onFigure={(f) => setFigureView({ session: state.sessionId, step: null, steps: figureSteps(f) })}
+                            stepTitles={nlSolution.steps.map((st) => st.title)}
+                          />
+                        </div>
+                      )}
 
                       {/* Summary */}
                       <div className="rounded-lg bg-primary/5 border border-primary/10 p-4">
@@ -782,6 +802,8 @@ export default function Home() {
                             i === 0 ||
                             i === nlSolution.steps.length - 1
                           }
+                          onShowOnFigure={figSteps.includes(i + 1) ? () => showStepOnFigure(i + 1) : undefined}
+                          active={figStep === i + 1}
                         />
                       ))}
 

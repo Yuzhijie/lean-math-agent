@@ -2,12 +2,26 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import DOMPurify from "dompurify";
-import { CheckCircle2, ImageIcon, Loader2, RefreshCw, TriangleAlert } from "lucide-react";
+import { CheckCircle2, ChevronLeft, ChevronRight, ImageIcon, Loader2, RefreshCw, SlidersHorizontal, TriangleAlert } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { renderFigureSvg } from "@/lib/figure/render";
 import type { SolvedFigure } from "@/lib/figure/spec";
+import { strategySteps } from "@/lib/figure/strategy";
+import { graphReadouts } from "@/lib/figure/strategy-render";
+import { MathText } from "./MathText";
 import { useI18n } from "@/lib/i18n";
+
+/** Solution steps at which the figure changes (highlights, elements appearing, values revealed). */
+export function figureSteps(fig: SolvedFigure): number[] {
+  const s = new Set(fig.spec.step_highlights.map((h) => h.step));
+  if (fig.spec.strategy) {
+    for (const n of strategySteps(fig.spec.strategy)) s.add(n);
+    // A picture that builds up step by step starts with step 1: only what is given.
+    if (s.size && Math.min(...s) > 1) s.add(1);
+  }
+  return [...s].sort((a, b) => a - b);
+}
 
 type State =
   | { kind: "loading" }
@@ -27,6 +41,9 @@ export function FigurePanel({
   initialFigure,
   fallbackSvg,
   onFigure,
+  step: stepProp,
+  onStepChange,
+  stepTitles,
 }: {
   /** Figure for a session (cached on it, step highlights from its solution) … */
   sessionId?: string;
@@ -37,9 +54,20 @@ export function FigurePanel({
   fallbackSvg?: string;
   /** Called with the computed figure once it has loaded (e.g. to carry it over when a problem is used). */
   onFigure?: (figure: SolvedFigure) => void;
+  /** Controlled solution step (null = whole figure), e.g. linked to the solution's step cards. */
+  step?: number | null;
+  onStepChange?: (step: number | null) => void;
+  /** Titles of the solution steps (1-based in the buttons), shown with the current step. */
+  stepTitles?: string[];
 }) {
   const [state, setState] = useState<State>(initialFigure ? { kind: "ready", figure: initialFigure } : { kind: "loading" });
-  const [step, setStep] = useState<number | null>(null);
+  const [ownStep, setOwnStep] = useState<number | null>(null);
+  const step = stepProp !== undefined ? stepProp : ownStep;
+  const setStep = (s: number | null) => {
+    setOwnStep(s);
+    onStepChange?.(s);
+  };
+  const [param, setParam] = useState<number | null>(null);
   const [showChecks, setShowChecks] = useState(false);
   const [nonce, setNonce] = useState(0);
   const [force, setForce] = useState(false);
@@ -84,10 +112,9 @@ export function FigurePanel({
   }, [sessionId, problemText, nonce, initialFigure, force]);
 
   const figure = state.kind === "ready" ? state.figure : undefined;
-  const steps = useMemo(
-    () => (figure ? [...new Set(figure.spec.step_highlights.map((h) => h.step))].sort((a, b) => a - b) : []),
-    [figure],
-  );
+  const steps = useMemo(() => (figure ? figureSteps(figure) : []), [figure]);
+  const graph = figure?.spec.strategy?.type === "graph_explore" ? figure.spec.strategy : undefined;
+  const paramValue = graph?.param ? (param ?? graph.param.start ?? graph.param.min) : undefined;
   const fallback = useMemo(() => {
     if (!fallbackSvg || typeof window === "undefined" || !DOMPurify.isSupported) return "";
     return DOMPurify.sanitize(fallbackSvg, { USE_PROFILES: { svg: true, svgFilters: true }, FORBID_TAGS: ["foreignObject", "script", "style"] });
@@ -97,12 +124,12 @@ export function FigurePanel({
     const highlight = step === null ? [] : figure.spec.step_highlights.filter((h) => h.step === step).flatMap((h) => h.ids);
     let raw = "";
     try {
-      raw = renderFigureSvg(figure, { highlight, locale });
+      raw = renderFigureSvg(figure, { highlight, locale, step, param: paramValue });
     } catch {
       return "";
     }
     return DOMPurify.sanitize(raw, { USE_PROFILES: { svg: true }, FORBID_TAGS: ["foreignObject", "script", "style"] });
-  }, [figure, step, locale]);
+  }, [figure, step, locale, paramValue]);
 
   if ((state.kind === "none" || state.kind === "error") && fallback) {
     return (
@@ -191,22 +218,83 @@ export function FigurePanel({
       </div>
 
       {steps.length > 0 && (
-        <div className="mb-2 flex flex-wrap gap-1.5">
-          <Button variant={step === null ? "secondary" : "ghost"} size="sm" className="h-7 text-xs" onClick={() => setStep(null)}>
-            {tr("全图", "Full figure")}
-          </Button>
-          {steps.map((s) => (
-            <Button key={s} variant={step === s ? "secondary" : "ghost"} size="sm" className="h-7 text-xs" onClick={() => setStep(s)}>
-              {tr(`第 ${s} 步`, `Step ${s}`)}
+        <div className="mb-2 space-y-1.5" data-testid="figure-steps">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 w-7 p-0"
+              disabled={step === steps[0]}
+              aria-label={tr("上一步", "Previous step")}
+              title={tr("上一步", "Previous step")}
+              onClick={() => setStep(step === null ? steps[steps.length - 1] : steps[Math.max(0, steps.indexOf(step) - 1)])}
+            >
+              <ChevronLeft className="h-4 w-4" />
             </Button>
-          ))}
+            {steps.map((s) => (
+              <Button key={s} variant={step === s ? "secondary" : "ghost"} size="sm" className="h-7 text-xs" onClick={() => setStep(s)} title={stepTitles?.[s - 1]}>
+                {tr(`第 ${s} 步`, `Step ${s}`)}
+              </Button>
+            ))}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 w-7 p-0"
+              disabled={step === null}
+              aria-label={tr("下一步", "Next step")}
+              title={tr("下一步", "Next step")}
+              onClick={() => setStep(step === null ? null : steps.indexOf(step) + 1 < steps.length ? steps[steps.indexOf(step) + 1] : null)}
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+            <Button variant={step === null ? "secondary" : "ghost"} size="sm" className="h-7 text-xs" onClick={() => setStep(null)}>
+              {tr("全图", "Full figure")}
+            </Button>
+          </div>
+          {step !== null && stepTitles?.[step - 1] && (
+            <p className="text-xs text-warning" data-testid="figure-step-title">
+              {tr(`第 ${step} 步：`, `Step ${step}: `)}
+              <MathText text={stepTitles[step - 1]} />
+            </p>
+          )}
         </div>
       )}
 
       {svg ? (
-        <div className="flex justify-center [&_svg]:h-auto [&_svg]:max-h-[400px] [&_svg]:max-w-full" dangerouslySetInnerHTML={{ __html: svg }} />
+        <div className="flex justify-center overflow-x-auto [&_svg]:h-auto [&_svg]:max-h-[440px] [&_svg]:max-w-full" dangerouslySetInnerHTML={{ __html: svg }} />
       ) : (
         <p className="text-xs text-muted-foreground">{tr("无法渲染配图", "Could not render the figure")}</p>
+      )}
+
+      {/* Slider: move the parameter and watch the graph and the values change */}
+      {graph?.param && paramValue !== undefined && (
+        <div className="mt-2 space-y-1.5 rounded-md border border-border/50 bg-muted/20 px-3 py-2" data-testid="figure-slider">
+          <label className="flex items-center gap-3 text-xs text-muted-foreground">
+            <SlidersHorizontal className="h-3.5 w-3.5 shrink-0 text-primary" />
+            <span className="shrink-0 font-medium text-foreground">{graph.param.label ?? graph.param.id}</span>
+            <input
+              type="range"
+              min={graph.param.min}
+              max={graph.param.max}
+              step={graph.param.step ?? (graph.param.max - graph.param.min) / 100}
+              value={paramValue}
+              onChange={(e) => setParam(Number(e.target.value))}
+              className="w-full accent-amber-500"
+              aria-label={graph.param.label ?? graph.param.id}
+            />
+            <span className="w-14 shrink-0 text-right font-mono text-foreground">{Math.round(paramValue * 1000) / 1000}</span>
+          </label>
+          {graph.readouts.length > 0 && (
+            <div className="flex flex-wrap gap-x-4 gap-y-1 pl-6 text-xs">
+              {graphReadouts(graph, paramValue).map((r) => (
+                <span key={r.label}>
+                  <span className="text-muted-foreground">{r.label} = </span>
+                  <span className="font-mono font-semibold text-warning">{r.value}</span>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
       )}
 
       {showChecks && (

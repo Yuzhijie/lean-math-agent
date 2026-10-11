@@ -10,6 +10,7 @@
  */
 import { compileExpr } from "./expr";
 import { renderLogicSvg } from "./logic-render";
+import { renderStrategySvg } from "./strategy-render";
 import type { Point2, SolvedFigure } from "./spec";
 
 export interface RenderOptions {
@@ -21,6 +22,10 @@ export interface RenderOptions {
   locale?: "zh-CN" | "en-US";
   /** Colours to use instead of the app's dark theme (e.g. black on paper for generated questions). */
   palette?: Partial<typeof DARK_COLORS>;
+  /** Current solution step for strategy figures (elements appear / values are revealed step by step). */
+  step?: number | null;
+  /** Slider value for graph_explore figures. */
+  param?: number;
 }
 
 const DARK_COLORS = {
@@ -48,6 +53,8 @@ function niceStep(range: number): number {
 export function renderFigureSvg(fig: SolvedFigure, opts: RenderOptions = {}): string {
   // Logic-puzzle diagrams (grid / Venn / line-up / tree) have their own renderer.
   if (fig.spec.logic && fig.logic) return renderLogicSvg(fig.spec.logic, fig.logic, opts.highlight ?? [], opts.locale);
+  // Solution-strategy figures (bar model, number line, probability tree, enumeration table, graph + slider).
+  if (fig.spec.strategy) return renderStrategySvg(fig.spec.strategy, fig.strategy, { highlight: opts.highlight, step: opts.step, locale: opts.locale, param: opts.param });
   const COLORS = { ...DARK_COLORS, ...opts.palette };
   const W = opts.width ?? 480;
   const maxH = opts.maxHeight ?? 380;

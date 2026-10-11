@@ -12,6 +12,9 @@
 export class ExprError extends Error {}
 
 type Fn = (x: number) => number;
+/** Values of the variables: `x` and any extra variables an expression may use. */
+export type Scope = Record<string, number>;
+type SFn = (s: Scope) => number;
 
 const FUNCS: Record<string, (v: number) => number> = {
   sin: Math.sin,
@@ -45,7 +48,7 @@ type Tok =
   | { t: ")" }
   | { t: "|" };
 
-function tokenize(src: string): Tok[] {
+function tokenize(src: string, vars: string[] = []): Tok[] {
   const s = src
     .replace(/\*\*/g, "^")
     .replace(/[×·]/g, "*")
@@ -74,7 +77,7 @@ function tokenize(src: string): Tok[] {
       // Split run-together words like `xsin` / `sinx` / `2pix` into known parts.
       const parts: string[] = [];
       while (word.length) {
-        const known = [...Object.keys(FUNCS), ...Object.keys(CONSTS), "x"]
+        const known = [...Object.keys(FUNCS), ...Object.keys(CONSTS), "x", ...vars]
           .sort((a, b) => b.length - a.length)
           .find((k) => word.startsWith(k));
         if (!known) throw new ExprError(`未知标识符: ${word}`);
@@ -112,8 +115,26 @@ function tokenize(src: string): Tok[] {
 
 /** Compile an expression in `x` into a function. Throws ExprError on bad input. */
 export function compileExpr(src: string): Fn {
+  const f = compileScoped(src, []);
+  return (x) => f({ x });
+}
+
+/** Names allowed as extra variables: one letter (not `e`, which is the constant), or a letter + digits. */
+export const VAR_NAME = /^(?!e$)[A-Za-z][0-9]*$/;
+
+/**
+ * Compile an expression in `x` and the given extra variables (one letter each, e.g. a slider
+ * parameter `a`, table columns `m`, `n`); evaluate it with a scope of their values.
+ */
+export function compileExprVars(src: string, vars: string[]): (scope: Scope) => number {
+  for (const v of vars) if (!VAR_NAME.test(v)) throw new ExprError(`变量名不可用: ${v}`);
+  return compileScoped(src, vars);
+}
+
+function compileScoped(src: string, vars: string[]): SFn {
   if (src.length > 300) throw new ExprError("表达式过长");
-  const toks = tokenize(src);
+  const toks = tokenize(src, vars);
+  const varSet = new Set(vars);
   let pos = 0;
   let absDepth = 0;
   const peek = () => toks[pos];
@@ -125,7 +146,7 @@ export function compileExpr(src: string): Fn {
 
   const BP: Record<string, number> = { "+": 10, "-": 10, "*": 20, "/": 20, "^": 40 };
 
-  function parse(minBp: number): Fn {
+  function parse(minBp: number): SFn {
     let lhs = prefix();
     for (;;) {
       const t = peek();
@@ -157,7 +178,7 @@ export function compileExpr(src: string): Fn {
     return lhs;
   }
 
-  function prefix(): Fn {
+  function prefix(): SFn {
     const t = next();
     if (!t) throw new ExprError("表达式不完整");
     if (t.t === "num") {
@@ -182,7 +203,11 @@ export function compileExpr(src: string): Fn {
       return (x) => Math.abs(inner(x));
     }
     if (t.t === "id") {
-      if (t.v === "x") return (x) => x;
+      if (t.v === "x") return (sc) => sc.x ?? NaN;
+      if (varSet.has(t.v)) {
+        const name = t.v;
+        return (sc) => sc[name] ?? NaN;
+      }
       if (t.v in CONSTS) {
         const v = CONSTS[t.v];
         return () => v;

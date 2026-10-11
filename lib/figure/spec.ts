@@ -9,6 +9,7 @@
  */
 import { z } from "zod";
 import { logicSchema, type LogicSolved } from "./logic";
+import { strategySchema, type StrategySolved } from "./strategy";
 
 const id = z.string().min(1).max(16).regex(/^[A-Za-z][A-Za-z0-9_'′₀-₉]*$/, "id must be a short identifier like A, B1, O, l1");
 const pair = z.tuple([id, id]);
@@ -106,6 +107,8 @@ export const figureSpecSchema = z.object({
   hidden_points: z.array(id).default([]),
   /** Logic-puzzle diagram (matching grid, Venn diagram, line-up / seating, tree diagram). */
   logic: logicSchema.optional(),
+  /** Solution-strategy figure (bar model, number line, probability tree, enumeration table, graph with a slider). */
+  strategy: strategySchema.optional(),
   /** Element ids (points, segment/angle ids, circle ids, fn ids) each solution step refers to; step is 1-based. */
   step_highlights: z.array(z.object({ step: z.number().int().min(1), ids: z.array(z.string().min(1).max(16)) })).default([]),
 });
@@ -146,4 +149,6 @@ export interface SolvedFigure {
   warnings: string[];
   /** Solved logic diagram, when the spec has one. */
   logic?: LogicSolved;
+  /** Solved strategy figure, when the spec has one. */
+  strategy?: StrategySolved;
 }

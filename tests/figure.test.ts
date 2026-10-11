@@ -259,6 +259,22 @@ describe("generateFigure", () => {
     expect(chatJsonMock).not.toHaveBeenCalled();
   });
 
+  it("word problems get a strategy figure (bar model): checked, and a wrong one goes back once", async () => {
+    const MIA = "Mia 有 24 颗糖。她把其中的 $\\frac{3}{8}$ 给了弟弟，自己又吃了 4 颗。她还剩多少颗糖？";
+    expect(mightNeedFigure(MIA)).toBe(true);
+    expect(mightNeedFigure("Positive numbers a and b satisfy a + b = 4. Find the largest value of ab.")).toBe(true);
+    expect(mightNeedFigure("A bag has 3 red and 2 blue balls. What is the probability that both are red?")).toBe(true);
+    const bar = (answer: number) => figureSpecSchema.parse({ needed: true, strategy: { type: "bar_model", bars: [{ id: "mia", total: 24, units: 8, parts: [{ id: "give", units: 3 }, { id: "eat", value: 4 }, { id: "left", unknown: true }] }], ask: "left", answer } });
+    chatJsonMock.mockResolvedValueOnce(bar(12)).mockResolvedValueOnce(bar(11));
+    const r = await generateFigure({ problemText: MIA });
+    expect(r.attempts).toBe(2);
+    expect(r.figure?.verified).toBe(true);
+    expect(r.figure?.strategy).toMatchObject({ type: "bar_model", parts: { left: 11 } });
+    // The repair round was told what the program found.
+    expect((chatJsonMock.mock.calls[1][0] as { user: string }).user).toMatch(/11/);
+    expect((chatJsonMock.mock.calls[0][0] as { system: string }).system).toContain("bar_model");
+  });
+
   it("returns a verified figure from the first attempt", async () => {
     chatJsonMock.mockResolvedValueOnce(figureSpecSchema.parse(good));
     const r = await generateFigure({ problemText: "等腰三角形 ABC 中 AB=AC=5，BC=6，求 BC 边上的高" });

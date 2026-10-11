@@ -46,6 +46,16 @@ export const FIGURE_SYSTEM = `你为中小学数学题配图。你不画图、�
   - 搭配、有多少种（树状图）→ {"type":"tree","levels":[{"label":"上衣","options":["红","蓝"]},{"label":"裤子","options":["黑","白","灰"]}],"answer":6}；从同一组里选且不能重复时 levels 各层写同一组并加 "distinct":true；禁止的组合写 "exclude":[["红","白"]]。
   逻辑题中项名须唯一（2–12 字），step_highlights 的 ids 用项名（如 "甲"、"医生"），韦恩图用区域名 "A"、"B"、"AB"、"none"。
 
+- strategy: 解题策略图——画出"怎么解"。应用题、分数、和差倍、行程温度、计数枚举、概率、方程与最值题优先用它（此时 constructions/draw/claims 留空数组，不要 axes/functions/logic）。程序会求出每份是多少、逐项核对图中的数据和答案。五种之一：
+  - 线段图 bar_model（分数、比、和差倍、"一共/剩下/比…多/是…的几倍"）：{"type":"bar_model","unit":"颗","bars":[{"id":"mia","label":"Mia 的糖","total":24,"units":8,"parts":[{"id":"give","label":"给弟弟","units":3,"from_step":2},{"id":"eat","label":"吃掉","value":4,"from_step":3},{"id":"left","label":"剩下","unknown":true,"reveal_step":4}]}],"ask":"left","answer":11}。每段用 units（占几份）或 value（已知数值）；每条线段最多一段两者都没有（由总数减出）；bar 的 units = 整条平均分成几份（分数题写分母）。几条线段比较时加 relations：{"id":"tot","type":"sum","bars":["A","B"],"value":48}（合计）或 {"id":"d","type":"difference","bars":["A","B"],"value":15}（A 比 B 多 15）。"A 是 B 的 3 倍" 写成 A 的一段 units:3、B 的一段 units:1。
+  - 数轴 number_line（温度、行程、时间、整数加减、相遇追及）：{"type":"number_line","min":-5,"max":10,"unit":"℃","points":[{"id":"s","value":-3,"label":"−3℃"},{"id":"e","value":5,"label":"5℃","unknown":true,"reveal_step":2}],"jumps":[{"id":"j","from":-3,"to":5,"delta":8,"label":"升高 8℃","from_step":1}],"spans":[{"id":"d","from":0,"to":5,"label":"5 km"}],"ask":"e","answer":5}
+  - 概率树 prob_tree（分步发生的事件，放回/不放回）：{"type":"prob_tree","levels":["第一次","第二次"],"children":[{"id":"R","label":"红","p":"3/5","children":[{"id":"RR","label":"红","p":"2/4"},{"id":"RB","label":"蓝","p":"2/4"}]},{"id":"B","label":"蓝","p":"2/5","children":[{"id":"BR","label":"红","p":"3/4"},{"id":"BB","label":"蓝","p":"1/4"}]}],"ask":["RR"],"answer":"3/10"}。概率写分数；每个分叉之和必须是 1；ask 列出所求事件包含的叶子 id。
+  - 列表法 enum_table（鸡兔同笼、尝试法、找出所有符合条件的组合）：{"type":"enum_table","vars":[{"id":"c","label":"鸡","from":0,"to":10}],"columns":[{"id":"r","label":"兔","expr":"10 - c"},{"id":"l","label":"腿","expr":"2c + 4r","from_step":2}],"conditions":["l = 28"],"answer_row":{"c":6,"r":4}}；求"有几种"时写 "answer_count"。变量和列名用一个字母（不能用 e 或 x），最多两个变量、每个最多试 200 个值；每个条件恰好一个比较符号（= < > <= >= !=）。
+  - 函数图像加滑块 graph_explore（最值、方程的解、参数变化）：{"type":"graph_explore","x":[0,4],"y":[0,5],"functions":[{"id":"f","expr":"x(4 - x)","label":"ab = a(4 − a)"}],"param":{"id":"a","label":"a","min":0,"max":4,"step":0.1,"start":1},"tracer":{"fn":"f"},"readouts":[{"label":"b","expr":"4 - a"},{"label":"ab","expr":"a(4 - a)"}],"optimum":{"id":"top","fn":"f","kind":"max","x":2,"y":4,"from_step":3}}；交点写 "intersections":[{"fns":["f","g"],"x":1}]。函数用 x；滑块参数可以出现在函数里（如 "kx + 1"），学生拖动滑块看图像和读数变化。
+  策略图要跟着解答一步步展开：from_step = 从解答第几步起出现，reveal_step = 第几步起显示所求的值（之前显示 ?）；第 1 步通常只画已知条件。step_highlights 用元素 id。
+
+选图：几何题用 constructions；逻辑推理、集合、排队、搭配计数用 logic；其余应用题、概率、列表尝试、函数最值优先用 strategy。
+
 要求：
 1. 忠实于题目：题目给出的长度、角度、垂直、平行、中点、相切等条件都要体现在 constructions 或 claims 里。
 2. 求证/求解的结论不要作为已知条件写进 constructions（可以写进 claims，程序会检查图是否符合）。
@@ -66,7 +76,7 @@ export const FIGURE_SYSTEM = `你为中小学数学题配图。你不画图、�
  * graphical content. Errs on the side of trying.
  */
 export function mightNeedFigure(problemText: string): boolean {
-  return /三角形|四边形|多边形|平行四边形|矩形|长方形|正方形|菱形|梯形|圆|弧|弦|切线|半径|直径|角|垂直|垂足|平行|中点|中线|高线|平分线|线段|射线|直线|对称|旋转|翻折|折叠|坐标|函数|图像|图象|抛物线|双曲线|椭圆|x\s*轴|y\s*轴|数轴|面积|周长|体积|棱|正方体|长方体|圆柱|圆锥|球|向量|△|∠|⊥|∥|⊙|内心|外心|重心|垂心|内切|外接|分别是|分别为|说谎|说真话|说假话|真话|假话|排成一[排行列]|排队|站成|座位|围坐|圆桌|相邻|挨着|左边|右边|喜欢|参加|都不|两[样项种]都|既.{1,8}又|有多少种|多少种不同|搭配|树状图|推理|职业|甲.{0,6}乙.{0,6}丙|\\(?:angle|triangle|odot|perp|parallel|overline|widehat|sqrt\{[^}]*\}\s*x)|triangle|circle|angle|graph|parabola|perpendicular|parallel/i.test(
+  return /三角形|四边形|多边形|平行四边形|矩形|长方形|正方形|菱形|梯形|圆|弧|弦|切线|半径|直径|角|垂直|垂足|平行|中点|中线|高线|平分线|线段|射线|直线|对称|旋转|翻折|折叠|坐标|函数|图像|图象|抛物线|双曲线|椭圆|x\s*轴|y\s*轴|数轴|面积|周长|体积|棱|正方体|长方体|圆柱|圆锥|球|向量|△|∠|⊥|∥|⊙|内心|外心|重心|垂心|内切|外接|分别是|分别为|说谎|说真话|说假话|真话|假话|排成一[排行列]|排队|站成|座位|围坐|圆桌|相邻|挨着|左边|右边|喜欢|参加|都不|两[样项种]都|既.{1,8}又|有多少种|多少种不同|搭配|树状图|推理|职业|甲.{0,6}乙.{0,6}丙|\\(?:angle|triangle|odot|perp|parallel|overline|widehat|sqrt\{[^}]*\}\s*x)|分数|几分之|\d+\s*\/\s*\d+|倍|一共|剩下|还剩|比.{0,8}[多少]|相遇|追及|速度|路程|温度|概率|可能性|摸出|抽到|鸡兔|头.{0,12}[脚腿]|最大值|最小值|最大|最小|列表|所有.{0,6}(组合|情况)|triangle|circle|angle|graph|parabola|perpendicular|parallel|times as (many|much)|more than|fewer than|left|altogether|in total|probability|chance|speed|distance|maximum|minimum|largest|smallest|how many ways/i.test(
     problemText,
   );
 }
