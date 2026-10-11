@@ -96,6 +96,18 @@ describe("autoformalize: candidate voting", () => {
   });
 });
 
+describe("autoformalize: non-triviality layer", () => {
+  it("judges the statement against the original problem, so an easy problem formalized faithfully is fine", async () => {
+    llmAnswers([B]);
+    leanAnswers();
+    await autoformalize({ problemText: "Prove that n + 0 = n for every natural number n", candidates: 1, maxRetries: 0 });
+    const call = chatJson.mock.calls.find((c) => (c[0] as { schemaName: string }).schemaName === "nonTrivialityCheck")![0] as { system: string; user: string };
+    expect(call.user).toContain("Original problem:\nProve that n + 0 = n for every natural number n");
+    expect(call.system).toContain("NOT degenerate");
+    expect(call.system).toMatch(/faithful formalization of a problem that is itself easy/);
+  });
+});
+
 describe("autoformalize: counterexample layer", () => {
   it("rejects a refuted statement and feeds the counterexample into the retry", async () => {
     llmAnswers([A, B]);

@@ -155,7 +155,7 @@ lib/
     usage-tracker.ts                # Usage records + per-run scope (RunMetrics)
     prompts.ts                      # Prompts (enumerate/plan/prove-step/whole-proof, Lean 4 pitfalls)
     agent-prompt.ts                 # Agent system prompts (6 roles + 10 domains)
-    autoformalize.ts                # Autoformalization: candidate voting (AUTOFORMALIZE_CANDIDATES) + 6 validation layers (elaborate, refute, non-trivial, back-translate, numeric, relevance)
+    autoformalize.ts                # Autoformalization: candidate voting (AUTOFORMALIZE_CANDIDATES) + 6 validation layers (elaborate, refute, non-trivial, back-translate, numeric, relevance); the non-trivial layer judges the statement against the original problem text (a faithful statement of an easy problem such as n + 0 = n passes; only a formalization that became easier than the problem fails)
     classify-problem.ts             # Problem type classifier
     enumerate.ts                    # Method enumeration
     equation-setup.ts               # Equation extraction from word problems

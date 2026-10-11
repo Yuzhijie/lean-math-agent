@@ -186,7 +186,7 @@ export async function autoformalize(args: {
     }
 
     // Layer 2: Non-triviality — is it a tautology or vacuous?
-    const l2 = await layerNonTriviality(formal);
+    const l2 = await layerNonTriviality(formal, args.problemText);
     results.push(l2);
     if (!l2.pass) {
       lastResult = {
@@ -456,6 +456,7 @@ async function layerElaborability(
 
 async function layerNonTriviality(
   formal: FormalizeResponse,
+  problemText: string,
 ): Promise<ValidationResult> {
   // Heuristic checks:
   // 1. Check for trivial goal patterns
@@ -487,13 +488,14 @@ async function layerNonTriviality(
       is_non_trivial: boolean;
       reasoning: string;
     }>({
-      system: `Analyze this Lean 4 theorem statement for non-triviality.
-Check if:
-- The premises are contradictory (vacuous truth)
-- The goal is trivially true
-- The theorem is meaningful (not degenerate)
+      system: `You check whether a Lean 4 formalization has DEGENERATED compared with the original problem — i.e. it became easier than the problem asked, so proving it would not prove the problem.
+Degenerate (is_non_trivial = false) when:
+- the premises are contradictory or impossible, so the statement is vacuously true while the original problem's hypotheses are satisfiable;
+- the goal collapsed to something trivially true (True, x = x, a weaker claim, a special case) while the ORIGINAL problem asks for more;
+- the conclusion or a key hypothesis of the original problem is missing.
+NOT degenerate (is_non_trivial = true): a faithful formalization of a problem that is itself easy. If the original problem only asks to prove an easy fact (e.g. "n + 0 = n", "1 + 1 = 2", a definition unfolding), a statement that says exactly that is correct, even if Lean proves it by rfl or simp. Judge against the original problem, not against how hard the statement looks.
 Return JSON: { "is_non_trivial": boolean, "reasoning": string (Chinese) }`,
-      user: `theorem ${formal.theorem_name} ${formal.theorem_type} := by sorry\n\nOriginal problem: ${formal.natural_language_restatement}`,
+      user: `Original problem:\n${problemText.slice(0, 4000)}\n\nFormalization:\ntheorem ${formal.theorem_name} ${formal.theorem_type} := by sorry\n\nThe formalizer's restatement: ${formal.natural_language_restatement}`,
       schema: z.object({
         is_non_trivial: z.boolean(),
         reasoning: z.string().min(1),
