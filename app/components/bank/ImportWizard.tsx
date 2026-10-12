@@ -216,7 +216,18 @@ export function ImportWizard({ bank, categories, open, onOpenChange, resumeBatch
     return c;
   }, [drafts]);
   const shown = statusFilter === "all" ? drafts : drafts.filter((d) => d.status === statusFilter);
-  const toCommit = drafts.filter((d) => d.include && d.status !== "error" && d.status !== "duplicate").length;
+  const committing = drafts.filter((d) => d.include && d.status !== "error" && d.status !== "duplicate");
+  const toCommit = committing.length;
+  // Where the questions go: each question's own catalogue place (decided by the model, editable in review).
+  const byPath = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const d of committing) {
+      const k = (d.category_path ?? []).join(" › ");
+      m.set(k, (m.get(k) ?? 0) + 1);
+    }
+    return [...m.entries()].sort((a, b) => (a[0] ? 0 : 1) - (b[0] ? 0 : 1) || a[0].localeCompare(b[0]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- recomputed from the drafts
+  }, [drafts]);
   const pdfTidy = !!file && (isPdf(file.name) || images);
   const chooseFiles = (list: FileList | null | undefined) => {
     const all = Array.from(list ?? []);
@@ -521,10 +532,34 @@ export function ImportWizard({ bank, categories, open, onOpenChange, resumeBatch
                     <Stat label={tr("重复（跳过）", "Duplicates (skipped)")} value={counts.duplicate ?? 0} />
                     <Stat label={tr("错误（跳过）", "Errors (skipped)")} value={counts.error ?? 0} tone={counts.error ? "destructive" : undefined} />
                   </div>
+                  {/* Each question goes to its own category: show how the questions are spread. */}
+                  {byPath.length > 0 && (
+                    <div className="space-y-1.5" data-testid="commit-categories">
+                      <FieldLabel>
+                        {byPath.filter(([k]) => k).length > 1
+                          ? tr(`按每道题的内容分入 ${byPath.filter(([k]) => k).length} 个分类`, `Each question goes to its own category: ${byPath.filter(([k]) => k).length} categories`)
+                          : tr("分类", "Category")}
+                      </FieldLabel>
+                      <ul className="max-h-48 space-y-0.5 overflow-y-auto rounded-md border border-border/60 p-2 text-xs">
+                        {byPath.map(([path, n]) => (
+                          <li key={path || "none"} className="flex items-center justify-between gap-2">
+                            <span className={cn("truncate", !path && "text-warning")}>{path || tr("（未分类：审核时可补上）", "(no category: set it in review)")}</span>
+                            <Badge variant="secondary" className="shrink-0 tabular-nums">{n}</Badge>
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="text-[11px] text-muted-foreground">
+                        {tr("分类由模型按每道题的内容决定，缺少的分类提交时自动创建；可在上一步逐题修改。", "The model chose each question's category from its content; missing categories are created on commit. Change any of them in the previous step.")}
+                      </p>
+                    </div>
+                  )}
                   <div className="space-y-1.5">
-                    <FieldLabel>{tr("加入分类（可选）", "Add to category (optional)")}</FieldLabel>
-                    <NativeSelect value={targetCategory} onChange={setTargetCategory} ariaLabel={tr("目标分类", "Target category")}>
-                      <option value="">{tr("（不加入分类）", "(no category)")}</option>
+                    <FieldLabel>{tr("另外把整批题放进一个分组（可选）", "Also put the whole batch in one group (optional)")}</FieldLabel>
+                    <p className="text-[11px] text-muted-foreground">
+                      {tr("例如“2019 真题”。这是额外的分组，不会替代上面每道题自己的分类。", "For example “2019 paper”. This is an extra group; it does not replace each question's own category above.")}
+                    </p>
+                    <NativeSelect value={targetCategory} onChange={setTargetCategory} ariaLabel={tr("额外分组", "Extra group")}>
+                      <option value="">{tr("（不另外分组）", "(no extra group)")}</option>
                       {categories
                         .filter((c) => c.kind === "manual")
                         .map((c) => (

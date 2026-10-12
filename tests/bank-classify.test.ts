@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyClassification, categoryPaths, classifyQuestions, normaliseClassification } from "@/lib/bank/classify";
+import { applyClassification, categoryPaths, classifyQuestions, normaliseClassification, unifyNewPaths } from "@/lib/bank/classify";
 import { commitBatch, parseImport } from "@/lib/bank/import";
 import { reclassifyItems } from "@/lib/bank/reclassify";
 import { _closeAllBanks, addItems, createBank, ensureCategoryPath, getBank, listCategories, listItems, putCategory } from "@/lib/bank/store";
@@ -154,6 +154,55 @@ describe("import with model classification", () => {
     await classifyQuestions([{ stem: "What is 3/4 of 20?", type: "multiple_choice" }], { bank: getBank(OWNER, bankId), categories: listCategories(OWNER, bankId) });
     expect(prompt).toContain("Number > Fractions");
     expect(prompt).toContain("Measurement:"); // built-in vocabulary strands for an English bank
+  });
+});
+
+describe("a file with questions of many topics", () => {
+  it("keeps names like 2D shapes, strips only numbering, reuses near-duplicate categories", () => {
+    const ctx = { paths: [["Statistics", "Data displays (graphs and tables)"], ["Space", "2D shapes"]], vocab: [] };
+    const n = (path: string[]) => normaliseClassification({ n: 1, path }, { stem: "x", type: "other" }, ctx)!.category_path;
+    expect(n(["Space", "2D shapes"])).toEqual(["Space", "2D shapes"]);
+    expect(n(["Space", "3D objects and nets"])).toEqual(["Space", "3D objects and nets"]);
+    expect(n(["1. Number", "（一）分数"])).toEqual(["Number", "分数"]);
+    expect(n(["statistics", "Data display"])).toEqual(["Statistics", "Data displays (graphs and tables)"]);
+    // Different topics stay different.
+    expect(n(["Measurement", "Time"])).toEqual(["Measurement", "Time"]);
+  });
+
+  it("new names made in different chunks of one run are given one spelling", () => {
+    const c = (path: string[]) => ({ category_path: path, knowledge_points: [] });
+    const results = [c(["Statistics", "Data displays"]), c(["Statistics", "Data displays (graphs and tables)"]), c(["Statistics", "Data displays"]), c(["Measurement", "Time"]), null];
+    unifyNewPaths(results, []);
+    expect(results.map((r) => r?.category_path.join(" > "))).toEqual(["Statistics > Data displays", "Statistics > Data displays", "Statistics > Data displays", "Measurement > Time", undefined]);
+    // An existing category wins over a more common new spelling.
+    const r2 = [c(["Statistics", "Data display"]), c(["Statistics", "Data display"]), c(["Statistics", "Data displays (graphs and tables)"])];
+    unifyNewPaths(r2, [["Statistics", "Data displays (graphs and tables)"]]);
+    expect(new Set(r2.map((r) => r.category_path[1]))).toEqual(new Set(["Data displays (graphs and tables)"]));
+  });
+
+  it("each question is decided on its own, with the paper's own category and what its figure shows", async () => {
+    const bankId = createBank(OWNER, { name: "ICAS", language: "en" }).id;
+    let prompt = "";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_u: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body)) as { messages: Array<{ content: string }> };
+        prompt = body.messages.map((m) => m.content).join("\n");
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items: [{ n: 1, path: ["Probability", "Chance"] }, { n: 2, path: ["Measurement", "Time"] }] }) } }] }), { status: 200 });
+      }),
+    );
+    const out = await classifyQuestions(
+      [
+        { stem: "Aditi picked one shape from Box 1 and one from Box 2. Which pair is impossible?", type: "multiple_choice", tags: ["Chance & Data"], images: [{ asset: "a.png", caption: "cards: two boxes of shapes" }] },
+        { stem: "Which month comes after April?", type: "multiple_choice", tags: ["Measures & Units"] },
+      ],
+      { bank: getBank(OWNER, bankId), categories: [] },
+    );
+    expect(prompt).toContain("paper's category: Chance & Data");
+    expect(prompt).toContain("figure: cards: two boxes of shapes");
+    expect(prompt).toContain("decide each question on its own");
+    expect(prompt).toContain("not by the objects in the story or picture");
+    expect(out.map((c) => c?.category_path.join(" > "))).toEqual(["Probability > Chance", "Measurement > Time"]);
   });
 });
 
