@@ -138,7 +138,8 @@ export function ImportWizard({ bank, categories, open, onOpenChange, resumeBatch
       fd.append("column_map", JSON.stringify(cm));
     }
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 540_000);
+    // Papers of screenshots: every page is read by the vision model, which takes minutes.
+    const timer = setTimeout(() => ctrl.abort(), 930_000);
     const res = await run(
       "upload",
       () => api<{ batch: ImportBatch }>(bankUrl(bank.id, "/imports"), { method: "POST", body: fd, signal: ctrl.signal }),

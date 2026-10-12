@@ -20,6 +20,7 @@ import { clampStr, recordToFields, type ParsedQuestion } from "./fields";
 import { detectImage, IMAGE_EXT, IMAGE_FILE, preparePhoto, scannedPdfPages, type PageImage } from "./images";
 import { maxOcrPages, ocrPages } from "./ocr";
 import { parsePdf, refineWithModel } from "./pdf";
+import { applyAnswerKey } from "./answer-key";
 import { decodeText, previewTable, readRows, rowsToQuestions } from "./tabular";
 import { splitText } from "./text";
 
@@ -177,14 +178,33 @@ export async function parseImport(args: {
       break;
     case "pdf": {
       const pdf = await parsePdf(data);
-      if (pdf.scanned) {
+      if (pdf.scanned || pdf.picturePages.length) {
+        // A scan, or a paper whose questions are page images (screenshots) next to a few text pages.
         requireVision(bank.allow_model, "pdf");
-        const pages = await scannedPdfPages(data, { maxPages: maxOcrPages() });
-        if (!pages.length) throw new BankError(lt("这个 PDF 既没有文字也没有可识别的页面图像", "This PDF has neither text nor page images to read"), 422);
-        ({ questions, notes, ocrAssets } = await readScans(owner, bankId, pages, notes));
-        ocr = true;
+        const skipped: number[] = [];
+        const pages = await scannedPdfPages(data, { maxPages: maxOcrPages(), ...(pdf.scanned ? {} : { pages: pdf.picturePages }), skipped });
+        if (skipped.length) {
+          notes.push(
+            lt(
+              `第 ${skipped.join("、")} 页是矢量图形，没有可直接读取的页面图像；安装 @napi-rs/canvas（npm install @napi-rs/canvas）后重新导入即可识别`,
+              `Page${skipped.length === 1 ? "" : "s"} ${skipped.join(", ")} ${skipped.length === 1 ? "is" : "are"} drawn as vector graphics with no page image to read; install @napi-rs/canvas (npm install @napi-rs/canvas) and import again to read ${skipped.length === 1 ? "it" : "them"}`,
+            ),
+          );
+        }
+        if (!pages.length && !pdf.questions.length) throw new BankError(lt("这个 PDF 既没有文字也没有可识别的页面图像", "This PDF has neither text nor page images to read"), 422);
+        let read: ParsedQuestion[] = [];
+        if (pages.length) ({ questions: read, notes, ocrAssets } = await readScans(owner, bankId, pages, notes));
+        // Text questions (if any) and the questions read from the pictures, in page order.
+        questions = [...pdf.questions, ...read].sort((a, b) => (a.fields.source?.page ?? 0) - (b.fields.source?.page ?? 0));
+        ocr = read.length > 0;
+        if (!pdf.scanned) notes.push(lt(`其中 ${pages.length} 页是图片，已用视觉模型识别`, `${pages.length} page${pages.length === 1 ? " is a picture and was" : "s are pictures and were"} read with the vision model`));
       } else questions = pdf.questions;
       if (args.useModel !== false && bank.allow_model && process.env.LLM_API_KEY && questions.length) questions = await refineWithModel(questions);
+      if (pdf.answerKey && questions.length) {
+        const r = applyAnswerKey(questions, pdf.answerKey);
+        questions = r.questions;
+        notes.push(lt(`从答案页（第 ${pdf.answerKeyPages.join("、")} 页）填入了 ${r.filled} 道题的答案，请核对`, `Filled in ${r.filled} answer${r.filled === 1 ? "" : "s"} from the answer key (page ${pdf.answerKeyPages.join(", ")}); please check`));
+      }
       break;
     }
     case "image": {

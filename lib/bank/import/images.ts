@@ -268,21 +268,54 @@ export function pageScan(images: RawImage[]): RawImage | null {
   return { data: out, width: largest.width, height, channels: largest.channels };
 }
 
-/** Page images of a scanned PDF (no text layer), at most `maxPages`. */
-export async function scannedPdfPages(data: Buffer, opts: { maxPages: number; firstPage?: number }): Promise<PageImage[]> {
+/** @napi-rs/canvas when installed (optional): lets pdf.js render pages that are drawn rather than scanned. */
+async function loadCanvas(): Promise<unknown | null> {
+  try {
+    const name = "@napi-rs/canvas";
+    return await import(/* webpackIgnore: true */ name);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Page images of a scanned PDF, or of the listed `pages` of a mixed one, at most `maxPages`. A page's
+ * scan is its embedded image; a page drawn as vector graphics is rendered when @napi-rs/canvas is
+ * installed, otherwise it is listed in `skipped`.
+ */
+export async function scannedPdfPages(data: Buffer, opts: { maxPages: number; firstPage?: number; pages?: number[]; skipped?: number[] }): Promise<PageImage[]> {
   const { extractImages, getDocumentProxy } = await import("unpdf");
   const pdf = await getDocumentProxy(new Uint8Array(data));
-  if (pdf.numPages > opts.maxPages) {
+  const wanted = opts.pages?.filter((p) => p >= 1 && p <= pdf.numPages) ?? Array.from({ length: pdf.numPages }, (_, i) => i + 1);
+  if (wanted.length > opts.maxPages) {
     throw new BankError(
-      lt(`扫描版 PDF 一次最多识别 ${opts.maxPages} 页（此文件 ${pdf.numPages} 页），请拆分后分批导入`, `A scanned PDF can have at most ${opts.maxPages} pages per import (this one has ${pdf.numPages}); split it and import in parts`),
+      lt(`扫描版 PDF 一次最多识别 ${opts.maxPages} 页（此文件需要识别 ${wanted.length} 页），请拆分后分批导入，或调大 BANK_OCR_MAX_PAGES`, `A scanned PDF can have at most ${opts.maxPages} pages read per import (this one needs ${wanted.length}); split it and import in parts, or raise BANK_OCR_MAX_PAGES`),
       413,
     );
   }
   const sharp = await loadSharp();
+  let canvas: unknown | null | undefined;
   const pages: PageImage[] = [];
-  for (let p = 1; p <= pdf.numPages; p++) {
-    const raw = pageScan(((await extractImages(pdf, p)) as Array<{ data: Uint8ClampedArray; width: number; height: number; channels: 1 | 3 | 4 }>).map((im) => ({ data: new Uint8Array(im.data.buffer, im.data.byteOffset, im.data.byteLength), width: im.width, height: im.height, channels: im.channels })));
-    if (!raw) continue;
+  for (const p of wanted) {
+    let raw = pageScan(((await extractImages(pdf, p)) as Array<{ data: Uint8ClampedArray; width: number; height: number; channels: 1 | 3 | 4 }>).map((im) => ({ data: new Uint8Array(im.data.buffer, im.data.byteOffset, im.data.byteLength), width: im.width, height: im.height, channels: im.channels })));
+    if (!raw) {
+      // Drawn (vector) page: render it, when a canvas is available.
+      if (canvas === undefined) canvas = await loadCanvas();
+      if (canvas) {
+        try {
+          const { renderPageAsImage } = await import("unpdf");
+          const png = Buffer.from(await renderPageAsImage(new Uint8Array(data), p, { canvasImport: async () => canvas as never, scale: 2 }));
+          const page = (opts.firstPage ?? 1) + p - 1;
+          const photo = await preparePhoto(png, page);
+          pages.push(photo);
+          continue;
+        } catch {
+          /* fall through: listed as skipped */
+        }
+      }
+      opts.skipped?.push(p);
+      continue;
+    }
     const page = (opts.firstPage ?? 1) + p - 1;
     if (sharp) {
       const { data: out, info } = await sharp(Buffer.from(raw.data), { raw: { width: raw.width, height: raw.height, channels: raw.channels } })

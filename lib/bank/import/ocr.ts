@@ -72,6 +72,7 @@ STEP 1 — Survey the page before transcribing (write it in "layout", 1–3 sent
 - Find the regions: title and instructions, question blocks, figures (clocks, tables, charts, number lines, shapes, cards with pictures), answer boxes or lines, and pure decoration (illustrations, logos, banners, borders) that carries no maths information.
 - Work out the reading order (two columns: the whole left column, then the right; cards: left to right, top to bottom) and which instructions, figures and tables belong to which question.
 - A worksheet task without printed question numbers (e.g. a "challenge" with instructions, a set of cards and a final question) is ONE question: number it "1." (or continue from the previous number on the page).
+- A screenshot of an online test shows one question per page: its number is in the header ("Question 12 of 30" → number it "12."). Leave out the test's own interface — the header bar, "Back"/"Next" buttons, progress bars, flags, timers and logos. The empty boxes or circles in front of the answers are answer choices: write them as "A. …", "B. …" in order from the top (left to right when they are side by side); when the choices are pictures, describe them as one "cards" figure and write the choices as "A. [picture]", "B. [picture]" … A box to type the answer into is not a choice.
 
 STEP 2 — Transcribe ("text"). You are a copy clerk, not a teacher:
 - Transcribe the printed text VERBATIM in reading order. Keep the page's language. Do not translate, solve, correct, summarise or add anything.
@@ -132,19 +133,23 @@ export async function ocrPages(owner: string, bankId: string, pages: PageImage[]
   const assets: string[] = [];
   const results: Array<PageTranscription | null> = new Array(pages.length).fill(null);
   let lastError = "";
-  const limit = Math.max(1, opts.concurrency ?? 3);
-  for (let k = 0; k < pages.length; k += limit) {
-    await Promise.all(
-      pages.slice(k, k + limit).map(async (img, j) => {
-        try {
-          results[k + j] = await transcribePage(img);
-        } catch (e) {
-          lastError = (e as Error).message;
-          notes.push(lt(`第 ${img.page} 页识别失败：${lastError}`.slice(0, 300), `Page ${img.page} could not be read: ${lastError}`.slice(0, 300)));
-        }
-      }),
-    );
-  }
+  // A pool: the next page starts as soon as any page is done (BANK_OCR_CONCURRENCY, default 5).
+  const envLimit = Number(process.env.BANK_OCR_CONCURRENCY);
+  const limit = Math.max(1, opts.concurrency ?? (Number.isInteger(envLimit) && envLimit > 0 ? envLimit : 5));
+  let next = 0;
+  const worker = async () => {
+    while (next < pages.length) {
+      const i = next++;
+      const img = pages[i];
+      try {
+        results[i] = await transcribePage(img);
+      } catch (e) {
+        lastError = (e as Error).message;
+        notes.push(lt(`第 ${img.page} 页识别失败：${lastError}`.slice(0, 300), `Page ${img.page} could not be read: ${lastError}`.slice(0, 300)));
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, pages.length) }, worker));
   if (results.every((r) => r === null)) {
     throw new BankError(
       lt(

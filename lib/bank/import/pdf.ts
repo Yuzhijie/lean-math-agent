@@ -19,6 +19,7 @@ import { BankError } from "../store";
 import { QUESTION_TYPES } from "../types";
 import { clampStr, mapType, normaliseChoiceAnswer, stripOptionLetter, type ParsedQuestion } from "./fields";
 import { splitQuestions, type SourceLine } from "./text";
+import { parseAnswerKey, type AnswerKey } from "./answer-key";
 
 export async function extractPdfPages(data: Buffer): Promise<string[]> {
   try {
@@ -73,12 +74,47 @@ export function looksScanned(pages: string[]): boolean {
   return chars < Math.max(40, 25 * pages.length);
 }
 
-/** Questions from a PDF's text layer; `scanned` when it has (almost) no text — read it with ocrPages instead. */
-export async function parsePdf(data: Buffer): Promise<{ questions: ParsedQuestion[]; scanned: false } | { questions: []; scanned: true }> {
+/** A page with (almost) no text: its content is a picture (a scanned or screenshotted question page). */
+const PICTURE_PAGE_CHARS = 20;
+
+export interface ParsedPdf {
+  /** Questions from the text pages. */
+  questions: ParsedQuestion[];
+  /** The whole file is a scan: read every page with ocrPages. */
+  scanned: boolean;
+  /** Pages (1-based) with no text of their own, to read with ocrPages (empty for a plain text PDF). */
+  picturePages: number[];
+  /** Answers printed in the paper (answer-key pages are kept out of the questions). */
+  answerKey?: AnswerKey;
+  answerKeyPages: number[];
+}
+
+/**
+ * Questions from a PDF's text layer, page by page. A file that is (almost) all scan is `scanned`; a file
+ * that mixes text pages (cover, instructions, answer key) with picture pages (each question a page image)
+ * lists the picture pages to read with the vision model, and keeps only real numbered questions from the
+ * text pages. Answer-key pages become `answerKey`.
+ */
+export async function parsePdf(data: Buffer): Promise<ParsedPdf> {
   const pages = await extractPdfPages(data);
-  if (!pages.length || looksScanned(pages)) return { questions: [], scanned: true };
-  const lines: SourceLine[] = cleanPages(pages).flatMap((ls, p) => ls.map((text) => ({ text, page: p + 1 })));
-  return { questions: splitQuestions(lines, { joinLines: true, figureCheck: true }), scanned: false };
+  if (!pages.length || looksScanned(pages)) return { questions: [], scanned: true, picturePages: [], answerKeyPages: [] };
+  const cleaned = cleanPages(pages);
+  const picturePages = cleaned.flatMap((ls, i) => (ls.join("").replace(/\s/g, "").length < PICTURE_PAGE_CHARS ? [i + 1] : []));
+  // Answer keys: kept out of the questions.
+  let answerKey: AnswerKey | undefined;
+  const answerKeyPages: number[] = [];
+  pages.forEach((p, i) => {
+    if (picturePages.includes(i + 1)) return;
+    const key = parseAnswerKey(p);
+    if (!key) return;
+    answerKeyPages.push(i + 1);
+    answerKey = new Map([...(answerKey ?? []), ...key]);
+  });
+  const lines: SourceLine[] = cleaned.flatMap((ls, p) => (answerKeyPages.includes(p + 1) || picturePages.includes(p + 1) ? [] : ls.map((text) => ({ text, page: p + 1 }))));
+  let questions = lines.length ? splitQuestions(lines, { joinLines: true, figureCheck: true }) : [];
+  // Next to picture pages, text pages are covers, instructions and results pages: keep numbered questions only.
+  if (picturePages.length >= 2) questions = questions.filter((q) => q.fields.source?.label);
+  return { questions, scanned: false, picturePages: picturePages.length >= 2 ? picturePages : [], answerKey, answerKeyPages };
 }
 
 // ── Model restructuring ──────────────────────────────────────────────

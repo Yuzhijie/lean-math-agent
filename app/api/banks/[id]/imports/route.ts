@@ -6,7 +6,8 @@ import { IMPORT_FORMATS, type ImportFormat } from "@/lib/bank/types";
 import { lt } from "@/lib/llm/output-locale";
 
 type P = { id: string };
-export const maxDuration = 480;
+// Picture pages are read by the vision model (up to BANK_OCR_MAX_PAGES): allow time for 30 of them.
+export const maxDuration = 900;
 
 const MAX_BYTES = 30 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
