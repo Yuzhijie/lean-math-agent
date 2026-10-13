@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { MathText } from "../MathText";
 import { QuestionFigure } from "../QuestionFigure";
-import { api, bankUrl, errMsg, letter, problemText, type Bank, type Candidate, type CategoryWithCount, type Generation, type Item, type TemplateProfile } from "./api";
+import { api, bankUrl, candidateHref, errMsg, letter, problemText, type Bank, type Candidate, type CategoryWithCount, type Generation, type Item, type TemplateProfile } from "./api";
 import { KindIcon } from "./CategoryTree";
 import { ErrorNote, FieldLabel, NativeSelect, typeLabel, useElapsed, type Tr } from "./ui";
 
@@ -208,7 +208,7 @@ export function GeneratePanel({ bank, template, categories, open, onOpenChange, 
                     setGeneration(g);
                     onAdopted();
                   }}
-                  onUse={() => router.push(`/?problem=${encodeURIComponent(problemText(c))}`)}
+                  onUse={() => router.push(candidateHref(c, bank.id, generation.id))}
                 />
               ))}
             </div>

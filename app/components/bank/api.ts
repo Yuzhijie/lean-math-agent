@@ -86,6 +86,20 @@ export function problemHref(q: { stem: string; options?: string[]; images?: Arra
   return `/?${params.toString()}`;
 }
 
+/**
+ * Main-page link for a generated candidate: its figure is not a bank asset yet (it becomes one when the
+ * question is added to the bank), so the page loads it from the generation: ?bank&gen&cand.
+ */
+export function candidateHref(c: { id: string; stem: string; options?: string[]; figure?: unknown }, bankId: string, generationId: string): string {
+  const params = new URLSearchParams({ problem: problemText(c) });
+  if (c.figure) {
+    params.set("bank", bankId);
+    params.set("gen", generationId);
+    params.set("cand", c.id);
+  }
+  return `/?${params.toString()}`;
+}
+
 export function problemText(q: { stem: string; options?: string[] }): string {
   const opts = q.options?.length ? "\n" + q.options.map((o, i) => `${letter(i)}. ${o}`).join("\n") : "";
   return q.stem + opts;

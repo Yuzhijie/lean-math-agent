@@ -233,6 +233,22 @@ export default function Home() {
     if (!text?.trim()) return;
     dispatch({ type: "SET_PROBLEM_TEXT", text });
     const bankId = url.searchParams.get("bank");
+    // A question generated on the bank page: its figure is fetched from the generation (?gen&cand).
+    const gen = url.searchParams.get("gen");
+    const cand = url.searchParams.get("cand");
+    if (bankId && gen && cand) {
+      applyProblem(text);
+      fetch(`/api/banks/${encodeURIComponent(bankId)}/generations/${encodeURIComponent(gen)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d: { generation?: { candidates: Array<{ id: string; figure?: { svg: string; description: string } }> } } | null) => {
+          const fig = d?.generation?.candidates.find((c) => c.id === cand)?.figure;
+          if (fig?.svg) applyProblem(text, { fallbackSvg: fig.svg, description: fig.description });
+        })
+        .catch(() => undefined);
+      for (const k of ["problem", "bank", "gen", "cand"]) url.searchParams.delete(k);
+      window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+      return;
+    }
     const figs = url.searchParams.getAll("fig").filter((a) => /^[a-f0-9]{16,64}\.(png|jpe?g|gif|webp)$/.test(a));
     applyProblemFromBank(
       text,
