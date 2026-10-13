@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, Check, CheckCircle2, ChevronDown, ChevronRight, Image as ImageIcon, Loader2, Minus, RefreshCw, Sparkles, X, XCircle } from "lucide-react";
+import { ArrowRight, Check, CheckCircle2, ChevronDown, ChevronRight, FileDown, Image as ImageIcon, Loader2, Minus, RefreshCw, Sparkles, X, XCircle } from "lucide-react";
+import { generationPrintHref } from "@/lib/bank/worksheet";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -191,9 +192,24 @@ export function GeneratePanel({ bank, template, categories, open, onOpenChange, 
           {/* Candidates */}
           {generation && (
             <div className="space-y-3 animate-slide-up">
-              <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-                {tr(`候选题 ${generation.candidates.length} 道，通过 ${passed} 道`, `${generation.candidates.length} candidates, ${passed} passed`)}
-              </p>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                  {tr(`候选题 ${generation.candidates.length} 道，通过 ${passed} 道`, `${generation.candidates.length} candidates, ${passed} passed`)}
+                </p>
+                {generation.candidates.length > 0 && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 gap-1.5 text-xs"
+                    onClick={() => window.open(generationPrintHref(bank.id, generation.id), "_blank")}
+                    title={tr("打开可打印的练习卷，在打印窗口选择“另存为 PDF”", "Open a printable worksheet; choose “Save as PDF” in the print window")}
+                    data-testid="export-pdf"
+                  >
+                    <FileDown className="h-3.5 w-3.5" />
+                    {tr("导出 PDF", "Export PDF")}
+                  </Button>
+                )}
+              </div>
               {generation.candidates.length === 0 && <p className="text-sm text-muted-foreground">{tr("没有生成候选题，请重试。", "No candidates were produced; try again.")}</p>}
               {generation.candidates.map((c, i) => (
                 <CandidateCard

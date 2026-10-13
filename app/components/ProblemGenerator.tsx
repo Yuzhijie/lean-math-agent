@@ -52,7 +52,9 @@ import {
   AlertTriangle,
   Loader2,
   MoreHorizontal,
+  FileDown,
 } from "lucide-react";
+import { generationPrintHref, stashWorksheet } from "@/lib/bank/worksheet";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
 /** What a generated problem carries over when it is used: its computed figure, or the model's SVG. */
@@ -167,6 +169,20 @@ export function ProblemGenerator({ mode: modeProp, onUseProblem, onFormalize, on
     const t = setInterval(() => setElapsed(Math.round((Date.now() - startedAt) / 1000)), 1000);
     return () => clearInterval(t);
   }, [busy, startedAt]);
+
+  /** Printable worksheet (saved as PDF from the print dialog): a bank generation by its id, built-in questions handed over. */
+  function exportPdf() {
+    const gen = problems.find((p) => p.bank)?.bank;
+    if (gen) {
+      window.open(generationPrintHref(gen.bank_id, gen.generation_id), "_blank");
+      return;
+    }
+    const href = stashWorksheet({
+      title: tr("练习题", "Practice questions"),
+      questions: problems.map((p) => ({ id: p.id, stem: p.statement, answer: p.answer, solution: p.hints.length ? p.hints.map((h, i) => `${i + 1}. ${h}`).join("\n") : undefined, figureSvg: p.diagram_svg })),
+    });
+    window.open(href, "_blank");
+  }
 
   async function generate() {
     setError(null);
@@ -447,6 +463,12 @@ export function ProblemGenerator({ mode: modeProp, onUseProblem, onFormalize, on
               showFailed={showFailed || nonePassed}
               onToggleFailed={nonePassed ? undefined : () => setShowFailed(!showFailed)}
             />
+            <div className="flex justify-end">
+              <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs" onClick={exportPdf} data-testid="export-pdf" title={tr("打开可打印的练习卷，在打印窗口选择“另存为 PDF”", "Open a printable worksheet; choose “Save as PDF” in the print window")}>
+                <FileDown className="h-3.5 w-3.5" />
+                {tr("导出 PDF", "Export PDF")}
+              </Button>
+            </div>
             {resultNote && (
               <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
                 <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
