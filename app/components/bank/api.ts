@@ -92,11 +92,10 @@ export function problemHref(q: { stem: string; options?: string[]; images?: Arra
  */
 export function candidateHref(c: { id: string; stem: string; options?: string[]; figure?: unknown }, bankId: string, generationId: string): string {
   const params = new URLSearchParams({ problem: problemText(c) });
-  if (c.figure) {
-    params.set("bank", bankId);
-    params.set("gen", generationId);
-    params.set("cand", c.id);
-  }
+  // The generation goes along so the solver page can show the figure and export the question as PDF.
+  params.set("bank", bankId);
+  params.set("gen", generationId);
+  params.set("cand", c.id);
   return `/?${params.toString()}`;
 }
 

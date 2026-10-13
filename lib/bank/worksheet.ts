@@ -15,6 +15,8 @@ export interface WorksheetQuestion {
   solution?: string;
   /** SVG of the question's figure (drawn by the program for paper, or the model's sketch). */
   figureSvg?: string;
+  /** Picture figures (question-bank images, a pasted photo): URLs on this site. */
+  figureImages?: string[];
   passed?: boolean;
 }
 
@@ -85,4 +87,9 @@ export function generationPrintHref(bankId: string, generationId: string, ids?: 
   const p = new URLSearchParams({ bank: bankId, gen: generationId });
   if (ids?.length) p.set("ids", ids.join(","));
   return `/print?${p.toString()}`;
+}
+
+/** Steps of a worked solution as numbered text ("1. Set up …"). */
+export function stepsText(steps: Array<{ title?: string; content: string }>): string {
+  return steps.map((s, i) => `${i + 1}. ${s.title ? `${s.title}：` : ""}${s.content}`).join("\n");
 }

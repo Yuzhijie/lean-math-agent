@@ -53,7 +53,9 @@ import {
   ImageUp,
   X,
   PanelLeftClose,
+  FileDown,
 } from "lucide-react";
+import { generationPrintHref, stashWorksheet, stepsText } from "@/lib/bank/worksheet";
 import { ProblemExamples } from "./components/ProblemExamples";
 import Link from "next/link";
 
@@ -167,12 +169,46 @@ export default function Home() {
   // Figure that came with the problem (generator, bank, or a pasted image); it stays while the text is edited,
   // and goes when the box is emptied, another problem is picked, or "移除图形" is pressed.
   const [usedFigure, setUsedFigure] = useState<UsedProblemFigure | null>(null);
+  // A question generated on the bank page ("使用此题"): exporting it prints the generated question (with its answer
+  // and solution) from the generation, while the text is unchanged.
+  const [problemSource, setProblemSource] = useState<{ bankId: string; genId: string; candId: string; text: string } | null>(null);
   const applyProblem = (text: string, figure?: UsedProblemFigure) => {
     loadGeneratedProblem(text);
     // A generated question's figure comes with its exact description, which is added to the problem when solving;
     // bank figures (images) are registered by the caller and read by the vision model.
     dispatch({ type: "SET_PROBLEM_FIGURES", figures: figure?.description ? { refs: [], text, description: figure.description } : null });
     setUsedFigure(figure ?? null);
+  };
+  // The text the current solution belongs to (the solution is only printed with that problem).
+  const solvedTextRef = useRef<string | null>(null);
+  useEffect(() => {
+    solvedTextRef.current = nlSolution ? state.problemText : null;
+    // Only when a solution arrives or goes; editing the text afterwards must not move it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nlSolution]);
+  /** "导出 PDF" on the problem card: a printable worksheet of this problem (with its answer and solution when known). */
+  const exportProblemPdf = () => {
+    const text = problemText.trim();
+    if (!text) return;
+    if (problemSource && problemSource.text === problemText) {
+      window.open(generationPrintHref(problemSource.bankId, problemSource.genId, [problemSource.candId]), "_blank");
+      return;
+    }
+    const solved = nlSolution && solvedTextRef.current === problemText ? nlSolution : null;
+    const href = stashWorksheet({
+      title: tr("练习题", "Practice question"),
+      questions: [
+        {
+          id: "p1",
+          stem: text,
+          answer: solved?.final_answer ?? "",
+          solution: solved ? stepsText(solved.steps) : undefined,
+          figureSvg: usedFigure?.fallbackSvg,
+          figureImages: usedFigure?.images?.map((im) => im.url),
+        },
+      ],
+    });
+    window.open(href, "_blank");
   };
   const removeFigure = () => {
     dispatch({ type: "SET_PROBLEM_FIGURES", figures: null });
@@ -238,6 +274,7 @@ export default function Home() {
     const cand = url.searchParams.get("cand");
     if (bankId && gen && cand) {
       applyProblem(text);
+      setProblemSource({ bankId, genId: gen, candId: cand, text });
       fetch(`/api/banks/${encodeURIComponent(bankId)}/generations/${encodeURIComponent(gen)}`)
         .then((r) => (r.ok ? r.json() : null))
         .then((d: { generation?: { candidates: Array<{ id: string; figure?: { svg: string; description: string } }> } } | null) => {
@@ -467,12 +504,27 @@ export default function Home() {
                   <Calculator className="h-4 w-4 text-primary" />
                   {tr("问题", "Problem")}
                 </CardTitle>
+                <div className="flex items-center gap-2">
+                {!busy && problemText.trim() && !isUntouched && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 gap-1.5 text-xs"
+                    onClick={exportProblemPdf}
+                    title={tr("打开可打印的题目页（解出后含答案和步骤），在打印窗口选择“另存为 PDF”", "Open a printable page of this problem (with the answer and steps once solved); choose “Save as PDF” in the print window")}
+                    data-testid="export-problem-pdf"
+                  >
+                    <FileDown className="h-3.5 w-3.5" />
+                    {tr("导出 PDF", "Export PDF")}
+                  </Button>
+                )}
                 {busy && (
                   <Badge variant="info" className="gap-1.5 animate-pulse-soft">
                     <span className="h-1.5 w-1.5 rounded-full bg-primary animate-spin" />
                     {tr("工作中：", "Working: ")}{busy === "lean-attempt" ? tr("形式化证明", "formal proof") : busy}
                   </Badge>
                 )}
+                </div>
               </div>
             </CardHeader>
             <CardContent className="space-y-3">

@@ -42,6 +42,8 @@ export default function PrintPage() {
           setQuestions(ws.questions);
           setTitle(ws.title);
           setScope("all");
+          // A problem that has not been solved yet has no answer to print.
+          if (!ws.questions.some((q) => q.answer.trim())) setAnswers("none");
         }
       });
       return;
@@ -218,6 +220,10 @@ function QuestionBlock({ q, n, answer, solution }: { q: WorksheetQuestion; n: nu
           <MathText text={q.stem} />
         </div>
         {svg && <div className="[&_svg]:h-auto [&_svg]:max-h-[90mm] [&_svg]:max-w-full" dangerouslySetInnerHTML={{ __html: svg }} />}
+        {q.figureImages?.filter((u) => /^(\/|blob:)/.test(u)).map((u, k) => (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img key={k} src={u} alt="" className="max-h-[90mm] max-w-full" />
+        ))}
         {q.options?.length ? (
           <ol className={cn("grid gap-x-6 gap-y-1", cols === 4 ? "grid-cols-4" : cols === 2 ? "grid-cols-2" : "grid-cols-1")}>
             {q.options.map((o, k) => (
