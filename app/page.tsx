@@ -55,7 +55,7 @@ import {
   PanelLeftClose,
   FileDown,
 } from "lucide-react";
-import { generationPrintHref, stashWorksheet, stepsText } from "@/lib/bank/worksheet";
+import { generationPrintHref, stashWorksheet } from "@/lib/bank/worksheet";
 import { ProblemExamples } from "./components/ProblemExamples";
 import Link from "next/link";
 
@@ -186,7 +186,7 @@ export default function Home() {
     // Only when a solution arrives or goes; editing the text afterwards must not move it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nlSolution]);
-  /** "导出 PDF" on the problem card: a printable worksheet of this problem (with its answer and solution when known). */
+  /** "导出 PDF" on the problem card: a printable page of the problem only (answers are left off unless chosen there). */
   const exportProblemPdf = () => {
     const text = problemText.trim();
     if (!text) return;
@@ -194,17 +194,36 @@ export default function Home() {
       window.open(generationPrintHref(problemSource.bankId, problemSource.genId, [problemSource.candId]), "_blank");
       return;
     }
-    const solved = nlSolution && solvedTextRef.current === problemText ? nlSolution : null;
     const href = stashWorksheet({
       title: tr("练习题", "Practice question"),
+      questions: [{ id: "p1", stem: text, answer: "", figureSvg: usedFigure?.fallbackSvg, figureImages: usedFigure?.images?.map((im) => im.url) }],
+    });
+    window.open(href, "_blank");
+  };
+  /** The solution figure as currently shown (the largest drawing in the figure panel, not its icons). */
+  const solutionFigureSvg = () => {
+    const svgs = Array.from(figureBoxRef.current?.querySelectorAll("svg") ?? []).filter((el) => !el.classList.contains("lucide"));
+    const area = (el: SVGSVGElement) => el.getBoundingClientRect().width * el.getBoundingClientRect().height;
+    return svgs.sort((x, y) => area(y) - area(x))[0]?.outerHTML;
+  };
+  /** "导出 PDF" on the solution: the problem, the worked steps (with the solution figure as shown) and the answer at the end. */
+  const exportSolutionPdf = () => {
+    if (!nlSolution) return;
+    const stem = (solvedTextRef.current ?? problemText).trim();
+    const sameProblem = stem === problemText.trim();
+    const href = stashWorksheet({
+      title: tr("解题过程", "Worked solution"),
+      kind: "solution",
       questions: [
         {
-          id: "p1",
-          stem: text,
-          answer: solved?.final_answer ?? "",
-          solution: solved ? stepsText(solved.steps) : undefined,
-          figureSvg: usedFigure?.fallbackSvg,
-          figureImages: usedFigure?.images?.map((im) => im.url),
+          id: "s1",
+          stem,
+          answer: nlSolution.final_answer,
+          steps: nlSolution.steps,
+          verification: nlSolution.verification || undefined,
+          figureSvg: sameProblem ? usedFigure?.fallbackSvg : undefined,
+          figureImages: sameProblem ? usedFigure?.images?.map((im) => im.url) : undefined,
+          solutionFigureSvg: solutionFigureSvg(),
         },
       ],
     });
@@ -816,11 +835,24 @@ export default function Home() {
                           <BookOpen className="h-5 w-5 text-primary" />
                           {tr("自然语言解答", "Natural-language solution")}
                         </CardTitle>
+                        <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 gap-1.5 text-xs"
+                          onClick={exportSolutionPdf}
+                          title={tr("导出题目、解题过程和答案（答案在最后），在打印窗口选择“另存为 PDF”", "Export the problem, the worked steps and the answer (at the end); choose “Save as PDF” in the print window")}
+                          data-testid="export-solution-pdf"
+                        >
+                          <FileDown className="h-3.5 w-3.5" />
+                          {tr("导出 PDF", "Export PDF")}
+                        </Button>
                         <Badge
                           variant={solvedProblemType === "theorem" ? "info" : "default"}
                         >
                           {solvedProblemType === "theorem" ? tr("定理证明", "Theorem proof") : tr("计算求解", "Computation")}
                         </Badge>
+                        </div>
                       </div>
                     </CardHeader>
                     <CardContent className="space-y-5">

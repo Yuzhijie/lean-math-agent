@@ -7,14 +7,15 @@ import { MathText } from "../components/MathText";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { Candidate, Generation } from "@/lib/bank/types";
-import { answerText, fromCandidates, loadStashedWorksheet, optionColumns, type WorksheetQuestion } from "@/lib/bank/worksheet";
+import { answerText, fromCandidates, loadStashedWorksheet, optionColumns, type Worksheet, type WorksheetQuestion } from "@/lib/bank/worksheet";
 
 type Scope = "passed" | "all" | "picked";
 type Answers = "end" | "inline" | "none";
 
 /**
- * Printable worksheet of generated questions: the browser's print dialog saves it as a PDF
- * ("Save as PDF"), so maths (KaTeX), Chinese text and figures come out exactly as on screen.
+ * Printable worksheet of generated questions, or the worked solution of one problem (kind "solution"):
+ * the browser's print dialog saves it as a PDF ("Save as PDF"), so maths (KaTeX), Chinese text and
+ * figures come out exactly as on screen. Question sheets print without answers unless chosen.
  */
 export default function PrintPage() {
   const { tr } = useI18n();
@@ -23,7 +24,10 @@ export default function PrintPage() {
   const [error, setError] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [scope, setScope] = useState<Scope>("passed");
-  const [answers, setAnswers] = useState<Answers>("end");
+  const [answers, setAnswers] = useState<Answers>("none");
+  const [kind, setKind] = useState<NonNullable<Worksheet["kind"]>>("questions");
+  const [showVerification, setShowVerification] = useState(false);
+  const [showSolutionFigure, setShowSolutionFigure] = useState(true);
   const [solutions, setSolutions] = useState(false);
   const [onePerPage, setOnePerPage] = useState(false);
   const [nameLine, setNameLine] = useState(true);
@@ -42,8 +46,7 @@ export default function PrintPage() {
           setQuestions(ws.questions);
           setTitle(ws.title);
           setScope("all");
-          // A problem that has not been solved yet has no answer to print.
-          if (!ws.questions.some((q) => q.answer.trim())) setAnswers("none");
+          setKind(ws.kind ?? "questions");
         }
       });
       return;
@@ -79,6 +82,8 @@ export default function PrintPage() {
   }, [questions, scope, picked]);
 
   const hasPassInfo = !!questions?.some((q) => q.passed !== undefined);
+  const hasSolutionFigure = !!questions?.some((q) => q.solutionFigureSvg);
+  const hasVerification = !!questions?.some((q) => q.verification);
 
   return (
     <div className="worksheet-root min-h-screen bg-neutral-200 text-neutral-900 print:bg-white">
@@ -116,6 +121,23 @@ export default function PrintPage() {
             {tr("打印 / 保存为 PDF", "Print / Save as PDF")}
           </button>
           <div className="flex w-full flex-wrap items-center gap-x-4 gap-y-2 text-xs text-neutral-700">
+            {kind === "solution" ? (
+              <>
+                {hasSolutionFigure && (
+                  <label className="flex items-center gap-1.5">
+                    <input type="checkbox" checked={showSolutionFigure} onChange={(e) => setShowSolutionFigure(e.target.checked)} />
+                    {tr("含解题图形", "With the solution figure")}
+                  </label>
+                )}
+                {hasVerification && (
+                  <label className="flex items-center gap-1.5">
+                    <input type="checkbox" checked={showVerification} onChange={(e) => setShowVerification(e.target.checked)} />
+                    {tr("含验证", "With the check")}
+                  </label>
+                )}
+              </>
+            ) : (
+            <>
             <label className="flex items-center gap-1.5">
               {tr("题目", "Questions")}
               <select value={scope} onChange={(e) => setScope(e.target.value as Scope)} className="rounded border border-neutral-300 px-1.5 py-0.5">
@@ -144,6 +166,8 @@ export default function PrintPage() {
               <input type="checkbox" checked={nameLine} onChange={(e) => setNameLine(e.target.checked)} />
               {tr("姓名 / 日期栏", "Name / date line")}
             </label>
+            </>
+            )}
             <span className="ml-auto flex items-center gap-1 text-neutral-500">
               <FileDown className="h-3.5 w-3.5" />
               {tr("在打印窗口选择“另存为 PDF”", "Choose “Save as PDF” in the print window")}
@@ -158,6 +182,15 @@ export default function PrintPage() {
           <p className="text-sm text-red-600">{error}</p>
         ) : !questions ? (
           <p className="text-sm text-neutral-500">{tr("加载中…", "Loading…")}</p>
+        ) : kind === "solution" ? (
+          <>
+            <header className="mb-6 border-b-2 border-neutral-800 pb-3">
+              <h1 className="text-xl font-bold">{title}</h1>
+            </header>
+            {questions.map((q) => (
+              <SolutionBlock key={q.id} q={q} figure={showSolutionFigure} verification={showVerification} />
+            ))}
+          </>
         ) : (
           <>
             <header className="mb-6 border-b-2 border-neutral-800 pb-3">
@@ -205,7 +238,7 @@ export default function PrintPage() {
   );
 }
 
-function QuestionBlock({ q, n, answer, solution }: { q: WorksheetQuestion; n: number; answer: boolean; solution: boolean }) {
+function QuestionBlock({ q, n, answer, solution, bare = false }: { q: WorksheetQuestion; n: number; answer: boolean; solution: boolean; bare?: boolean }) {
   const { tr } = useI18n();
   const svg = useMemo(() => {
     if (!q.figureSvg || typeof window === "undefined" || !DOMPurify.isSupported) return "";
@@ -214,7 +247,7 @@ function QuestionBlock({ q, n, answer, solution }: { q: WorksheetQuestion; n: nu
   const cols = q.options?.length ? optionColumns(q.options) : 1;
   return (
     <div className="flex gap-2 text-[15px] leading-relaxed">
-      <span className="w-7 shrink-0 font-semibold">{n}.</span>
+      {!bare && <span className="w-7 shrink-0 font-semibold">{n}.</span>}
       <div className="min-w-0 flex-1 space-y-2.5">
         <div className="whitespace-pre-line">
           <MathText text={q.stem} />
@@ -234,7 +267,7 @@ function QuestionBlock({ q, n, answer, solution }: { q: WorksheetQuestion; n: nu
             ))}
           </ol>
         ) : (
-          !answer && <div className="pt-6"><span className="inline-block w-48 border-b border-neutral-500" /></div>
+          !answer && !bare && <div className="pt-6"><span className="inline-block w-48 border-b border-neutral-500" /></div>
         )}
         {answer && (
           <div className="rounded border border-neutral-300 bg-neutral-50 px-2.5 py-1.5 text-sm">
@@ -248,6 +281,82 @@ function QuestionBlock({ q, n, answer, solution }: { q: WorksheetQuestion; n: nu
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** The worked solution of one problem: the problem, the steps, then the answer at the end. */
+function SolutionBlock({ q, figure, verification }: { q: WorksheetQuestion; figure: boolean; verification: boolean }) {
+  const { tr } = useI18n();
+  const solutionSvg = useMemo(() => {
+    if (!q.solutionFigureSvg || typeof window === "undefined" || !DOMPurify.isSupported) return "";
+    return DOMPurify.sanitize(q.solutionFigureSvg, { USE_PROFILES: { svg: true, svgFilters: true }, FORBID_TAGS: ["foreignObject", "script", "style"] });
+  }, [q.solutionFigureSvg]);
+  return (
+    <div className="space-y-6 text-[15px] leading-relaxed" data-testid="solution-sheet">
+      <section className="q-block">
+        <h2 className="mb-2 text-sm font-bold text-neutral-600">{tr("题目", "Problem")}</h2>
+        <QuestionBlock q={q} n={0} answer={false} solution={false} bare />
+      </section>
+      {figure && solutionSvg && (
+        <section className="q-block">
+          <h2 className="mb-2 text-sm font-bold text-neutral-600">{tr("解题图形", "Solution figure")}</h2>
+          {/* The figure is drawn for the app's dark theme: printed on its dark panel (colours kept when printing). */}
+          <div
+            className="flex justify-center rounded-md bg-slate-900 p-3 [print-color-adjust:exact] [-webkit-print-color-adjust:exact] [&_svg]:h-auto [&_svg]:max-h-[95mm] [&_svg]:max-w-full"
+            dangerouslySetInnerHTML={{ __html: solutionSvg }}
+          />
+        </section>
+      )}
+      {q.steps?.length ? (
+        <section>
+          <h2 className="mb-3 border-b border-neutral-400 pb-1 text-base font-bold">{tr("解题过程", "Solution")}</h2>
+          <ol className="space-y-4">
+            {q.steps.map((s, i) => (
+              <li key={i} className="q-block flex gap-2" data-testid="solution-step">
+                <span className="w-7 shrink-0 font-semibold">{i + 1}.</span>
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  {s.title && <div className="font-semibold">{s.title}</div>}
+                  <div className="whitespace-pre-line">
+                    <MathText text={s.content} />
+                  </div>
+                  {s.substeps?.length ? (
+                    <ul className="list-disc space-y-0.5 pl-5 text-neutral-700">
+                      {s.substeps.map((t, k) => (
+                        <li key={k}>
+                          <MathText text={t} />
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {s.key_formula && (
+                    <div className="rounded border border-neutral-300 bg-neutral-50 px-3 py-1.5 text-center">
+                      <MathText text={/\$/.test(s.key_formula) ? s.key_formula : `$${s.key_formula}$`} />
+                    </div>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ol>
+        </section>
+      ) : q.solution ? (
+        <section>
+          <h2 className="mb-3 border-b border-neutral-400 pb-1 text-base font-bold">{tr("解题过程", "Solution")}</h2>
+          <div className="whitespace-pre-line">
+            <MathText text={q.solution} />
+          </div>
+        </section>
+      ) : null}
+      {verification && q.verification && (
+        <section className="q-block text-sm text-neutral-700">
+          <span className="font-semibold">{tr("验证：", "Check: ")}</span>
+          <MathText text={q.verification} />
+        </section>
+      )}
+      <section className="q-block rounded-md border-2 border-neutral-800 px-4 py-3" data-testid="solution-answer">
+        <span className="font-bold">{tr("答案：", "Answer: ")}</span>
+        <MathText text={answerText(q)} />
+      </section>
     </div>
   );
 }

@@ -18,10 +18,24 @@ export interface WorksheetQuestion {
   /** Picture figures (question-bank images, a pasted photo): URLs on this site. */
   figureImages?: string[];
   passed?: boolean;
+  /** Worked solution (solution sheets): the steps, printed before the answer. */
+  steps?: SolutionStep[];
+  verification?: string;
+  /** The solution's figure as shown on screen (dark theme; printed on a dark panel). */
+  solutionFigureSvg?: string;
+}
+
+export interface SolutionStep {
+  title: string;
+  content: string;
+  substeps?: string[];
+  key_formula?: string;
 }
 
 export interface Worksheet {
   title: string;
+  /** "questions" (default): a worksheet without answers unless chosen; "solution": the worked solution, answer at the end. */
+  kind?: "questions" | "solution";
   questions: WorksheetQuestion[];
 }
 
@@ -87,9 +101,4 @@ export function generationPrintHref(bankId: string, generationId: string, ids?: 
   const p = new URLSearchParams({ bank: bankId, gen: generationId });
   if (ids?.length) p.set("ids", ids.join(","));
   return `/print?${p.toString()}`;
-}
-
-/** Steps of a worked solution as numbered text ("1. Set up …"). */
-export function stepsText(steps: Array<{ title?: string; content: string }>): string {
-  return steps.map((s, i) => `${i + 1}. ${s.title ? `${s.title}：` : ""}${s.content}`).join("\n");
 }
