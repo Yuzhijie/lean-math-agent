@@ -216,7 +216,9 @@ bench/
   minif2f-*.json                    # Downloaded by `npm run bench:fetch` (git-ignored)
 
 scripts/
-  bench.ts                          # Prover benchmark: cascade/whole_proof/sketch/stepwise, budgets, proved-by + failure taxonomy
+  bench.ts                          # Prover benchmark: cascade/whole_proof/sketch/stepwise, budgets, proved-by + failure taxonomy; --concurrency n (runPool; LEAN_REPL_WORKERS defaults to n), --max-cost usd (no new theorems once spent; the rest listed as skipped), --memory readonly (default: recall but do not store, so runs do not feed later runs) | write | off; result JSON records concurrency, memory, commit, models, elapsed time
+  bench-report.ts                   # Result JSON files → Markdown (bench/BASELINE.md): one row per run, proved-by / failures / cost of failures per run, gained and lost theorems between consecutive runs
+  bench-baseline.ts                 # `npm run bench:baseline`: retest the first 20 miniF2F theorems (normal budget), then all 244 (low budget, --max-cost 12), 3 at a time, then BASELINE.md from every miniF2F result
   fetch-benchmark.ts                # miniF2F (Lean 4) → bench file (`npm run bench:fetch`)
   build-premise-index.ts            # Mathlib declaration dump → premise index (`npm run premises:build`)
   lean/DumpDecls.lean               # `lake env lean --run` script exporting theorem statements as JSON lines
@@ -300,6 +302,8 @@ npx vitest run                 # Run all test files
 npm run build                  # Production build
 npm run bench -- --samples 4   # Prover benchmark over bench/theorems.json (LLM key + Lean sandbox required)
 npm run bench:fetch            # Download miniF2F → bench/minif2f-test.json; then: npm run bench -- --file bench/minif2f-test.json --limit 20
+npm run bench:baseline         # Retest 20 + miniF2F 244 (low budget, cost cap) → bench/BASELINE.md (spends real LLM money)
+npm run bench:report -- bench/results/*.json --out bench/BASELINE.md
 npm run premises:build         # Index the sandbox's Mathlib for premise retrieval (minutes; needs the built sandbox)
 ```
 

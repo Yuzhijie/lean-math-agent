@@ -17,7 +17,9 @@
     "bench": "tsx scripts/bench.ts",
     "premises:build": "tsx scripts/build-premise-index.ts",
     "bench:fetch": "tsx scripts/fetch-benchmark.ts",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "bench:report": "tsx scripts/bench-report.ts",
+    "bench:baseline": "tsx scripts/bench-baseline.ts"
   },
   "dependencies": {
     "@next-auth/prisma-adapter": "^1.0.7",

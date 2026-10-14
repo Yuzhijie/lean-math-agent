@@ -8,6 +8,14 @@
  *                    [--budget low|normal|high] [--samples 4] [--rounds 2]
  *                    [--only id,id] [--difficulty easy|medium|hard] [--limit n] [--offset n]
  *                    [--json path] [--no-mathlib] [--no-retrieval]
+ *                    [--concurrency n] [--max-cost usd] [--memory readonly|write|off]
+ *
+ *   --concurrency n   theorems proved at once (default 1); LEAN_REPL_WORKERS defaults to n
+ *   --max-cost usd    stop starting new theorems once the run has spent this much (estimated
+ *                     from LLM_PRICES); the theorems not started are listed as skipped
+ *   --memory          proof memory: "readonly" (default) recalls stored proofs but does not add
+ *                     the run's own, so results do not depend on order or earlier runs of the same
+ *                     file; "write" also stores them; "off" disables recall
  *
  *   npm run bench:fetch && npm run bench -- --file bench/minif2f-test.json --limit 20
  *
@@ -18,6 +26,7 @@
  * (as written by `npm run bench:fetch`).
  */
 import { promises as fs } from "node:fs";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { checkLeanAvailable, verifyLeanSource } from "../lib/lean/sandbox";
 import { shutdownReplPool } from "../lib/lean/repl";
@@ -90,6 +99,30 @@ interface BenchRow {
   tactics?: string;
   failure?: { kind: FailureKind; detail: string };
   error?: string;
+  /** Not run: the run's cost cap was reached first. */
+  skipped?: boolean;
+}
+
+/** Run `fn` over `items` with at most `n` running at once; results keep the input order. */
+export async function runPool<T, R>(items: T[], n: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(n, items.length)) }, worker));
+  return out;
+}
+
+function gitCommit(): string | undefined {
+  try {
+    return execFileSync("git", ["rev-parse", "--short", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function loadEnv(): void {
@@ -163,6 +196,17 @@ async function main(): Promise<void> {
   const retrieval = !flag("no-retrieval");
   const budget = parseBudget(arg("budget")) ?? budgetPreset().budget;
   const { preset } = budgetPreset(budget);
+  const concurrency = Math.max(1, Math.floor(Number(arg("concurrency") ?? 1)) || 1);
+  const maxCost = arg("max-cost") !== undefined ? Number(arg("max-cost")) : undefined;
+  const memory = (arg("memory") ?? "readonly") as "readonly" | "write" | "off";
+  if (!["readonly", "write", "off"].includes(memory)) {
+    console.error(`--memory must be readonly, write or off (got ${memory})`);
+    process.exit(2);
+  }
+  if (memory === "off") process.env.PROOF_MEMORY_ENABLED = "false";
+  const remember = memory === "write" ? rememberVerifiedProof : async () => false;
+  // One REPL worker per theorem in flight (the pool reads this when it is first used).
+  if (concurrency > 1 && !process.env.LEAN_REPL_WORKERS) process.env.LEAN_REPL_WORKERS = String(Math.min(concurrency, 8));
 
   const lean = await checkLeanAvailable();
   if (!lean.ok) {
@@ -178,11 +222,20 @@ async function main(): Promise<void> {
     `bench: ${theorems.length} theorems from ${path.basename(file)}, strategy=${strategy} budget=${budget}` +
       (samples ? ` samples=${samples}` : "") +
       (rounds !== undefined ? ` rounds=${rounds}` : "") +
-      (opens?.length ? ` opens=${opens.join(" ")}` : ""),
+      (opens?.length ? ` opens=${opens.join(" ")}` : "") +
+      (concurrency > 1 ? ` concurrency=${concurrency} repl_workers=${process.env.LEAN_REPL_WORKERS}` : "") +
+      (maxCost !== undefined ? ` max_cost=$${maxCost}` : "") +
+      ` memory=${memory}`,
   );
 
-  const rows: BenchRow[] = [];
-  for (const t of theorems) {
+  const runStarted = Date.now();
+  let spent = 0;
+  let capped = false;
+  const rows = await runPool(theorems, concurrency, async (t): Promise<BenchRow> => {
+    if (maxCost !== undefined && spent >= maxCost) {
+      capped = true;
+      return { id: t.id, difficulty: t.difficulty ?? "?", strategy, ok: false, proved_by: "none", skipped: true, wall_ms: 0, llm_calls: 0, tokens: 0, lean_verifications: 0, lean_verify_ms: 0 };
+    }
     const started = Date.now();
     const row = await withUsageScope(async (metrics): Promise<BenchRow> => {
       const base = { id: t.id, difficulty: t.difficulty ?? "?", strategy };
@@ -215,7 +268,7 @@ async function main(): Promise<void> {
             const proof = assembleLeanSource({ theoremName: t.name, theoremType: t.type, stepCodes: [hit.tactic], useMathlib, opens });
             const v = await verifyLeanSource(`bench-${t.id}`, proof, { theoremName: t.name, expectedSignature });
             if (v.ok) {
-              void rememberVerifiedProof({ theoremName: t.name, theoremType: t.type, tactics: hit.tactic, strategy: "hammer", problemText: t.informal });
+              void remember({ theoremName: t.name, theoremType: t.type, tactics: hit.tactic, strategy: "hammer", problemText: t.informal });
               return { ...base, ok: true, proved_by: "hammer", tactics: hit.tactic, ...fromMetrics(metrics(), started) };
             }
           }
@@ -238,7 +291,7 @@ async function main(): Promise<void> {
           wholeRounds = r.rounds;
           wholeSamples = r.samples;
           if (r.ok) {
-            void rememberVerifiedProof({ theoremName: t.name, theoremType: t.type, tactics: r.tactics ?? "", strategy: "whole_proof", problemText: t.informal });
+            void remember({ theoremName: t.name, theoremType: t.type, tactics: r.tactics ?? "", strategy: "whole_proof", problemText: t.informal });
             return { ...base, ok: true, proved_by: "whole_proof", rounds: r.rounds, samples: r.samples, tactics: r.tactics, ...fromMetrics(metrics(), started) };
           }
           failure = wholeProofFailure(r);
@@ -260,7 +313,7 @@ async function main(): Promise<void> {
           });
           holes = `${r.holesSolved}/${r.holes}`;
           if (r.ok) {
-            void rememberVerifiedProof({ theoremName: t.name, theoremType: t.type, tactics: r.tactics ?? "", strategy: "sketch", problemText: t.informal });
+            void remember({ theoremName: t.name, theoremType: t.type, tactics: r.tactics ?? "", strategy: "sketch", problemText: t.informal });
             return { ...base, ok: true, proved_by: "sketch", rounds: wholeRounds, samples: wholeSamples, holes, tactics: r.tactics, ...fromMetrics(metrics(), started) };
           }
           // The whole-proof verdict is the more informative one when both ran.
@@ -272,7 +325,7 @@ async function main(): Promise<void> {
         return { ...base, ok: false, proved_by: "none", error: msg, failure: { kind: "llm_error", detail: msg.slice(0, 160) }, ...fromMetrics(metrics(), started) };
       }
     });
-    rows.push(row);
+    spent += row.cost ?? 0;
     console.log(
       `${row.ok ? "PASS" : "FAIL"}  ${row.id.padEnd(28)} ${row.difficulty.padEnd(6)} ${row.proved_by.padEnd(11)} ` +
         `${(row.wall_ms / 1000).toFixed(1)}s  llm=${row.llm_calls} tok=${row.tokens}` +
@@ -282,13 +335,17 @@ async function main(): Promise<void> {
         (row.holes ? ` holes=${row.holes}` : "") +
         (row.failure ? `  [${row.failure.kind}] ${row.failure.detail.slice(0, 70)}` : ""),
     );
-  }
+    return row;
+  });
 
+  const skipped = rows.filter((r) => r.skipped);
+  if (capped) console.log(`\ncost cap $${maxCost} reached: ${skipped.length} theorem(s) not started`);
+  const ran = rows.filter((r) => !r.skipped);
   const passed = rows.filter((r) => r.ok).length;
   const sum = (f: (r: BenchRow) => number) => rows.reduce((a, r) => a + f(r), 0);
   const byDifficulty = ["easy", "medium", "hard"]
     .map((d) => {
-      const rs = rows.filter((r) => r.difficulty === d);
+      const rs = ran.filter((r) => r.difficulty === d);
       return rs.length ? `${d} ${rs.filter((r) => r.ok).length}/${rs.length}` : undefined;
     })
     .filter(Boolean);
@@ -299,14 +356,14 @@ async function main(): Promise<void> {
       .join(", ");
   console.log("\n" + "─".repeat(72));
   console.log(
-    `pass ${passed}/${rows.length} (${rows.length ? ((100 * passed) / rows.length).toFixed(0) : 0}%)  ` +
-      `[${byDifficulty.join(", ")}]  wall ${(sum((r) => r.wall_ms) / 1000).toFixed(1)}s  ` +
+    `pass ${passed}/${ran.length} (${ran.length ? ((100 * passed) / ran.length).toFixed(0) : 0}%)  ` +
+      `[${byDifficulty.join(", ")}]  elapsed ${((Date.now() - runStarted) / 1000).toFixed(1)}s (sum of theorem times ${(sum((r) => r.wall_ms) / 1000).toFixed(1)}s)  ` +
       `llm calls ${sum((r) => r.llm_calls)}  tokens ${sum((r) => r.tokens)}` +
       (rows.some((r) => r.cost !== undefined) ? `  cost ${sum((r) => r.cost ?? 0).toFixed(4)}` : "") +
       `  lean verifications ${sum((r) => r.lean_verifications)}`,
   );
   if (passed) console.log(`proved by: ${histogram(rows.filter((r) => r.ok).map((r) => r.proved_by))}`);
-  if (passed < rows.length) console.log(`failures:  ${histogram(rows.filter((r) => !r.ok).map((r) => r.failure?.kind ?? "other"))}`);
+  if (passed < ran.length) console.log(`failures:  ${histogram(ran.filter((r) => !r.ok).map((r) => r.failure?.kind ?? "other"))}`);
 
   const out = arg("json") ?? path.resolve("bench/results", `${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
   await fs.mkdir(path.dirname(out), { recursive: true });
@@ -314,16 +371,26 @@ async function main(): Promise<void> {
     out,
     JSON.stringify(
       {
-        started_at: new Date().toISOString(),
+        started_at: new Date(runStarted).toISOString(),
+        elapsed_ms: Date.now() - runStarted,
         file: path.basename(file),
         strategy,
         budget,
         samples,
         rounds,
+        concurrency,
+        repl_workers: Number(process.env.LEAN_REPL_WORKERS ?? 1),
+        memory,
+        retrieval,
+        max_cost: maxCost,
+        commit: gitCommit(),
+        model: process.env.LLM_MODEL,
+        prover_model: process.env.LLM_PROVER_MODEL,
         pass: passed,
-        total: rows.length,
+        total: ran.length,
+        skipped: skipped.map((r) => r.id),
         proved_by: Object.fromEntries(rows.filter((r) => r.ok).map((r) => r.proved_by).reduce((m, k) => m.set(k, (m.get(k) ?? 0) + 1), new Map<string, number>())),
-        failures: Object.fromEntries(rows.filter((r) => !r.ok).map((r) => r.failure?.kind ?? "other").reduce((m, k) => m.set(k, (m.get(k) ?? 0) + 1), new Map<string, number>())),
+        failures: Object.fromEntries(ran.filter((r) => !r.ok).map((r) => r.failure?.kind ?? "other").reduce((m, k) => m.set(k, (m.get(k) ?? 0) + 1), new Map<string, number>())),
         rows,
       },
       null,
