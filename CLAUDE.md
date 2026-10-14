@@ -149,14 +149,14 @@ lib/
     theorem-pipeline.ts             # Theorem pipeline shared by /api/solve and /api/solve-stream
     lean-attempt.ts                 # Lean formalization attempt for non-theorem problems; solves skip it unless `options.lean_attempt: true` (the UI starts it from the Lean tab)
   prover/
-    whole-proof.ts                  # Whole-proof loop: sample k proofs → verify → repair with feedback + suggestions
+    whole-proof.ts                  # Whole-proof loop: sample k proofs → verify → repair with feedback + suggestions; a native prover (proverPromptStyle) gets nativeProverPrompt (no system message, plan first, LLM_PROVER_MAX_TOKENS/TIMEOUT_MS) and a self-correction turn (its proof as the assistant turn + Lean's errors); extractTactics(text, theoremName) takes the target declaration when the answer also defines helper lemmas (logged, not carried over)
     sketch.ts                       # Sketch-and-fill: skeleton with `have … := by sorry` holes → each hole closed by hammer/goal search → splice → strict verify
     budget.ts                       # PROOF_BUDGET presets (low/normal/high) for whole-proof, sketch and goal search; `sketchStage` false on low (sketch-and-fill proved nothing on the miniF2F baselines); SKETCH_ENABLED=true forces it on
     context.ts                      # Prover context: retrieved premises + recalled proofs as one prompt block; rememberVerifiedProof
   llm/
     client.ts                       # Core LLM client (roles, sampling, retry, fallback, cache, Zod)
     output-locale.ts                # Output language per request (ui_locale cookie): prompt switch for English, lt(zh, en), withRequestLocale
-    config.ts                       # LLM config from env vars (role chains, prices)
+    config.ts                       # LLM config from env vars (role chains, prices); proverPromptStyle (LLM_PROVER_PROMPT auto|native|chat — auto = native when the prover model name contains "prover"), nativeProverSettings, chatProverRole (sketch + goal-search use the general chain when the prover is native)
     cache.ts                        # LRU response cache (SHA-256 keyed)
     logger.ts                       # Structured JSON logger
     usage-tracker.ts                # Usage records + per-run scope (RunMetrics)
@@ -218,7 +218,8 @@ bench/
 scripts/
   bench.ts                          # Prover benchmark: cascade/whole_proof/sketch/stepwise, budgets, proved-by + failure taxonomy; --concurrency n (runPool; LEAN_REPL_WORKERS defaults to n), --max-cost usd (no new theorems once spent; the rest listed as skipped), --memory readonly (default: recall but do not store, so runs do not feed later runs) | write | off; environment failures (`infra_error`: model call failed, a Lean worker hung on the statement check) are retried once at the end (--no-retry); statements are repaired on load (fixStatement); result JSON records concurrency, memory, commit, models, elapsed time
   bench-report.ts                   # Result JSON files → Markdown (bench/BASELINE.md): one row per run, proved-by / failures / cost of failures per run, gained and lost theorems between consecutive runs
-  bench-baseline.ts                 # `npm run bench:baseline`: retest the first 20 miniF2F theorems (normal budget), then all 244 (low budget, --max-cost 12), 3 at a time, then BASELINE.md from every miniF2F result; `--rerun <full.json>` re-runs only the theorems a fix touched and merges them; runs under `caffeinate -i` on macOS
+  bench-baseline.ts                 # `npm run bench:baseline`: retest the first 20 miniF2F theorems (normal budget), then all 244 (low budget, --max-cost 12), 3 at a time, then BASELINE.md from every miniF2F result; `--rerun <full.json>` re-runs only the theorems a fix touched and merges them; `--prover <merged.json>` tries the configured prover on that run's failures (bench --only-failed) and merges into "<full>-prover.json"; runs under `caffeinate -i` on macOS
+  prover-check.ts                   # `npm run prover:check`: one call to the prover endpoint (model/host, prompt style, latency, tokens/s, cost, proof read back, verified when Lean is available)
   bench-merge.ts                    # Re-run rows replace the full run's rows by id, totals recomputed, Lean-message failure buckets re-classified; rerunIds (statements fixStatement changes + environment failures)
   fetch-benchmark.ts                # miniF2F (Lean 4) → bench file (`npm run bench:fetch`); fixStatement: big-operator bodies with a top-level +/- are parenthesised (the body is now parsed at precedence 67, so `∑ k ∈ s, a + k * d` lost k), Complex.abs z → ‖z‖
   build-premise-index.ts            # Mathlib declaration dump → premise index (`npm run premises:build`)

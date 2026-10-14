@@ -20,7 +20,8 @@
     "postinstall": "prisma generate",
     "bench:report": "tsx scripts/bench-report.ts",
     "bench:baseline": "tsx scripts/bench-baseline.ts",
-    "bench:merge": "tsx scripts/bench-merge.ts"
+    "bench:merge": "tsx scripts/bench-merge.ts",
+    "prover:check": "tsx scripts/prover-check.ts"
   },
   "dependencies": {
     "@next-auth/prisma-adapter": "^1.0.7",

@@ -63,7 +63,11 @@ export function mergeResults(base: Result, patches: Result[]): Result {
     total: ran.length,
     proved_by: tally(ran.filter((r) => r.ok).map((r) => r.proved_by)),
     failures: tally(ran.filter((r) => !r.ok).map((r) => r.failure?.kind ?? "other")),
-    merged_reruns: patches.map((p) => ({ started_at: p.started_at, commit: p.commit, theorems: p.rows.length })),
+    merged_reruns: [
+      ...(((base as { merged_reruns?: unknown[] }).merged_reruns ?? []) as unknown[]),
+      ...patches.map((p) => ({ started_at: p.started_at, commit: p.commit, theorems: p.rows.length, ...(p.prover_model ? { prover_model: p.prover_model } : {}) })),
+    ],
+    ...(patches.find((p) => p.prover_model) ? { prover_model: patches.find((p) => p.prover_model)!.prover_model } : {}),
   };
 }
 

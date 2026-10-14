@@ -297,3 +297,41 @@ function parsePositiveInt(raw: string | undefined, fallback: number): number {
   const n = Number(raw);
   return Number.isInteger(n) && n > 0 ? n : fallback;
 }
+
+/**
+ * How whole proofs are asked for. Dedicated Lean provers (DeepSeek-Prover-V2, Goedel-Prover-V2,
+ * Kimina-Prover) are trained on one prompt — "Complete the following Lean 4 code: …" with a
+ * proof plan first — and do worse with our chat instructions; general chat models need the
+ * instructions. LLM_PROVER_PROMPT=native|chat overrides; "auto" (default) picks native when
+ * the first prover model's name contains "prover".
+ */
+export type ProverPromptStyle = "native" | "chat";
+
+export function proverPromptStyle(): ProverPromptStyle {
+  const raw = (process.env.LLM_PROVER_PROMPT ?? "auto").trim().toLowerCase();
+  if (raw === "native" || raw === "chat") return raw;
+  const first = parseFallbackModels(process.env.LLM_PROVER_MODEL ?? process.env.LLM_PROVER_MODELS)[0];
+  return first && /prover/i.test(first) ? "native" : "chat";
+}
+
+/** Settings for native prover calls: long chain-of-thought output needs room and time. */
+export function nativeProverSettings(): { maxTokens: number; timeoutMs: number; temperature?: number } {
+  const num = (name: string) => {
+    const v = Number(process.env[name]);
+    return process.env[name] && Number.isFinite(v) && v > 0 ? v : undefined;
+  };
+  return {
+    maxTokens: num("LLM_PROVER_MAX_TOKENS") ?? 16_384,
+    timeoutMs: num("LLM_PROVER_TIMEOUT_MS") ?? 600_000,
+    temperature: num("LLM_PROVER_TEMPERATURE"),
+  };
+}
+
+/**
+ * Role for prover-side calls that use our chat prompts (sketch skeletons, one tactic per goal):
+ * a native prover is trained only on whole proofs and answers with a long plan, so those calls
+ * go to the general chain when the prover is native.
+ */
+export function chatProverRole(): ModelRole {
+  return proverPromptStyle() === "native" ? "general" : "prover";
+}

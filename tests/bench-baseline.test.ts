@@ -75,6 +75,12 @@ describe("bench report (BASELINE.md)", () => {
     expect(md).toContain("Not run (cost cap): 1 theorem(s).");
     expect(md).toContain("cost cap $0.2");
   });
+
+  it("labels a run with a prover tried on its failures", () => {
+    const tried: ResultFile = { ...capped, merged_reruns: [{ started_at: "2026-10-15T03:00:00.000Z", commit: "abc", theorems: 1, prover_model: "deepseek/deepseek-prover-v2-671b" }], rows: capped.rows.map((r) => (r.id === "b" ? { ...r, ok: true, proved_by: "whole_proof", rerun: true, failure: undefined } : r)) };
+    const md = renderReport([{ name: "with prover", result: tried }]);
+    expect(md).toContain("with prover deepseek/deepseek-prover-v2-671b");
+  });
 });
 
 describe("statement repairs (fixStatement)", async () => {

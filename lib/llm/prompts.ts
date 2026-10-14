@@ -200,6 +200,37 @@ function indentBlock(s: string): string {
     .join("\n");
 }
 
+// ── Native prompts for dedicated Lean provers ─────────────────────────
+// DeepSeek-Prover-V2 / Goedel-Prover-V2 / Kimina-Prover are trained on this
+// template (miniF2F-style header, informal statement as a doc comment, proof
+// plan first, then the complete Lean 4 code). No system message.
+
+export function nativeProverPrompt(args: {
+  theoremName: string;
+  theoremType: string;
+  problemText?: string;
+  opens?: string[];
+}): string {
+  const opens = ["BigOperators", "Real", "Nat", "Topology", "Rat", ...(args.opens ?? [])].filter((o, i, all) => all.indexOf(o) === i);
+  const doc = args.problemText?.trim() ? `/-- ${args.problemText.trim().replace(/-\//g, "- /")} -/\n` : "";
+  const code = `import Mathlib\nimport Aesop\n\nset_option maxHeartbeats 400000\n\nopen ${opens.join(" ")}\n\n${doc}theorem ${args.theoremName} ${args.theoremType} := by\n  sorry`;
+  return (
+    `Complete the following Lean 4 code:\n\n\`\`\`lean4\n${code}\n\`\`\`\n\n` +
+    "Before producing the Lean 4 code to formally prove the given theorem, provide a detailed proof plan outlining the main proof steps and strategies.\n" +
+    "The plan should highlight key ideas, intermediate lemmas, and proof structures that will guide the construction of the final formal proof."
+  );
+}
+
+/** Self-correction turn for a native prover: its last proof and Lean's errors. */
+export function nativeProverRepairPrompt(args: { previousCode: string; feedback: string; suggestions?: string }): string {
+  return [
+    `The proof below does not compile with Lean 4 and Mathlib:\n\n\`\`\`lean4\n${args.previousCode}\n\`\`\``,
+    `Lean reports:\n${args.feedback}`,
+    ...(args.suggestions ? [args.suggestions] : []),
+    "Revise the proof. Keep the theorem statement unchanged, state any helper facts with `have` inside the proof, and give the complete corrected Lean 4 code.",
+  ].join("\n\n");
+}
+
 // ── Goal-level tactic step (tactic mode search) ───────────────────────
 
 export const TACTIC_STEP_SYSTEM = `You are a Lean 4 + Mathlib tactic expert working goal by goal, like a person in the infoview.

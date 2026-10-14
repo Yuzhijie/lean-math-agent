@@ -13,6 +13,7 @@
  * verify it with `verifyLeanSource` (statement lock, axioms) before a
  * proof counts.
  */
+import { chatProverRole } from "../llm/config";
 import { hammer, type HammerOutcome } from "../lean/hammer";
 import { modernizeLeanSyntax } from "../lean/modernize";
 import { formatPremises, premisesEnabled, retrievePremises } from "../lean/premises";
@@ -281,7 +282,7 @@ export async function goalSearch(args: GoalSearchArgs): Promise<GoalSearchResult
           },
         ],
         n: cfg.samplesPerNode,
-        role: "prover",
+        role: chatProverRole(),
         temperature: cfg.temperature,
         maxTokens: 512,
         timeoutMs: Math.max(30_000, Math.min(timeLeft(), 180_000)),

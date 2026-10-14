@@ -9,6 +9,10 @@
  *       to the environment (model unreachable, a hung Lean worker) — merge them into that run
  *       (re-classifying the old failure buckets) and rewrite the report
  *
+ *   npm run bench:baseline -- --prover bench/results/<full>-merged.json
+ *       try the configured prover (LLM_PROVER_MODEL) on the theorems that run did not prove, merge
+ *       the result into a copy of it ("<full>-prover.json") and rewrite the report
+ *
  * On macOS the runs are wrapped in `caffeinate -i` so the machine does not sleep mid-run.
  * Needs what `npm run bench` needs (LLM key in .env.local, built Lean sandbox with the REPL).
  * Spends real money: the first run cost $0.57 for 20 theorems; --max-cost caps the full run.
@@ -57,17 +61,40 @@ if (rerunOf) {
   run("merge", "scripts/bench-merge.ts", [rerunOf, ...(ids.length ? [out] : []), "--out", merged]);
 }
 
-if (!rerunOf) console.log(
+const proverOf = arg("prover");
+if (proverOf) {
+  if (!process.env.LLM_PROVER_MODEL && !process.env.LLM_PROVER_MODELS) {
+    for (const f of [".env.local", ".env"]) {
+      try {
+        process.loadEnvFile(f);
+      } catch {
+        /* absent */
+      }
+    }
+  }
+  const model = process.env.LLM_PROVER_MODEL ?? process.env.LLM_PROVER_MODELS;
+  if (!model) {
+    console.error("Set LLM_PROVER_MODEL (and LLM_PROVER_BASE_URL / LLM_PROVER_API_KEY) in .env.local first; check it with npm run prover:check");
+    process.exit(2);
+  }
+  const budget = (JSON.parse(readFileSync(proverOf, "utf8")) as { budget?: string }).budget ?? "low";
+  const out = `${RESULTS}/${stamp}-prover-failed.json`;
+  console.log(`Trying ${model} on the theorems ${proverOf} did not prove (budget ${budget}, cost cap $${maxCost})`);
+  run("prover on the failures", "scripts/bench.ts", ["--file", FILE, "--budget", budget, "--concurrency", concurrency, "--max-cost", maxCost, "--only-failed", proverOf, "--json", out]);
+  run("merge", "scripts/bench-merge.ts", [proverOf, out, "--out", proverOf.replace(/(-merged)?\.json$/, "") + "-prover.json"]);
+}
+
+if (!rerunOf && !proverOf) console.log(
   `Baseline plan: ${flag("skip-retest") ? "" : "retest 20 (normal budget), "}${flag("skip-full") ? "" : `miniF2F test 244 (low budget, stops starting new theorems after $${maxCost})`}; ` +
     `${concurrency} theorems at a time.`,
 );
 
-if (!flag("skip-retest") && !rerunOf) {
+if (!flag("skip-retest") && !rerunOf && !proverOf) {
   run("retest: the same 20 theorems as the first run", "scripts/bench.ts", [
     "--file", FILE, "--limit", "20", "--budget", "normal", "--concurrency", concurrency, "--json", `${RESULTS}/${stamp}-retest20.json`,
   ]);
 }
-if (!flag("skip-full") && !rerunOf) {
+if (!flag("skip-full") && !rerunOf && !proverOf) {
   run("full: miniF2F test split, low budget", "scripts/bench.ts", [
     "--file", FILE, "--budget", "low", "--concurrency", concurrency, "--max-cost", maxCost, "--json", `${RESULTS}/${stamp}-minif2f-low.json`,
   ]);
@@ -86,6 +113,8 @@ const files = existsSync(RESULTS)
           return false;
         }
       })
-      .filter((f, _i, all) => !/-rerun\d+\.json$/.test(f) && !all.includes(f.replace(/\.json$/, "") + "-merged.json"))
+      // Folded files (re-runs, prover tries) are inside their merged result; a merged file stands in for its source.
+      .filter((f) => !/-(rerun\d+|prover-failed)\.json$/.test(f))
+      .filter((f, _i, all) => !all.includes(f.replace(/\.json$/, "") + "-merged.json"))
   : [];
 run("report", "scripts/bench-report.ts", [...files, "--out", "bench/BASELINE.md", "--title", "Prover baseline (miniF2F test)"]);

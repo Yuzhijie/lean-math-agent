@@ -42,7 +42,7 @@ export interface ResultFile {
   skipped?: string[];
   rows: ResultRow[];
   /** Set by bench:merge — re-runs folded into this run. */
-  merged_reruns?: { started_at: string; commit?: string; theorems: number }[];
+  merged_reruns?: { started_at: string; commit?: string; theorems: number; prover_model?: string }[];
 }
 
 export interface NamedResult {
@@ -116,7 +116,11 @@ export function renderReport(runs: NamedResult[], title = "Prover benchmark base
     if (retried) out.push(`- Retried once after an environment failure (model unreachable or a hung Lean worker): ${retried} theorem(s).`);
     if (r.merged_reruns?.length) {
       const n = s.ran.filter((x) => x.rerun).length;
-      out.push(`- Includes a re-run of ${n} theorem(s) after fixes (${r.merged_reruns.map((m) => `${m.started_at.slice(0, 10)}${m.commit ? ` @ ${m.commit}` : ""}`).join(", ")}); failure buckets re-classified with the current rules.`);
+      out.push(
+        `- Re-runs folded in (${n} theorem row(s) replaced): ${r.merged_reruns
+          .map((m) => `${m.started_at.slice(0, 10)}${m.commit ? ` @ ${m.commit}` : ""}, ${m.theorems} theorem(s)${m.prover_model ? ` with prover ${m.prover_model}` : " after fixes"}`)
+          .join("; ")}. Failure buckets re-classified with the current rules.`,
+      );
     }
     out.push("");
   }
@@ -170,7 +174,7 @@ async function main(): Promise<void> {
     const result = JSON.parse(await fs.readFile(f, "utf8")) as ResultFile;
     const label = (
       arg(`name-${runs.length + 1}`) ??
-      `${result.file.replace(/\.json$/, "")} ${result.total} · ${result.budget} · ${result.started_at.slice(0, 10)}${result.merged_reruns?.length ? " + re-run" : ""}`
+      `${result.file.replace(/\.json$/, "")} ${result.total} · ${result.budget} · ${result.started_at.slice(0, 10)}${result.merged_reruns?.length ? " + re-run" : ""}${result.merged_reruns?.some((m) => m.prover_model) ? ` + ${result.merged_reruns.find((m) => m.prover_model)!.prover_model} on failures` : ""}`
     ).trim();
     runs.push({ name: label, result });
   }

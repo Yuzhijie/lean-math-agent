@@ -13,6 +13,7 @@
  * result goes through the strict verifier (statement lock, axioms, no
  * sorry) like any other proof.
  */
+import { chatProverRole } from "../llm/config";
 import { assembleLeanSource } from "../lean/assemble";
 import { hammer } from "../lean/hammer";
 import { ProofSession, type ProofHole } from "../lean/proof-state";
@@ -157,7 +158,7 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
           },
         ],
         n: cfg.samples,
-        role: "prover",
+        role: chatProverRole(),
         temperature: 0.7,
         maxTokens: 4096,
         timeoutMs: Math.max(30_000, Math.min(timeLeft(), 300_000)),
@@ -169,7 +170,7 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
       if (e instanceof LlmError && /LLM_API_KEY/.test(msg)) throw e;
       break;
     }
-    const blocks = [...new Set(samples.map(extractTactics).filter((t): t is string => !!t))].filter((t) => !seen.has(t));
+    const blocks = [...new Set(samples.map((t) => extractTactics(t)).filter((t): t is string => !!t))].filter((t) => !seen.has(t));
     blocks.forEach((b) => seen.add(b));
     sketches += blocks.length;
     let firstError: string | undefined;

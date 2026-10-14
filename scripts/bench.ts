@@ -13,6 +13,7 @@
  *   --concurrency n   theorems proved at once (default 1); LEAN_REPL_WORKERS defaults to n
  *   --max-cost usd    stop starting new theorems once the run has spent this much (estimated
  *                     from LLM_PRICES); the theorems not started are listed as skipped
+ *   --only-failed f   only the theorems the result file f did not prove
  *   --no-retry        do not re-run theorems that failed for environment reasons (infra_error)
  *   --memory          proof memory: "readonly" (default) recalls stored proofs but does not add
  *                     the run's own, so results do not depend on order or earlier runs of the same
@@ -190,7 +191,13 @@ async function main(): Promise<void> {
   // Statements fetched before a repair was added are repaired on load (see fixStatement).
   const all = (Array.isArray(parsed) ? parsed : parsed.theorems).map((t) => ({ ...t, type: fixStatement(t.type) }));
   const opens = Array.isArray(parsed) ? undefined : parsed.opens;
-  const only = arg("only")?.split(",").map((s) => s.trim()).filter(Boolean);
+  let only = arg("only")?.split(",").map((s) => s.trim()).filter(Boolean);
+  // --only-failed <result.json>: the theorems that run did not prove (e.g. to try another prover on them).
+  const onlyFailed = arg("only-failed");
+  if (onlyFailed) {
+    const prev = JSON.parse(await fs.readFile(onlyFailed, "utf8")) as { rows: { id: string; ok: boolean; skipped?: boolean }[] };
+    only = prev.rows.filter((r) => !r.ok && !r.skipped).map((r) => r.id);
+  }
   const difficulty = arg("difficulty");
   const limit = Number(arg("limit") ?? Infinity);
   const offset = Number(arg("offset") ?? 0);

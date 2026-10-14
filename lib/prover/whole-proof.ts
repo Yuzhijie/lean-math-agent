@@ -23,7 +23,8 @@ import { verifyLeanSource, type LeanVerifyResult } from "../lean/sandbox";
 import { sanitizeLeanBody } from "../lean/sanitize";
 import { formatSuggestions, librarySearchSuggestions } from "../lean/suggest";
 import { LlmError, sampleText, type ChatMessage } from "../llm/client";
-import { WHOLE_PROOF_SYSTEM, wholeProofRepairMessage, wholeProofUserMessage } from "../llm/prompts";
+import { WHOLE_PROOF_SYSTEM, nativeProverPrompt, nativeProverRepairPrompt, wholeProofRepairMessage, wholeProofUserMessage } from "../llm/prompts";
+import { nativeProverSettings, proverPromptStyle } from "../llm/config";
 import { expectedLatencyMs } from "../llm/usage-tracker";
 import { lt } from "../llm/output-locale";
 
@@ -154,7 +155,16 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
     ...partial,
   });
 
-  const messages: ChatMessage[] = [
+  // A dedicated prover gets the prompt it was trained on (no system message, proof plan
+  // first, long output); a chat model gets our instructions, goal state and premises.
+  const native = proverPromptStyle() === "native";
+  const nativeSettings = native ? nativeProverSettings() : undefined;
+  const nativeRequest = native
+    ? nativeProverPrompt({ theoremName: args.theoremName, theoremType: args.theoremType, problemText: args.problemText, opens: args.opens })
+    : "";
+  const messages: ChatMessage[] = native
+    ? [{ role: "user", content: nativeRequest }]
+    : [
     { role: "system", content: WHOLE_PROOF_SYSTEM },
     {
       role: "user",
@@ -190,9 +200,15 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
         messages,
         n: cfg.samples,
         role: "prover",
-        temperature: cfg.temperature,
-        maxTokens: cfg.maxTokens,
-        timeoutMs: round === 0 ? undefined : Math.max(30_000, Math.min(timeLeft(), 180_000)),
+        temperature: nativeSettings?.temperature ?? cfg.temperature,
+        maxTokens: nativeSettings ? Math.max(cfg.maxTokens, nativeSettings.maxTokens) : cfg.maxTokens,
+        timeoutMs: nativeSettings
+          ? round === 0
+            ? nativeSettings.timeoutMs
+            : Math.max(60_000, Math.min(timeLeft(), nativeSettings.timeoutMs))
+          : round === 0
+            ? undefined
+            : Math.max(30_000, Math.min(timeLeft(), 180_000)),
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -202,7 +218,9 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
     }
     totalSamples += samples.length;
 
-    const tacticBlocks = [...new Set(samples.map((s) => extractTactics(s)).filter((t): t is string => !!t))]
+    const helpers = samples.flatMap((s) => helperDeclarationNames(s, args.theoremName));
+    if (helpers.length) log.push(`round ${round}: samples defined helper declarations outside the theorem (${[...new Set(helpers)].slice(0, 5).join(", ")}); only the theorem's proof is kept`);
+    const tacticBlocks = [...new Set(samples.map((s) => extractTactics(s, args.theoremName)).filter((t): t is string => !!t))]
       .filter((t) => !seenTactics.has(t));
     tacticBlocks.forEach((t) => seenTactics.add(t));
     if (tacticBlocks.length === 0) {
@@ -306,6 +324,14 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
     // Keep the conversation short: system + original request + one repair
     // turn (replacing any previous repair turn), so context does not grow
     // with every round.
+    if (native) {
+      const previousCode = `theorem ${args.theoremName} ${args.theoremType} := by\n${best.tactics.split("\n").map((l) => (l.trim() ? `  ${l}` : l)).join("\n")}`;
+      messages.splice(0, messages.length, { role: "user", content: nativeRequest }, { role: "assistant", content: "```lean4\n" + previousCode + "\n```" }, {
+        role: "user",
+        content: nativeProverRepairPrompt({ previousCode, feedback, suggestions: suggestionBlock || undefined }),
+      });
+      continue;
+    }
     messages.splice(2);
     messages.push({
       role: "user",
@@ -396,6 +422,45 @@ function pickCodeBlock(text: string): string {
   return pool[pool.length - 1];
 }
 
+const DECL_START = /^(?:@\[[^\]]*\]\s*)?(?:(?:private|protected|noncomputable)\s+)*(theorem|lemma|example|def|abbrev)\b\s*([^\s:({[]*)/;
+
+/**
+ * Split a code block into its top-level declarations (a declaration starts at column 0,
+ * optionally after an attribute; a doc comment above it stays with the previous one). Provers trained on competition data sometimes
+ * write helper lemmas before the main theorem.
+ */
+export function topLevelDeclarations(body: string): { kind: string; name: string; text: string }[] {
+  const lines = body.split("\n");
+  const out: { kind: string; name: string; start: number }[] = [];
+  lines.forEach((line, i) => {
+    const m = DECL_START.exec(line);
+    if (m) out.push({ kind: m[1], name: m[2] ?? "", start: i });
+  });
+  return out.map((d, k) => {
+    const end = k + 1 < out.length ? out[k + 1].start : lines.length;
+    return { kind: d.kind, name: d.name, text: lines.slice(d.start, end).join("\n") };
+  });
+}
+
+/**
+ * The declaration that proves the target: the one named `theoremName`, else the last
+ * theorem/lemma (provers put helpers first). Without a name the text is left as it is.
+ */
+function selectMainDeclaration(body: string, theoremName?: string): string {
+  const decls = topLevelDeclarations(body);
+  if (decls.length <= 1 || !theoremName) return body;
+  const named = theoremName ? decls.find((d) => d.name === theoremName || d.name.endsWith(`.${theoremName}`)) : undefined;
+  const proofs = decls.filter((d) => d.kind !== "def" && d.kind !== "abbrev");
+  return (named ?? proofs[proofs.length - 1] ?? decls[decls.length - 1]).text;
+}
+
+/** Names of helper declarations a response defines besides the target (they are not carried over). */
+export function helperDeclarationNames(text: string, theoremName: string): string[] {
+  return topLevelDeclarations(pickCodeBlock(text).replace(/\r/g, ""))
+    .filter((d) => d.name !== theoremName && d.kind !== "example")
+    .map((d) => d.name);
+}
+
 /**
  * Extract the tactic block from a model response. Accepts a fenced
  * ```lean block (preferred), a bare `theorem … := by` declaration, a
@@ -403,7 +468,7 @@ function pickCodeBlock(text: string): string {
  * Returns undefined when nothing usable is found or the block contains
  * commands the sanitizer forbids.
  */
-export function extractTactics(text: string): string | undefined {
+export function extractTactics(text: string, theoremName?: string): string | undefined {
   let body = pickCodeBlock(text).replace(/\r/g, "");
 
   // Drop imports / options; keep `open … in` usable as a tactic.
@@ -421,7 +486,7 @@ export function extractTactics(text: string): string | undefined {
     inPreamble = false;
     kept.push(line);
   }
-  body = kept.join("\n");
+  body = selectMainDeclaration(kept.join("\n"), theoremName);
 
   let tactics: string;
   const byIdx = body.search(/:=\s*by\b/);
