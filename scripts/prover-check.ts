@@ -24,6 +24,9 @@ for (const f of [".env.local", ".env"]) {
     /* absent */
   }
 }
+// The check is about the prover endpoint: an answer from the general model (the usual fallback when
+// the prover call fails) would look like a pass while the prover is unreachable.
+process.env.LLM_PROVER_FALLBACK_TO_GENERAL = "false";
 
 const NAME = "prover_check";
 const TYPE = "(a b : ℝ) (h₀ : 0 < a) (h₁ : 0 < b) : 2 * a * b ≤ a ^ 2 + b ^ 2";
@@ -57,6 +60,11 @@ async function main(): Promise<void> {
       (metrics.estimated_cost !== undefined ? `, $${metrics.estimated_cost.toFixed(4)}` : "") +
       (model && model !== endpoint.model ? ` — served by ${model} (fallback!)` : ""),
   );
+  if (model && model !== endpoint.model) {
+    console.log(`the prover ${endpoint.model} did not answer — fix LLM_PROVER_* before a benchmark`);
+    process.exitCode = 1;
+    return;
+  }
   const tactics = extractTactics(text, NAME);
   const helpers = helperDeclarationNames(text, NAME);
   if (!tactics) {
@@ -76,6 +84,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((e) => {
-  console.error(e instanceof Error ? e.message : e);
+  console.error(`the prover call failed: ${e instanceof Error ? e.message : e}`);
+  console.error("Check LLM_PROVER_MODEL (the exact model id the host lists), LLM_PROVER_BASE_URL and LLM_PROVER_API_KEY.");
   process.exit(1);
 });

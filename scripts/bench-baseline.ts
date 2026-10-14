@@ -11,7 +11,8 @@
  *
  *   npm run bench:baseline -- --prover bench/results/<full>-merged.json
  *       try the configured prover (LLM_PROVER_MODEL) on the theorems that run did not prove, merge
- *       the result into a copy of it ("<full>-prover.json") and rewrite the report
+ *       the result into a copy of it ("<full>-prover.json") and rewrite the report; runs prover:check
+ *       first and turns the fallback to the general model off, so the run measures the prover only
  *
  * On macOS the runs are wrapped in `caffeinate -i` so the machine does not sleep mid-run.
  * Needs what `npm run bench` needs (LLM key in .env.local, built Lean sandbox with the REPL).
@@ -77,6 +78,9 @@ if (proverOf) {
     console.error("Set LLM_PROVER_MODEL (and LLM_PROVER_BASE_URL / LLM_PROVER_API_KEY) in .env.local first; check it with npm run prover:check");
     process.exit(2);
   }
+  // A/B of the prover: a failed prover call must not be answered by the general model.
+  process.env.LLM_PROVER_FALLBACK_TO_GENERAL = "false";
+  run("prover check (one call, stops here if the prover does not answer)", "scripts/prover-check.ts", []);
   const budget = (JSON.parse(readFileSync(proverOf, "utf8")) as { budget?: string }).budget ?? "low";
   const out = `${RESULTS}/${stamp}-prover-failed.json`;
   console.log(`Trying ${model} on the theorems ${proverOf} did not prove (budget ${budget}, cost cap $${maxCost})`);
