@@ -400,12 +400,20 @@ async function rawChatMessages(
         if (res.ok) {
           const latencyMs = Date.now() - startTime;
           const data = (await res.json()) as {
-            choices?: { message?: { content?: string } }[];
+            choices?: { message?: { content?: string; reasoning?: string; reasoning_content?: string }; finish_reason?: string }[];
             usage?: RawUsage;
           };
-          const content = data.choices?.[0]?.message?.content;
+          const choice = data.choices?.[0];
+          // Local servers (Ollama, vLLM with a reasoning parser) put a thinking model's text in
+          // `reasoning` and may leave `content` empty; a prover's answer is read from the whole text.
+          const reasoningText = choice?.message?.reasoning ?? choice?.message?.reasoning_content;
+          const content = choice?.message?.content || (role === "prover" && !jsonMode ? reasoningText : undefined);
           if (!content) {
-            lastError = "LLM returned empty content";
+            lastError =
+              "LLM returned empty content" +
+              ` (finish_reason ${choice?.finish_reason ?? "none"}, ${data.usage?.completion_tokens ?? "?"} completion tokens` +
+              (reasoningText ? `, ${reasoningText.length} characters of reasoning only` : "") +
+              ")";
             if (attempt < config.maxHttpRetries) {
               retriesUsed = attempt + 1;
               continue;

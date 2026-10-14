@@ -175,6 +175,23 @@ describe("sampleText", () => {
     delete process.env.LLM_MAX_HTTP_RETRIES;
   });
 
+  it("reads a prover's answer from `reasoning` when a local server leaves `content` empty (Ollama)", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify({ choices: [{ message: { content: "", reasoning: "plan\n```lean4\nnlinarith\n```" }, finish_reason: "stop" }] }), { status: 200 }),
+    );
+    const out = await sampleText({ messages: MESSAGES, n: 1, role: "prover" });
+    expect(out).toEqual(["plan\n```lean4\nnlinarith\n```"]);
+  });
+
+  it("an empty answer says why (finish reason, tokens)", async () => {
+    process.env.LLM_MAX_HTTP_RETRIES = "0";
+    vi.mocked(fetch).mockImplementation(
+      async () => new Response(JSON.stringify({ choices: [{ message: { content: "" }, finish_reason: "length" }], usage: { prompt_tokens: 10, completion_tokens: 16000 } }), { status: 200 }),
+    );
+    await expect(sampleText({ messages: MESSAGES, n: 1 })).rejects.toThrow(/empty content \(finish_reason length, 16000 completion tokens\)/);
+    delete process.env.LLM_MAX_HTTP_RETRIES;
+  });
+
   it("bypasses the response cache so repeated sampling gives fresh completions", async () => {
     process.env.LLM_CACHE_ENABLED = "true";
     const f = vi.mocked(fetch);
