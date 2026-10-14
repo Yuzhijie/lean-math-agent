@@ -49,10 +49,14 @@ async function main(): Promise<void> {
           { role: "user" as const, content: wholeProofUserMessage({ theoremName: NAME, theoremType: TYPE }) },
         ];
   const started = Date.now();
+  const limitMs = native?.timeoutMs ?? cfg.timeoutMs;
+  console.log(`waiting for the answer (up to ${native?.maxTokens ?? 4096} tokens, timeout ${Math.round(limitMs / 1000)} s; a local model can take minutes)…`);
+  // The answer comes in one piece, so say that the call is still running.
+  const heartbeat = setInterval(() => console.log(`  … ${Math.round((Date.now() - started) / 1000)} s`), 30_000);
   const { text, metrics } = await withUsageScope(async (m) => {
     const out = await sampleText({ messages, n: 1, role: "prover", maxTokens: native?.maxTokens ?? 4096, timeoutMs: native?.timeoutMs, temperature: native?.temperature ?? 0.8 });
     return { text: out[0] ?? "", metrics: m() };
-  });
+  }).finally(() => clearInterval(heartbeat));
   const secs = (Date.now() - started) / 1000;
   const model = Object.keys(metrics.by_model)[0];
   console.log(
