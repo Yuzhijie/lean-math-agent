@@ -339,7 +339,8 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
 
   // ── 4b. Sketch-and-fill: proof skeleton with holes, each hole closed by
   //        the hammer or goal-level tactic search ────────────────────────
-  const sketchOn = opts.sketch ?? sketchEnabled();
+  // SKETCH_ENABLED=true forces the stage on the low budget too; =false turns it off everywhere.
+  const sketchOn = opts.sketch ?? (process.env.SKETCH_ENABLED === "true" || (sketchEnabled() && preset.sketchStage));
   let sketchSummary: string | undefined;
   if (sketchOn && preflight.status !== "unavailable" && process.env.LEAN_SERVER_MODE !== "spawn") {
     updateSession(session.id, { pipeline_stage: "solving" });

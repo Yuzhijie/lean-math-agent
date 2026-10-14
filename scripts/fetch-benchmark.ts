@@ -64,7 +64,76 @@ export function statementToType(formal: string, name: string): string | undefine
   // Deprecated `∑ x in s, f` / `∏ x in s, f` → `∑ x ∈ s, f`.
   type = type.replace(/([∑∏])\s+([^,]+?)\s+in\s+/g, "$1 $2 ∈ ");
   if (!type || type.includes(":=")) return undefined;
-  return type;
+  return fixStatement(type);
+}
+
+const CLOSERS: Record<string, string> = { "(": ")", "[": "]", "{": "}", "⟨": "⟩", "‖": "‖" };
+
+/**
+ * Repairs for statements written against an older Mathlib (applied when fetching and when a
+ * bench file is loaded, so files fetched earlier are fixed too):
+ *  - a big operator's body is now parsed at precedence 67, so `∑ k ∈ s, a + k * d` means
+ *    `(∑ k ∈ s, a) + k * d` (and `k` is unknown). These statements were written when the body ran
+ *    to the closing bracket or relation, so a body with a top-level `+`/`-` is parenthesised;
+ *  - `Complex.abs z` was removed from Mathlib → `‖z‖`.
+ */
+export function fixStatement(type: string): string {
+  return wrapBigOperatorBodies(type.replace(/Complex\.abs\s+(\((?:[^()]|\([^()]*\))*\)|[\w.'₀-₉]+)/g, (_m, arg: string) => `‖${arg.startsWith("(") ? arg.slice(1, -1) : arg}‖`));
+}
+
+function wrapBigOperatorBodies(text: string): string {
+  let out = text;
+  let from = 0;
+  for (;;) {
+    const m = /[∑∏]\s*([^,∈]+?)\s*∈/g;
+    m.lastIndex = from;
+    const hit = m.exec(out);
+    if (!hit) return out;
+    // The body starts after the first comma at depth 0 following `∈`.
+    let i = hit.index + hit[0].length;
+    let depth = 0;
+    for (; i < out.length; i++) {
+      const c = out[i];
+      if ("([{⟨".includes(c)) depth++;
+      else if (")]}⟩".includes(c)) depth--;
+      else if (c === "," && depth === 0) break;
+    }
+    if (i >= out.length) return out;
+    const bodyStart = i + 1;
+    // The body runs to an unmatched closer or a top-level relation / connective.
+    depth = 0;
+    let j = bodyStart;
+    let firstAdd = -1;
+    let prevOperand = false;
+    for (; j < out.length; j++) {
+      const c = out[j];
+      if (c === "‖") {
+        depth += out.slice(bodyStart, j).split("‖").length % 2 === 1 ? 1 : -1;
+        prevOperand = true;
+        continue;
+      }
+      if ("([{⟨".includes(c)) {
+        depth++;
+        continue;
+      }
+      if (")]}⟩".includes(c)) {
+        if (depth === 0) break;
+        depth--;
+        prevOperand = true;
+        continue;
+      }
+      if (depth === 0 && /[=≠≤≥<>∧∨→↔∣,]/.test(c)) break;
+      if (depth === 0 && (c === "+" || c === "-") && prevOperand && firstAdd < 0) firstAdd = j;
+      if (!/\s/.test(c)) prevOperand = !"+-*/^•".includes(c);
+    }
+    const body = out.slice(bodyStart, j);
+    if (firstAdd >= 0) {
+      const lead = body.match(/^\s*/)![0];
+      const trail = body.match(/\s*$/)![0];
+      out = `${out.slice(0, bodyStart)}${lead}(${body.trim()})${trail}${out.slice(j)}`;
+    }
+    from = bodyStart;
+  }
 }
 
 export function opensOf(header: string | undefined): string[] {

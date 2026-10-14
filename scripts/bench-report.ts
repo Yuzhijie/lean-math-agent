@@ -19,6 +19,10 @@ export interface ResultRow {
   cost?: number;
   failure?: { kind: string; detail: string };
   skipped?: boolean;
+  /** Second attempt after an environment failure (bench retries those once). */
+  retried?: boolean;
+  /** Replaced by a later re-run (bench:merge). */
+  rerun?: boolean;
 }
 
 export interface ResultFile {
@@ -37,6 +41,8 @@ export interface ResultFile {
   total: number;
   skipped?: string[];
   rows: ResultRow[];
+  /** Set by bench:merge — re-runs folded into this run. */
+  merged_reruns?: { started_at: string; commit?: string; theorems: number }[];
 }
 
 export interface NamedResult {
@@ -106,6 +112,12 @@ export function renderReport(runs: NamedResult[], title = "Prover benchmark base
         `a proved theorem took ${s.passed.length ? (s.passed.reduce((a, x) => a + x.wall_ms, 0) / s.passed.length / 1000).toFixed(0) : "—"} s on average.`,
     );
     if (r.skipped?.length) out.push(`- Not run (cost cap): ${r.skipped.length} theorem(s).`);
+    const retried = s.ran.filter((x) => x.retried).length;
+    if (retried) out.push(`- Retried once after an environment failure (model unreachable or a hung Lean worker): ${retried} theorem(s).`);
+    if (r.merged_reruns?.length) {
+      const n = s.ran.filter((x) => x.rerun).length;
+      out.push(`- Includes a re-run of ${n} theorem(s) after fixes (${r.merged_reruns.map((m) => `${m.started_at.slice(0, 10)}${m.commit ? ` @ ${m.commit}` : ""}`).join(", ")}); failure buckets re-classified with the current rules.`);
+    }
     out.push("");
   }
 
@@ -156,7 +168,10 @@ async function main(): Promise<void> {
   const runs: NamedResult[] = [];
   for (const f of files) {
     const result = JSON.parse(await fs.readFile(f, "utf8")) as ResultFile;
-    const label = (arg(`name-${runs.length + 1}`) ?? `${result.file.replace(/\.json$/, "")} ${result.total} · ${result.budget} · ${result.started_at.slice(0, 10)}`).trim();
+    const label = (
+      arg(`name-${runs.length + 1}`) ??
+      `${result.file.replace(/\.json$/, "")} ${result.total} · ${result.budget} · ${result.started_at.slice(0, 10)}${result.merged_reruns?.length ? " + re-run" : ""}`
+    ).trim();
     runs.push({ name: label, result });
   }
   runs.sort((a, b) => a.result.started_at.localeCompare(b.result.started_at));

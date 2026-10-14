@@ -23,11 +23,26 @@ interface ErrorPattern {
 }
 
 const ERROR_PATTERNS: ErrorPattern[] = [
+  // Timeouts first: their messages also mention the tactic that was running.
+  {
+    kind: "timeout",
+    patterns: [
+      /maximum recursion depth/i,
+      /deterministic\)? timeout/i,
+      /timeout/i,
+      /timed out/i,
+    ],
+    suggestion: () =>
+      lt(
+        "Lean 超时。简化步骤：拆分为更小的子目标，使用更直接的策略，用 `simp only [...]` 限制 simp 集。",
+        "Lean timed out. Simplify the step: split it into smaller subgoals, use more direct tactics, and restrict the simp set with `simp only [...]`.",
+      ),
+  },
   {
     kind: "unknown_identifier",
     patterns: [
-      /unknown identifier '([^']+)'/i,
-      /unknown constant '([^']+)'/i,
+      // Lean 4 quotes names with backticks (`k`), older messages with '…'.
+      /unknown (?:identifier|constant)\b/i,
       /unknown tactic '([^']+)'/i,
     ],
     suggestion: () =>
@@ -43,6 +58,7 @@ const ERROR_PATTERNS: ErrorPattern[] = [
       /has type .+ but is expected to have type/i,
       /expected .+ but got/i,
       /application type mismatch/i,
+      /function expected/i,
     ],
     suggestion: () =>
       lt(
@@ -67,7 +83,11 @@ const ERROR_PATTERNS: ErrorPattern[] = [
   {
     kind: "tactic_failed",
     patterns: [
-      /tactic '([^']+)' failed/i,
+      /tactic [`'‘]([^`'’]+)[`'’] failed/i,
+      /failed to prove (?:positivity|nonnegativity|nonzeroness)/i,
+      /omega could not prove/i,
+      /(?:nlinarith|linarith|polyrith|positivity|norm_num|decide|aesop|ring_nf|field_simp) failed/i,
+      /[`']?d?simp[`']? made no progress/i,
       /rewrite tactic failed/i,
       /simp made no progress/i,
       /ring tactic failed/i,
@@ -121,19 +141,6 @@ const ERROR_PATTERNS: ErrorPattern[] = [
         "Fix the Lean syntax. Check parentheses, commas, keyword spelling, and indentation.",
       ),
   },
-  {
-    kind: "timeout",
-    patterns: [
-      /maximum recursion depth/i,
-      /deterministic timeout/i,
-      /timeout/i,
-    ],
-    suggestion: () =>
-      lt(
-        "Lean 超时。简化步骤：拆分为更小的子目标，使用更直接的策略，用 `simp only [...]` 限制 simp 集。",
-        "Lean timed out. Simplify the step: split it into smaller subgoals, use more direct tactics, and restrict the simp set with `simp only [...]`.",
-      ),
-  },
 ];
 
 // ── Line position parser ──────────────────────────────────────────────
@@ -164,7 +171,7 @@ export function classifyLeanErrors(log: string): ClassifiedError[] {
       const kind = classifyLine(line);
       currentError = {
         kind,
-        message: line.replace(/.*error:\s*/i, "").trim(),
+        message: line.replace(/^.*?error:\s*/i, "").trim(),
         raw: line,
         suggestion: ERROR_PATTERNS.find((p) => p.kind === kind)?.suggestion(),
       };

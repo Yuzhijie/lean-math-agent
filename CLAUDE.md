@@ -151,7 +151,7 @@ lib/
   prover/
     whole-proof.ts                  # Whole-proof loop: sample k proofs → verify → repair with feedback + suggestions
     sketch.ts                       # Sketch-and-fill: skeleton with `have … := by sorry` holes → each hole closed by hammer/goal search → splice → strict verify
-    budget.ts                       # PROOF_BUDGET presets (low/normal/high) for whole-proof, sketch and goal search
+    budget.ts                       # PROOF_BUDGET presets (low/normal/high) for whole-proof, sketch and goal search; `sketchStage` false on low (sketch-and-fill proved nothing on the miniF2F baselines); SKETCH_ENABLED=true forces it on
     context.ts                      # Prover context: retrieved premises + recalled proofs as one prompt block; rememberVerifiedProof
   llm/
     client.ts                       # Core LLM client (roles, sampling, retry, fallback, cache, Zod)
@@ -178,7 +178,7 @@ lib/
   lean/
     assemble.ts                     # Assemble Lean source from steps
     lemma-cache.ts                  # Mathlib lemma index (20+ built-in)
-    parse-log.ts                    # Lean error parser (8 error kinds)
+    parse-log.ts                    # Lean error parser (8 error kinds); timeouts first; Lean 4 wording (backtick-quoted names, "omega could not prove", "failed to prove positivity", "made no progress", "Function expected")
     sandbox.ts                      # verifyLeanSource: sanitize → REPL/spawn → verdict (sorry, axioms, statement lock); autoImplicit off prelude
     repl.ts                         # leanprover-community/repl client: worker pool, header env reuse, tactic mode, timeouts
     proof-state.ts                  # ProofSession: pinned REPL worker, goal states as handles, apply tactic, replay on worker loss
@@ -216,10 +216,11 @@ bench/
   minif2f-*.json                    # Downloaded by `npm run bench:fetch` (git-ignored)
 
 scripts/
-  bench.ts                          # Prover benchmark: cascade/whole_proof/sketch/stepwise, budgets, proved-by + failure taxonomy; --concurrency n (runPool; LEAN_REPL_WORKERS defaults to n), --max-cost usd (no new theorems once spent; the rest listed as skipped), --memory readonly (default: recall but do not store, so runs do not feed later runs) | write | off; result JSON records concurrency, memory, commit, models, elapsed time
+  bench.ts                          # Prover benchmark: cascade/whole_proof/sketch/stepwise, budgets, proved-by + failure taxonomy; --concurrency n (runPool; LEAN_REPL_WORKERS defaults to n), --max-cost usd (no new theorems once spent; the rest listed as skipped), --memory readonly (default: recall but do not store, so runs do not feed later runs) | write | off; environment failures (`infra_error`: model call failed, a Lean worker hung on the statement check) are retried once at the end (--no-retry); statements are repaired on load (fixStatement); result JSON records concurrency, memory, commit, models, elapsed time
   bench-report.ts                   # Result JSON files → Markdown (bench/BASELINE.md): one row per run, proved-by / failures / cost of failures per run, gained and lost theorems between consecutive runs
-  bench-baseline.ts                 # `npm run bench:baseline`: retest the first 20 miniF2F theorems (normal budget), then all 244 (low budget, --max-cost 12), 3 at a time, then BASELINE.md from every miniF2F result
-  fetch-benchmark.ts                # miniF2F (Lean 4) → bench file (`npm run bench:fetch`)
+  bench-baseline.ts                 # `npm run bench:baseline`: retest the first 20 miniF2F theorems (normal budget), then all 244 (low budget, --max-cost 12), 3 at a time, then BASELINE.md from every miniF2F result; `--rerun <full.json>` re-runs only the theorems a fix touched and merges them; runs under `caffeinate -i` on macOS
+  bench-merge.ts                    # Re-run rows replace the full run's rows by id, totals recomputed, Lean-message failure buckets re-classified; rerunIds (statements fixStatement changes + environment failures)
+  fetch-benchmark.ts                # miniF2F (Lean 4) → bench file (`npm run bench:fetch`); fixStatement: big-operator bodies with a top-level +/- are parenthesised (the body is now parsed at precedence 67, so `∑ k ∈ s, a + k * d` lost k), Complex.abs z → ‖z‖
   build-premise-index.ts            # Mathlib declaration dump → premise index (`npm run premises:build`)
   lean/DumpDecls.lean               # `lake env lean --run` script exporting theorem statements as JSON lines
   compute-server.py                 # Python SymPy HTTP server (9 POST endpoints)

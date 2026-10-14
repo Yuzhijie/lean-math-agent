@@ -76,3 +76,59 @@ describe("bench report (BASELINE.md)", () => {
     expect(md).toContain("cost cap $0.2");
   });
 });
+
+describe("statement repairs (fixStatement)", async () => {
+  const { fixStatement } = await import("../scripts/fetch-benchmark");
+  it("parenthesises big-operator bodies written for the old precedence", () => {
+    expect(fixStatement("(a d : ℝ) (h₀ : (∑ k ∈ Finset.range 5, a + k * d) = 70) : a = 42 / 5")).toBe("(a d : ℝ) (h₀ : (∑ k ∈ Finset.range 5, (a + k * d)) = 70) : a = 42 / 5");
+    expect(fixStatement(": (∏ k ∈ Finset.range 6, 2 * k + 1) % 10 = 5")).toBe(": (∏ k ∈ Finset.range 6, (2 * k + 1)) % 10 = 5");
+    expect(fixStatement(": (∏ k ∈ Finset.range 7, 2 ^ 2 ^ k + 3 ^ 2 ^ k) = 3 ^ 128 - 2 ^ 128")).toBe(": (∏ k ∈ Finset.range 7, (2 ^ 2 ^ k + 3 ^ 2 ^ k)) = 3 ^ 128 - 2 ^ 128");
+    expect(fixStatement("(a : ℕ) (h₁ : ↑(∑ k ∈ Finset.range 8, 2 * k + 1) - ↑(∑ k ∈ Finset.range 5, a + 2 * k) = (4 : ℤ)) : a = 8")).toBe(
+      "(a : ℕ) (h₁ : ↑(∑ k ∈ Finset.range 8, (2 * k + 1)) - ↑(∑ k ∈ Finset.range 5, (a + 2 * k)) = (4 : ℤ)) : a = 8",
+    );
+  });
+  it("leaves statements that already parse as intended alone", () => {
+    for (const s of [": (∑ k ∈ Finset.Icc 1 100, k) + 1 = 5051", "(f : ℕ → ℕ) : ∑ k ∈ Finset.range 10, f k = 3", ": (∑ k ∈ Finset.range 5, (k + 1)) = 15", "(x : ℝ) : x + 1 > x"]) {
+      expect(fixStatement(s)).toBe(s);
+    }
+  });
+  it("replaces the removed Complex.abs by the norm", () => {
+    expect(fixStatement("(a b : ℂ) : Complex.abs (a - b) ≤ 2 * Real.sqrt 21")).toBe("(a b : ℂ) : ‖a - b‖ ≤ 2 * Real.sqrt 21");
+    expect(fixStatement("(z : ℂ) : Complex.abs z = 1")).toBe("(z : ℂ) : ‖z‖ = 1");
+  });
+});
+
+describe("failure buckets and re-runs", async () => {
+  const { classifyFailure } = await import("../scripts/bench");
+  const { mergeResults, rerunIds } = await import("../scripts/bench-merge");
+  it("classifies current Lean 4 messages", () => {
+    expect(classifyFailure({ summary: "failed to prove positivity/nonnegativity/nonzeroness" }).kind).toBe("tactic_failed");
+    expect(classifyFailure({ summary: "omega could not prove the goal:" }).kind).toBe("tactic_failed");
+    expect(classifyFailure({ summary: "Tactic `simp` failed with a nested error:" }).kind).toBe("tactic_failed");
+    expect(classifyFailure({ summary: "`dsimp` made no progress" }).kind).toBe("tactic_failed");
+    expect(classifyFailure({ summary: "Function expected at" }).kind).toBe("type_mismatch");
+    expect(classifyFailure({ summary: "Unknown constant `Real.pi_lt_22_div_7`" }).kind).toBe("unknown_identifier");
+    expect(classifyFailure({ summary: "Lean REPL command timed out after 120000ms; worker #12 was killed" }).kind).toBe("timeout");
+    expect(classifyFailure({ summary: "unknown tactic" }).kind).toBe("syntax_error");
+  });
+  it("picks the theorems to re-run and merges them into the full run", () => {
+    const bench = { theorems: [{ id: "a", type: ": 1 = 1" }, { id: "b", type: ": (∑ k ∈ Finset.range 3, k + 1) = 6" }, { id: "c", type: ": 2 = 2" }, { id: "d", type: ": 3 = 3" }, { id: "e", type: ": 4 = 4" }] };
+    const full = {
+      started_at: "2026-10-14T04:08:50.315Z",
+      rows: [
+        { id: "a", ok: true, proved_by: "hammer" },
+        { id: "b", ok: false, proved_by: "none", failure: { kind: "statement_error", detail: "Unknown identifier `k`" } },
+        { id: "c", ok: false, proved_by: "none", llm_calls: 0, failure: { kind: "no_candidate", detail: "no parseable proof was sampled" } },
+        { id: "d", ok: false, proved_by: "none", failure: { kind: "statement_error", detail: "Lean REPL command timed out after 180000ms; worker #17 was killed" } },
+        { id: "e", ok: false, proved_by: "none", llm_calls: 3, failure: { kind: "syntax_error", detail: "omega could not prove the goal:" } },
+      ],
+    };
+    expect(rerunIds(full, bench)).toEqual(["b", "c", "d"]);
+    const rerun = { started_at: "2026-10-15T00:00:00.000Z", commit: "abc", rows: [{ id: "b", ok: true, proved_by: "whole_proof" }, { id: "c", ok: true, proved_by: "hammer" }, { id: "d", ok: false, proved_by: "none", failure: { kind: "unsolved_goal", detail: "" } }] };
+    const merged = mergeResults(full, [rerun]);
+    expect(merged.pass).toBe(3);
+    expect(merged.total).toBe(5);
+    expect(merged.failures).toEqual({ unsolved_goal: 1, tactic_failed: 1 });
+    expect(merged.rows.find((r) => r.id === "b")?.rerun).toBe(true);
+  });
+});

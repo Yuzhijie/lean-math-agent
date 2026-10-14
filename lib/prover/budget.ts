@@ -12,6 +12,11 @@ import type { WholeProofConfig } from "./whole-proof";
 export type ProofBudget = "low" | "normal" | "high";
 
 export interface BudgetPreset {
+  /**
+   * Whether the cascade runs sketch-and-fill after the whole-proof loop. Off on the low budget:
+   * on the miniF2F baselines (2026-09/10) it proved nothing in three runs while costing time.
+   */
+  sketchStage: boolean;
   wholeProof: Partial<WholeProofConfig>;
   sketch: Partial<SketchConfig>;
   goalSearch: Partial<GoalSearchConfig>;
@@ -19,16 +24,19 @@ export interface BudgetPreset {
 
 const PRESETS: Record<ProofBudget, BudgetPreset> = {
   low: {
+    sketchStage: false,
     wholeProof: { samples: 2, rounds: 1, timeBudgetMs: 90_000 },
     sketch: { samples: 1, repairs: 0, holeBudgetMs: 30_000, timeBudgetMs: 150_000, maxLlmHoles: 2 },
     goalSearch: { samplesPerNode: 3, maxNodes: 20, beam: 8 },
   },
   normal: {
+    sketchStage: true,
     wholeProof: { samples: 4, rounds: 2, timeBudgetMs: 180_000 },
     sketch: { samples: 2, repairs: 1, holeBudgetMs: 60_000, timeBudgetMs: 300_000, maxLlmHoles: 4 },
     goalSearch: { samplesPerNode: 4, maxNodes: 60, beam: 16 },
   },
   high: {
+    sketchStage: true,
     wholeProof: { samples: 8, rounds: 3, timeBudgetMs: 360_000 },
     sketch: { samples: 3, repairs: 2, holeBudgetMs: 120_000, timeBudgetMs: 600_000, maxLlmHoles: 6 },
     goalSearch: { samplesPerNode: 6, maxNodes: 150, beam: 24 },

@@ -13,6 +13,7 @@
  *   --concurrency n   theorems proved at once (default 1); LEAN_REPL_WORKERS defaults to n
  *   --max-cost usd    stop starting new theorems once the run has spent this much (estimated
  *                     from LLM_PRICES); the theorems not started are listed as skipped
+ *   --no-retry        do not re-run theorems that failed for environment reasons (infra_error)
  *   --memory          proof memory: "readonly" (default) recalls stored proofs but does not add
  *                     the run's own, so results do not depend on order or earlier runs of the same
  *                     file; "write" also stores them; "off" disables recall
@@ -29,6 +30,7 @@ import { promises as fs } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { checkLeanAvailable, verifyLeanSource } from "../lib/lean/sandbox";
+import { fixStatement } from "./fetch-benchmark";
 import { shutdownReplPool } from "../lib/lean/repl";
 import { withUsageScope, type RunMetrics } from "../lib/llm/usage-tracker";
 import { proveWholeTheorem, type WholeProofResult } from "../lib/prover/whole-proof";
@@ -78,6 +80,8 @@ export type FailureKind =
   | "axioms"
   | "statement_changed"
   | "budget_exhausted"
+  /** The environment failed, not the prover: the model could not be reached or a Lean worker hung. Retried once. */
+  | "infra_error"
   | "other";
 
 interface BenchRow {
@@ -101,6 +105,8 @@ interface BenchRow {
   error?: string;
   /** Not run: the run's cost cap was reached first. */
   skipped?: boolean;
+  /** Run a second time after an environment failure (the row is the second attempt). */
+  retried?: boolean;
 }
 
 /** Run `fn` over `items` with at most `n` running at once; results keep the input order. */
@@ -150,7 +156,7 @@ export function classifyFailure(input: { log?: string; summary?: string; timedOu
   let text = input.log ?? input.summary ?? "";
   if (!text.trim()) return { kind: "other", detail: "" };
   // Candidate summaries are bare messages; the classifier keys on `error:` markers.
-  if (!/error:/i.test(text)) text = `error: ${text}`;
+  if (!/(^|:\d+:\d+:\s*)error:/im.test(text)) text = `error: ${text}`;
   const classified = classifyLeanErrors(text);
   const first = classified[0];
   const detail = (input.summary ?? text).split("\n")[0].slice(0, 160);
@@ -160,6 +166,8 @@ export function classifyFailure(input: { log?: string; summary?: string; timedOu
 
 function wholeProofFailure(r: WholeProofResult): { kind: FailureKind; detail: string } {
   if (r.unavailable) return { kind: "lean_unavailable", detail: r.log.split("\n")[0] ?? "" };
+  const samplingFailed = r.log.split("\n").find((l) => /sampling failed:/.test(l));
+  if (r.candidates.length === 0 && samplingFailed) return { kind: "infra_error", detail: samplingFailed.replace(/^.*sampling failed:\s*/, "model call failed: ").slice(0, 160) };
   if (r.candidates.length === 0) return { kind: "no_candidate", detail: "no parseable proof was sampled" };
   const best = [...r.candidates].sort((a, b) => a.errors - b.errors)[0];
   const timedOut = /time budget/.test(r.log);
@@ -179,7 +187,8 @@ async function main(): Promise<void> {
   loadEnv();
   const file = arg("file") ?? path.resolve("bench/theorems.json");
   const parsed = JSON.parse(await fs.readFile(file, "utf8")) as BenchTheorem[] | BenchFile;
-  const all = Array.isArray(parsed) ? parsed : parsed.theorems;
+  // Statements fetched before a repair was added are repaired on load (see fixStatement).
+  const all = (Array.isArray(parsed) ? parsed : parsed.theorems).map((t) => ({ ...t, type: fixStatement(t.type) }));
   const opens = Array.isArray(parsed) ? undefined : parsed.opens;
   const only = arg("only")?.split(",").map((s) => s.trim()).filter(Boolean);
   const difficulty = arg("difficulty");
@@ -231,7 +240,7 @@ async function main(): Promise<void> {
   const runStarted = Date.now();
   let spent = 0;
   let capped = false;
-  const rows = await runPool(theorems, concurrency, async (t): Promise<BenchRow> => {
+  const runTheorem = async (t: BenchTheorem): Promise<BenchRow> => {
     if (maxCost !== undefined && spent >= maxCost) {
       capped = true;
       return { id: t.id, difficulty: t.difficulty ?? "?", strategy, ok: false, proved_by: "none", skipped: true, wall_ms: 0, llm_calls: 0, tokens: 0, lean_verifications: 0, lean_verify_ms: 0 };
@@ -247,7 +256,10 @@ async function main(): Promise<void> {
           return { ...base, ok: false, proved_by: "none", failure: { kind: "lean_unavailable", detail: preflight.log.slice(0, 160) }, ...fromMetrics(metrics(), started) };
         }
         if (!preflight.ok) {
-          return { ...base, ok: false, proved_by: "none", failure: { kind: "statement_error", detail: preflight.log.split("\n")[0].slice(0, 160) }, ...fromMetrics(metrics(), started) };
+          const detail = preflight.log.split("\n")[0].slice(0, 160);
+          // A worker that timed out on a `sorry` statement hung; the statement itself was not judged.
+          const kind: FailureKind = /timed out|was killed/i.test(preflight.log) ? "infra_error" : "statement_error";
+          return { ...base, ok: false, proved_by: "none", failure: { kind, detail }, ...fromMetrics(metrics(), started) };
         }
         const initialGoal = preflight.goals?.[0];
         const expectedSignature = preflight.signature;
@@ -299,7 +311,7 @@ async function main(): Promise<void> {
         }
         // 3. Sketch-and-fill.
         let holes: string | undefined;
-        if (strategy === "cascade" || strategy === "sketch") {
+        if (strategy === "sketch" || (strategy === "cascade" && (preset.sketchStage || process.env.SKETCH_ENABLED === "true"))) {
           const r = await proveBySketch({
             sessionId: `bench-${t.id}`,
             theoremName: t.name,
@@ -336,7 +348,16 @@ async function main(): Promise<void> {
         (row.failure ? `  [${row.failure.kind}] ${row.failure.detail.slice(0, 70)}` : ""),
     );
     return row;
-  });
+  };
+  const rows = await runPool(theorems, concurrency, runTheorem);
+  // Theorems lost to the environment (model unreachable, a hung Lean worker — e.g. the machine slept)
+  // are run once more at the end, so one outage does not count as prover failures.
+  const infra = rows.map((r, i) => ({ r, i })).filter(({ r }) => r.failure?.kind === "infra_error");
+  if (infra.length && !flag("no-retry")) {
+    console.log(`\nretrying ${infra.length} theorem(s) that failed for environment reasons`);
+    const again = await runPool(infra.map(({ i }) => theorems[i]), concurrency, runTheorem);
+    infra.forEach(({ i }, k) => (rows[i] = { ...again[k], retried: true }));
+  }
 
   const skipped = rows.filter((r) => r.skipped);
   if (capped) console.log(`\ncost cap $${maxCost} reached: ${skipped.length} theorem(s) not started`);
