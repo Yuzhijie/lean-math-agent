@@ -116,7 +116,7 @@ export async function createCheckoutSession(
 
   const session = await getStripe().checkout.sessions.create({
     mode: 'subscription',
-    payment_method_types: ['card', 'alipay'],
+    allowed_payment_method_types: ['card', 'alipay'],
     customer_email: email,
     line_items: [
       {

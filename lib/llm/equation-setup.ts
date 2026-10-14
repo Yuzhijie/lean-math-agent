@@ -30,7 +30,7 @@ export const solutionMethodSchema = z.object({
 export const equationSetupSchema = z.object({
   variables: z.array(equationVariableSchema).min(1),
   equations: z.array(equationSchema).min(1),
-  parameter_values: z.record(z.string()).optional(),
+  parameter_values: z.record(z.string(), z.string()).optional(),
   constraints: z.array(z.string()),
   target_expression: z.string().min(1),
   target_description: z.string().min(1),

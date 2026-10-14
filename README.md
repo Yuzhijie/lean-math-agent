@@ -4,7 +4,7 @@ Interactive Lean 4 math problem solver (MVP). Domain: Nat/Int equalities.
 
 ## Prerequisites
 
-- Node.js 18+
+- Node.js 22.12+ (Next 16, Vitest 5 and Prisma 7)
 - [elan](https://github.com/leanprover/elan) (Lean 4 toolchain manager)
 
 ## Setup

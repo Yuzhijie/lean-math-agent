@@ -4,7 +4,7 @@ import { signIn } from 'next-auth/react';
 import { useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Github, Mail } from 'lucide-react';
+import { LogIn, Mail } from 'lucide-react';
 import { useI18n } from '@/lib/i18n';
 
 export default function SignInPage() {
@@ -43,7 +43,7 @@ export default function SignInPage() {
               onClick={() => signIn('github', { callbackUrl })}
               className="border-slate-600 hover:bg-slate-700 text-slate-300"
             >
-              <Github className="mr-2 h-4 w-4" />
+              <LogIn className="mr-2 h-4 w-4" />
               GitHub
             </Button>
             <Button

@@ -31,7 +31,7 @@ export const logicGridSchema = z.object({
   categories: z.array(z.object({ name: name, items: z.array(name).min(2).max(6) })).min(2).max(4),
   constraints: z.array(gridConstraint).max(40),
   /** Claimed answer: row item → its items in the other categories, in category order. */
-  answer: z.record(z.array(name)).optional(),
+  answer: z.record(z.string(), z.array(name)).optional(),
   /** Conditions of the problem that could not be expressed with the constraint types. */
   unencoded: z.array(z.string().max(120)).max(10).optional(),
 });

@@ -14,7 +14,7 @@ const categorySchema = z.object({
 
 export const optimizationStructureSchema = z.object({
   objective: z.enum(["maximize", "minimize"]),
-  objective_coefficients: z.record(z.number()),
+  objective_coefficients: z.record(z.string(), z.number()),
   objective_description: z.string().min(1),
   target_sum: z.number(),
   target_description: z.string().min(1),

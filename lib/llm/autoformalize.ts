@@ -619,7 +619,7 @@ ${JSON.stringify(formal.numerical_instances, null, 2)}`,
         all_consistent: z.boolean(),
         results: z.array(
           z.object({
-            variables: z.record(z.string()),
+            variables: z.record(z.string(), z.string()),
             expected: z.string(),
             actual: z.string(),
             match: z.boolean(),

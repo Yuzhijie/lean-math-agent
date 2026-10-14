@@ -13,13 +13,13 @@ AI-powered Lean 4 math theorem prover + problem solver. Single-page Next.js app.
 
 | Layer | Tech |
 |-------|------|
-| Frontend | Next.js 16, React 19, Tailwind v4, shadcn/ui (Radix), KaTeX, Lucide icons |
-| Backend | Next.js API Routes (TypeScript), Zod validation |
+| Frontend | Next.js 16.4, React 19.3, Tailwind v4, shadcn/ui (Radix), KaTeX 0.19, Lucide icons 1.x (no brand icons) |
+| Backend | Next.js API Routes (TypeScript), Zod 4 validation (`z.record` takes key + value schemas; transforms are `ZodPipe`), Prisma 7 (SQLite via `@prisma/adapter-better-sqlite3`), next-auth v4 (v5 still beta), Stripe 23; Node ≥ 22.12 |
 | LLM | OpenAI-compatible API (configurable via env), role routing (general / prover / planner / vision), image input, sampling, fallback chain, LRU cache, per-run metrics |
 | Lean | Lean 4 + Mathlib v4.33.1 + Batteries + Aesop; verification via persistent `leanprover-community/repl` workers (env reuse, sorry goals, tactic mode, axiom + statement checks), `lake env lean` fallback |
 | Compute | Python SymPy HTTP microservice (9 endpoints) |
 | State | In-memory Map + JSON disk persistence |
-| Tests | Vitest (65 test files) |
+| Tests | Vitest 5 (95 test files) |
 
 ## Project Structure
 
@@ -88,7 +88,8 @@ lib/
   types.ts                          # All domain types + constants (TAXONOMY, MATH_DOMAINS, etc.)
   schemas.ts                        # Zod schemas for all LLM outputs
   auth.ts                           # NextAuth configuration (JWT, providers, callbacks)
-  db.ts                             # Prisma client singleton
+  db.ts                             # Prisma client singleton: client generated into lib/generated/prisma (git-ignored; `npx prisma generate`, also run by postinstall) + better-sqlite3 driver adapter
+  db-url.ts                         # SQLite URL for prisma.config.ts and the adapter: relative file: paths resolve against prisma/ (Prisma 5 behaviour) → prisma/.data/prod.db
   session-store.ts                  # In-memory + disk persistence
   utils.ts                          # cn() utility (clsx + tailwind-merge)
   math-segments.ts                  # Math text segmenter ($, $$, \(, \[)
@@ -231,7 +232,8 @@ scripts/
     endpoints.py                    # Flask HTTP endpoints
 
 prisma/
-  schema.prisma                     # Database schema (User, Subscription, ProofSession)
+  schema.prisma                     # Database schema (User, Subscription, ProofSession); generator `prisma-client`, no datasource url (Prisma 7)
+prisma.config.ts                    # Prisma 7 CLI config: schema path, datasource URL (loads .env.local / .env itself)
 
 docs/
   P3-FEATURES.md                    # P3 features setup and usage guide
@@ -246,7 +248,7 @@ docker-compose.yml                  # Service orchestration (web + compute + neo
 nginx.conf                          # Reverse proxy with rate limiting
 .dockerignore                       # Docker build exclusions
 
-tests/                              # 65 Vitest test files (unit + fake REPL + real-Lean integration)
+tests/                              # 95 Vitest test files (unit + fake REPL + real-Lean integration)
 components/ui/                      # 16 shadcn/ui primitives (+avatar, dropdown-menu, label)
 ```
 

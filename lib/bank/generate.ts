@@ -414,7 +414,7 @@ function drawFigure(rawSpec: unknown, style: FigureStyle): { figure?: CandidateF
   const parsed = visualSpecSchema.safeParse(raw);
   if (!parsed.success) {
     const i = parsed.error.issues[0];
-    const got = i ? valueAt(raw, i.path) : undefined;
+    const got = i ? valueAt(raw, i.path.filter((p): p is string | number => typeof p !== "symbol")) : undefined;
     const gotText = got === undefined ? "" : ` (got ${clip(JSON.stringify(got), 80)})`;
     return { figureIssue: lt(`图形描述无效：${i?.path.join(".")} ${i?.message}${gotText}`, `invalid figure spec: ${i?.path.join(".")} ${i?.message}${gotText}`) };
   }

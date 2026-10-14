@@ -1,13 +1,14 @@
 // Prisma schema for NextAuth + application data
 // Run: npx prisma generate && npx prisma db push
+// Prisma 7: the database URL lives in prisma.config.ts (CLI) and lib/db.ts (driver adapter).
 
 generator client {
-  provider = "prisma-client-js"
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
 }
 
 datasource db {
   provider = "sqlite"
-  url      = env("DATABASE_URL")
 }
 
 // NextAuth required models

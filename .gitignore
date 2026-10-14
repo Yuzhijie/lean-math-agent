@@ -62,3 +62,6 @@ __pycache__/
 # benchmark results and downloaded benchmark sets
 /bench/results/
 /bench/minif2f-*.json
+
+# Prisma 7 generated client (npx prisma generate)
+/lib/generated/

@@ -21,9 +21,9 @@ export const constructionSchema = z.discriminatedUnion("op", [
     op: z.literal("triangle"),
     ids: z.tuple([id, id, id]),
     /** Side lengths by segment name, e.g. { "AB": 5, "BC": 6 }. */
-    sides: z.record(num.positive()).optional(),
+    sides: z.record(z.string(), num.positive()).optional(),
     /** Interior angles in degrees by vertex, e.g. { "A": 90 }. */
-    angles: z.record(num.positive()).optional(),
+    angles: z.record(z.string(), num.positive()).optional(),
     /** Vertex where the two equal sides meet (isosceles). */
     isosceles_at: id.optional(),
     equilateral: z.boolean().optional(),

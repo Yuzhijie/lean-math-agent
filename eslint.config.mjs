@@ -25,6 +25,7 @@ const eslintConfig = defineConfig([
     "node_modules/**",
     "lean-sandbox/**",
     ".data/**",
+    "lib/generated/**",
   ]),
 ]);
 

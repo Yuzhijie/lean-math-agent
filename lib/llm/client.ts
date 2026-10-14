@@ -54,7 +54,7 @@ export async function chatJson<T>(args: CallOptions & {
   user: string;
   /** Images sent with the user message (data URLs); needs a model that reads images (role "vision"). */
   images?: string[];
-  schema: z.ZodType<T, z.ZodTypeDef, unknown>;
+  schema: z.ZodType<T>;
   schemaName: string;
   /** Max Zod-validation retries (default 1). Set 0 for time-sensitive calls. */
   maxRetries?: number;
@@ -72,7 +72,7 @@ export async function chatJson<T>(args: CallOptions & {
 // ── Multi-turn with Zod validation + retry ────────────────────────────
 export async function chatJsonMultiTurn<T>(args: CallOptions & {
   messages: ChatMessage[];
-  schema: z.ZodType<T, z.ZodTypeDef, unknown>;
+  schema: z.ZodType<T>;
   schemaName: string;
   maxRetries?: number;
 }): Promise<T> {
@@ -162,7 +162,7 @@ export async function sampleText(args: CallOptions & {
 
 // ── Parsing helpers ───────────────────────────────────────────────────
 function tryParse<T>(
-  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
+  schema: z.ZodType<T>,
   text: string,
 ): { ok: true; value: T } | { ok: false; error: string } {
   try {
@@ -176,8 +176,9 @@ function tryParse<T>(
       for (const [key, fieldSchema] of Object.entries(shape)) {
         if (
           fieldSchema instanceof z.ZodArray ||
-          (fieldSchema instanceof z.ZodEffects &&
-            fieldSchema._def.schema instanceof z.ZodArray)
+          // Zod 4: .transform()/z.preprocess() wrap the array in a pipe
+          (fieldSchema instanceof z.ZodPipe &&
+            (fieldSchema.in instanceof z.ZodArray || fieldSchema.out instanceof z.ZodArray))
         ) {
           expectedArrayKey = key;
           break;

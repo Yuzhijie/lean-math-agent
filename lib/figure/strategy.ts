@@ -132,7 +132,7 @@ export const enumTableSchema = z.object({
   show: z.enum(["all", "matching"]).optional(),
   /** How many rows meet the conditions, and/or the values of the one solution. */
   answer_count: z.number().int().nonnegative().optional(),
-  answer_row: z.record(num).optional(),
+  answer_row: z.record(z.string(), num).optional(),
 });
 
 // ── Graph with a slider ───────────────────────────────────────────────

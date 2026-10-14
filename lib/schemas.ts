@@ -53,7 +53,7 @@ export const enumerateResponseSchema = z
     const inDomain = ood == null || (typeof ood === "string" && !ood.trim());
     if (inDomain && data.methods.length < 3) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ["methods"],
         message:
           "in-domain enumerate responses must include at least 3 methods",
@@ -82,7 +82,7 @@ export const proveStepResponseSchema = z.object({
 
 // ── Autoformalize Response (Stage ①) ─────────────────────────────────
 export const numericalInstanceSchema = z.object({
-  variables: z.record(z.string()).default({}),
+  variables: z.record(z.string(), z.string()).default({}),
   expected_result: z.string().default(""),
 });
 

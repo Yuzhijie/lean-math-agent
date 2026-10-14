@@ -186,7 +186,7 @@ export const importBatchSchema = z.object({
   /** The user confirmed they have the right to use these questions. */
   rights_confirmed: z.boolean().default(false),
   /** CSV/Excel column mapping used (column header → field). */
-  column_map: z.record(z.string()).optional(),
+  column_map: z.record(z.string(), z.string()).optional(),
   drafts: z.array(draftItemSchema),
   /** Asset files saved for this batch (page images, embedded images). */
   assets: z.array(z.string()).default([]),
