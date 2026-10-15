@@ -2,6 +2,7 @@ import { z } from "zod";
 import { isOpenAiReasoningModel, loadConfig, LlmConfigError, type LlmConfig, type ModelEndpoint, type ModelRole, type ReasoningEffort } from "./config";
 import { buildCacheKey, getGlobalCache } from "./cache";
 import { costCapReached, parseAndRecordUsage, recordLatency, scopeCostCap, setPriceTable, type RawUsage } from "./usage-tracker";
+import { CancelledError, currentSignal, throwIfCancelled } from "../jobs";
 import { logLlm, logDebug, type LlmLogEntry } from "./logger";
 import { localizeMessages, outputLocale } from "./output-locale";
 
@@ -313,6 +314,8 @@ async function rawChatMessages(
     throw e;
   }
   setPriceTable(config.prices);
+  // A cancelled job makes no new calls (lib/jobs.ts).
+  throwIfCancelled();
   if (costCapReached()) throw new CostCapError(`cost cap reached ($${scopeCostCap()} for this run)`);
   const role: ModelRole = options.role ?? "general";
   const temp = options.temperature ?? 0.2;
@@ -397,7 +400,7 @@ async function rawChatMessages(
           body: JSON.stringify(
             buildRequestBody(config, endpoint, role, messages, { ...options, temperature: temp, jsonMode }),
           ),
-          signal: AbortSignal.timeout(Math.min(remaining, requestTimeout)),
+          signal: jobSignal(AbortSignal.timeout(Math.min(remaining, requestTimeout))),
         });
 
         if (res.ok) {
@@ -485,6 +488,8 @@ async function rawChatMessages(
 
         retriesUsed = attempt + 1;
       } catch (networkError) {
+        // The job was cancelled while the request ran: stop, do not retry or fall back.
+        if (currentSignal()?.aborted) throw new CancelledError();
         // Network/timeout error
         lastError =
           networkError instanceof Error
@@ -533,6 +538,12 @@ async function rawChatMessages(
 }
 
 // ── Backoff & timing helpers ──────────────────────────────────────────
+
+/** The request's timeout combined with the running job's cancel signal, when there is one. */
+function jobSignal(timeout: AbortSignal): AbortSignal {
+  const job = currentSignal();
+  return job ? AbortSignal.any([timeout, job]) : timeout;
+}
 
 /**
  * True when a fetch failure is an AbortSignal.timeout abort.

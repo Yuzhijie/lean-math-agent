@@ -12,13 +12,18 @@ function getSessionsDir(): string {
 
 export function _resetStoreForTests() {
   store.clear();
+  sqliteStore?.close();
+  sqliteStore = null;
+  sqliteInit = null;
 }
 
-export function createSession(problemText: string): Session {
+/** A new session, owned by `owner` (the signed-in user's id, or "local" without sign-in). */
+export function createSession(problemText: string, owner?: string): Session {
   const now = Date.now();
   const session: Session = {
     id: randomUUID(),
     schema_version: CURRENT_SCHEMA_VERSION,
+    ...(owner ? { owner } : {}),
     problem_text: problemText,
     pipeline_stage: "idle",
     formal_validated: false,
@@ -32,7 +37,25 @@ export function createSession(problemText: string): Session {
     updated_at: now,
   };
   store.set(session.id, session);
+  persist(session);
   return session;
+}
+
+/** Write a session to its backend; errors are dropped (the in-memory copy stays authoritative). */
+function persist(session: Session): void {
+  // JSON files: queue the write now, so writes keep their order (saveSessionToDisk serialises per session).
+  if (!sqliteWanted()) {
+    saveSessionToDisk(session.id).catch(() => {/* silent */});
+    return;
+  }
+  void (async () => {
+    try {
+      if (await ensureBackend()) await sqliteStore!.save(store.get(session.id) ?? session);
+      else await saveSessionToDisk(session.id);
+    } catch {
+      /* silent */
+    }
+  })();
 }
 
 export function getSession(id: string): Session | undefined {
@@ -55,12 +78,8 @@ export function updateSession(id: string, patch: Partial<Session>): Session {
   if (!cur) throw new Error(`session not found: ${id}`);
   const next = { ...cur, ...patch, id: cur.id, updated_at: Date.now() };
   store.set(id, next);
-  // Auto-save to disk so session survives server reloads
-  if (sqliteStore) {
-    sqliteStore.save(next).catch(() => {/* silent */});
-  } else {
-    saveSessionToDisk(id).catch(() => {/* silent */});
-  }
+  // Auto-save so the session survives server reloads.
+  persist(next);
   return next;
 }
 
@@ -101,9 +120,9 @@ export function autoSelectMethod(
 
 /** Save a session to disk as JSON. */
 export async function saveSessionToDisk(id: string): Promise<void> {
-  if (sqliteStore) {
+  if (await ensureBackend()) {
     const session = store.get(id);
-    if (session) await sqliteStore.save(session);
+    if (session) await sqliteStore!.save(session);
     return;
   }
   // Serialize writes per session and write atomically (temp file + rename):
@@ -133,8 +152,8 @@ const diskWrites = new Map<string, Promise<void>>();
 
 /** Load a session from disk into memory. */
 export async function loadSessionFromDisk(id: string): Promise<Session | undefined> {
-  if (sqliteStore) {
-    const session = await sqliteStore.load(id);
+  if (await ensureBackend()) {
+    const session = await sqliteStore!.load(id);
     if (session) store.set(id, session);
     return session;
   }
@@ -152,8 +171,8 @@ export async function loadSessionFromDisk(id: string): Promise<Session | undefin
 /** Delete a session from disk and memory. */
 export async function deleteSessionFromDisk(id: string): Promise<boolean> {
   try {
-    if (sqliteStore) {
-      await sqliteStore.delete(id);
+    if (await ensureBackend()) {
+      await sqliteStore!.delete(id);
     } else {
       const filePath = path.join(getSessionsDir(), `${id}.json`);
       await fs.unlink(filePath);
@@ -165,10 +184,10 @@ export async function deleteSessionFromDisk(id: string): Promise<boolean> {
   }
 }
 
-/** List all saved sessions from disk (sorted by created_at desc). */
-export async function listSessionsFromDisk(): Promise<Session[]> {
-  if (sqliteStore) {
-    return sqliteStore.listAll();
+/** List saved sessions (sorted by created_at desc): one owner's, or all of them. */
+export async function listSessionsFromDisk(owner?: string): Promise<Session[]> {
+  if (await ensureBackend()) {
+    return sqliteStore!.listAll(owner);
   }
   try {
     const files = await fs.readdir(getSessionsDir());
@@ -177,7 +196,8 @@ export async function listSessionsFromDisk(): Promise<Session[]> {
       if (!file.endsWith(".json")) continue;
       try {
         const data = await fs.readFile(path.join(getSessionsDir(), file), "utf8");
-        sessions.push(JSON.parse(data) as Session);
+        const s = JSON.parse(data) as Session;
+        if (!owner || sessionOwner(s) === owner) sessions.push(s);
       } catch {
         // skip corrupted files
       }
@@ -201,11 +221,12 @@ export interface PaginatedResult {
 export async function listSessionsPaginated(
   page: number = 1,
   perPage: number = 20,
+  owner?: string,
 ): Promise<PaginatedResult> {
-  if (sqliteStore) {
-    return sqliteStore.listPaginated(page, perPage);
+  if (await ensureBackend()) {
+    return sqliteStore!.listPaginated(page, perPage, owner);
   }
-  const all = await listSessionsFromDisk();
+  const all = await listSessionsFromDisk(owner);
   const total = all.length;
   const start = (page - 1) * perPage;
   const sessions = all.slice(start, start + perPage);
@@ -217,11 +238,12 @@ export async function searchSessions(
   query: string,
   page: number = 1,
   perPage: number = 20,
+  owner?: string,
 ): Promise<PaginatedResult> {
-  if (sqliteStore) {
-    return sqliteStore.search(query, page, perPage);
+  if (await ensureBackend()) {
+    return sqliteStore!.search(query, page, perPage, owner);
   }
-  const all = await listSessionsFromDisk();
+  const all = await listSessionsFromDisk(owner);
   const q = query.toLowerCase();
   const filtered = all.filter(
     (s) =>
@@ -240,32 +262,47 @@ interface SqliteAdapter {
   save(session: Session): Promise<void>;
   load(id: string): Promise<Session | undefined>;
   delete(id: string): Promise<void>;
-  listAll(): Promise<Session[]>;
-  listPaginated(page: number, perPage: number): Promise<PaginatedResult>;
-  search(query: string, page: number, perPage: number): Promise<PaginatedResult>;
+  listAll(owner?: string): Promise<Session[]>;
+  listPaginated(page: number, perPage: number, owner?: string): Promise<PaginatedResult>;
+  search(query: string, page: number, perPage: number, owner?: string): Promise<PaginatedResult>;
   clear(): Promise<void>;
+  close(): void;
 }
 
 let sqliteStore: SqliteAdapter | null = null;
+let sqliteInit: Promise<boolean> | null = null;
+
+/** Sessions live in SQLite unless SESSION_BACKEND=json (the default before 2026-10). */
+function sqliteWanted(): boolean {
+  return (process.env.SESSION_BACKEND ?? "sqlite") === "sqlite";
+}
+
+/** Open the SQLite store once (lazily, on the first read or write); false = JSON files. */
+async function ensureBackend(): Promise<boolean> {
+  if (!sqliteWanted()) return false;
+  if (sqliteStore) return true;
+  sqliteInit ??= initSqliteStore();
+  return sqliteInit;
+}
+
+/** Sessions written before owners existed belong to the local single user. */
+export function sessionOwner(s: Pick<Session, "owner">): string {
+  return s.owner ?? "local";
+}
 
 /**
- * Initialize the SQLite backend. Call once at server startup.
- * Falls back silently to JSON if better-sqlite3 is not available.
+ * Initialize the SQLite backend (`SQLITE_DB_PATH`, default `.data/sessions.db`). Runs on first use;
+ * the first time the table is empty, the JSON session files are imported (and left in place).
+ * Falls back to JSON files if better-sqlite3 cannot be loaded.
  */
 export async function initSqliteStore(): Promise<boolean> {
-  const backend = process.env.SESSION_BACKEND;
-  if (backend !== "sqlite") return false;
-
+  if (!sqliteWanted()) return false;
   try {
-    // Dynamic import — better-sqlite3 is optional
     const Database = (await import("better-sqlite3")).default;
     const dbPath = process.env.SQLITE_DB_PATH ?? ".data/sessions.db";
-    const dir = path.dirname(dbPath);
-    await fs.mkdir(dir, { recursive: true });
-
+    await fs.mkdir(path.dirname(dbPath), { recursive: true });
     const db = new Database(dbPath);
     db.pragma("journal_mode = WAL");
-
     db.exec(`
       CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY,
@@ -276,91 +313,80 @@ export async function initSqliteStore(): Promise<boolean> {
         data TEXT NOT NULL
       )
     `);
+    // Added 2026-10: sessions belong to a user.
+    const cols = (db.prepare(`PRAGMA table_info(sessions)`).all() as Array<{ name: string }>).map((c) => c.name);
+    if (!cols.includes("owner")) db.exec(`ALTER TABLE sessions ADD COLUMN owner TEXT NOT NULL DEFAULT 'local'`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions (created_at DESC)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions (owner, created_at DESC)`);
 
-    // Create index for pagination/sorting
-    db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_sessions_created
-      ON sessions (created_at DESC)
-    `);
-
-    // Prepared statements
-    const stmtUpsert = db.prepare(`
-      INSERT OR REPLACE INTO sessions (id, problem_text, pipeline_stage, created_at, updated_at, data)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
+    const stmtUpsert = db.prepare(
+      `INSERT OR REPLACE INTO sessions (id, owner, problem_text, pipeline_stage, created_at, updated_at, data) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
     const stmtSelect = db.prepare(`SELECT data FROM sessions WHERE id = ?`);
     const stmtDelete = db.prepare(`DELETE FROM sessions WHERE id = ?`);
-    const stmtCount = db.prepare(`SELECT COUNT(*) as count FROM sessions`);
-    const stmtListAll = db.prepare(`SELECT data FROM sessions ORDER BY created_at DESC`);
-    const stmtListPage = db.prepare(
-      `SELECT data FROM sessions ORDER BY created_at DESC LIMIT ? OFFSET ?`,
-    );
-    const stmtSearchCount = db.prepare(
-      `SELECT COUNT(*) as count FROM sessions WHERE problem_text LIKE ? OR pipeline_stage LIKE ?`,
-    );
-    const stmtSearchPage = db.prepare(
-      `SELECT data FROM sessions WHERE problem_text LIKE ? OR pipeline_stage LIKE ? ORDER BY created_at DESC LIMIT ? OFFSET ?`,
-    );
+    // `?1 IS NULL` = all owners (tools, tests); otherwise one owner's sessions.
+    const ownerClause = `(?1 IS NULL OR owner = ?1)`;
+    const stmtCount = db.prepare(`SELECT COUNT(*) as count FROM sessions WHERE ${ownerClause}`);
+    const stmtListAll = db.prepare(`SELECT data FROM sessions WHERE ${ownerClause} ORDER BY created_at DESC`);
+    const stmtListPage = db.prepare(`SELECT data FROM sessions WHERE ${ownerClause} ORDER BY created_at DESC LIMIT ?2 OFFSET ?3`);
+    // Problem text or theorem name contains the query (case-insensitive for ASCII; no LIKE wildcards).
+    const match = `(instr(lower(problem_text), lower(?2)) > 0 OR instr(lower(coalesce(json_extract(data, '$.theorem_name'), '')), lower(?2)) > 0)`;
+    const stmtSearchCount = db.prepare(`SELECT COUNT(*) as count FROM sessions WHERE ${ownerClause} AND ${match}`);
+    const stmtSearchPage = db.prepare(`SELECT data FROM sessions WHERE ${ownerClause} AND ${match} ORDER BY created_at DESC LIMIT ?3 OFFSET ?4`);
+    const parse = (rows: Array<{ data: string }>) => rows.map((r) => JSON.parse(r.data) as Session);
+    const save = (session: Session) =>
+      stmtUpsert.run(session.id, sessionOwner(session), session.problem_text, session.pipeline_stage, session.created_at, session.updated_at, JSON.stringify(session));
+
+    // One-time import of the JSON files written before SQLite was the default.
+    if ((stmtCount.get(null) as { count: number }).count === 0) {
+      try {
+        const files = (await fs.readdir(getSessionsDir())).filter((f) => f.endsWith(".json"));
+        const sessions: Session[] = [];
+        for (const f of files) {
+          try {
+            sessions.push(JSON.parse(await fs.readFile(path.join(getSessionsDir(), f), "utf8")) as Session);
+          } catch {
+            // a damaged file stays where it is
+          }
+        }
+        db.transaction((all: Session[]) => all.forEach((x) => x.id && save(x)))(sessions);
+      } catch {
+        // no JSON sessions
+      }
+    }
 
     sqliteStore = {
-      async save(session: Session) {
-        stmtUpsert.run(
-          session.id,
-          session.problem_text,
-          session.pipeline_stage,
-          session.created_at,
-          session.updated_at,
-          JSON.stringify(session),
-        );
+      async save(session) {
+        save(session);
       },
-      async load(id: string) {
+      async load(id) {
         const row = stmtSelect.get(id) as { data: string } | undefined;
-        if (!row) return undefined;
-        return JSON.parse(row.data) as Session;
+        return row ? (JSON.parse(row.data) as Session) : undefined;
       },
-      async delete(id: string) {
+      async delete(id) {
         stmtDelete.run(id);
       },
-      async listAll() {
-        const rows = stmtListAll.all() as Array<{ data: string }>;
-        return rows.map((r) => JSON.parse(r.data) as Session);
+      async listAll(owner) {
+        return parse(stmtListAll.all(owner ?? null) as Array<{ data: string }>);
       },
-      async listPaginated(page: number, perPage: number) {
-        const offset = (page - 1) * perPage;
-        const { count } = stmtCount.get() as { count: number };
-        const rows = stmtListPage.all(perPage, offset) as Array<{ data: string }>;
-        return {
-          sessions: rows.map((r) => JSON.parse(r.data) as Session),
-          total: count,
-          page,
-          perPage,
-        };
+      async listPaginated(page, perPage, owner) {
+        const { count } = stmtCount.get(owner ?? null) as { count: number };
+        return { sessions: parse(stmtListPage.all(owner ?? null, perPage, (page - 1) * perPage) as Array<{ data: string }>), total: count, page, perPage };
       },
-      async search(query: string, page: number, perPage: number) {
-        const pattern = `%${query}%`;
-        const offset = (page - 1) * perPage;
-        const { count } = stmtSearchCount.get(pattern, pattern) as { count: number };
-        const rows = stmtSearchPage.all(
-          pattern,
-          pattern,
-          perPage,
-          offset,
-        ) as Array<{ data: string }>;
-        return {
-          sessions: rows.map((r) => JSON.parse(r.data) as Session),
-          total: count,
-          page,
-          perPage,
-        };
+      async search(query, page, perPage, owner) {
+        const { count } = stmtSearchCount.get(owner ?? null, query) as { count: number };
+        const rows = stmtSearchPage.all(owner ?? null, query, perPage, (page - 1) * perPage) as Array<{ data: string }>;
+        return { sessions: parse(rows), total: count, page, perPage };
       },
       async clear() {
         db.exec(`DELETE FROM sessions`);
       },
+      close() {
+        db.close();
+      },
     };
-
     return true;
   } catch {
-    // better-sqlite3 not available or DB error — fall back to JSON
     sqliteStore = null;
     return false;
   }
@@ -369,8 +395,8 @@ export async function initSqliteStore(): Promise<boolean> {
 /** Clear all sessions (both memory and disk). */
 export async function clearAllSessions(): Promise<void> {
   store.clear();
-  if (sqliteStore) {
-    await sqliteStore.clear();
+  if (await ensureBackend()) {
+    await sqliteStore!.clear();
   } else {
     try {
       const dir = getSessionsDir();

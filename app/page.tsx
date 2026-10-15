@@ -88,6 +88,7 @@ export default function Home() {
     proveAll,
     verify,
     solveAll,
+    cancelSolve,
     attemptLean,
     switchMethod,
     useGeneratedProblem: loadGeneratedProblem,
@@ -114,6 +115,9 @@ export default function Home() {
     solvedProblemType,
     solveEvents,
     runMetrics,
+    jobId,
+    queuePosition,
+    cancelling,
   } = state;
 
   const [activeTab, setActiveTab] = useState("solution");
@@ -785,7 +789,13 @@ export default function Home() {
 
           {/* ── Pipeline Progress (real-time streaming) ───────────── */}
           {(solveEvents.length > 0 || busy === "solve-all") && (
-            <PipelineProgress events={solveEvents} busy={busy} />
+            <PipelineProgress
+              events={solveEvents}
+              busy={busy}
+              queuePosition={queuePosition}
+              onCancel={jobId && busy ? () => void cancelSolve() : undefined}
+              cancelling={cancelling}
+            />
           )}
 
           {/* ── Results Section (Tabs) ──────────────────────────────── */}
@@ -1204,6 +1214,16 @@ export default function Home() {
           {/* ── Run metrics ─────────────────────────────────────────── */}
           {runMetrics && (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-xs text-muted-foreground animate-fade-in">
+              {leanProofAttempt?.strategy && (
+                <span className="font-medium text-foreground/80">
+                  {tr("证明方式：", "Proved by: ")}
+                  {strategyLabel(leanProofAttempt.strategy, tr)}
+                  {leanProofAttempt.success ? "" : tr("（未完成）", " (not completed)")}
+                </span>
+              )}
+              {runMetrics.estimated_cost !== undefined && (
+                <span className="font-medium text-foreground/80">{tr("费用", "Cost")} ${runMetrics.estimated_cost.toFixed(4)}</span>
+              )}
               <span>{tr(`LLM 调用 ${runMetrics.llm_calls} 次`, `${runMetrics.llm_calls} LLM calls`)}</span>
               <span>
                 tokens {runMetrics.prompt_tokens + runMetrics.completion_tokens}
@@ -1211,7 +1231,6 @@ export default function Home() {
                   ? tr(`（prover ${runMetrics.by_role.prover.requests} 次）`, ` (prover: ${runMetrics.by_role.prover.requests})`)
                   : ""}
               </span>
-              {runMetrics.estimated_cost !== undefined && <span>{tr("估算费用", "Est. cost")} {runMetrics.estimated_cost.toFixed(4)}</span>}
               <span>
                 {tr(`Lean 验证 ${runMetrics.lean_verifications} 次`, `${runMetrics.lean_verifications} Lean verifications`)}
                 {runMetrics.lean_verifications > 0
@@ -1264,4 +1283,16 @@ export default function Home() {
       </div>
     </TooltipProvider>
   );
+}
+
+/** How the proof was found, in words (lean_proof_attempt.strategy). */
+function strategyLabel(strategy: string, tr: (zh: string, en: string) => string): string {
+  const labels: Record<string, string> = {
+    trivial: tr("单条策略", "a single tactic"),
+    hammer: tr("自动化策略（锤子）", "automation (hammer)"),
+    whole_proof: tr("整体证明（模型写完整证明，Lean 验证）", "whole proof (the model writes it, Lean checks it)"),
+    sketch: tr("骨架分解（子目标逐个证明）", "sketch and fill (subgoals proved one by one)"),
+    stepwise: tr("分步搜索", "step-by-step search"),
+  };
+  return labels[strategy] ?? strategy;
 }

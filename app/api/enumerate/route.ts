@@ -1,6 +1,7 @@
+import { createSessionForRequest } from "@/lib/session-access";
 import { NextResponse } from "next/server";
 import { enumerateMethods } from "@/lib/llm/enumerate";
-import { createSession, updateSession } from "@/lib/session-store";
+import { updateSession } from "@/lib/session-store";
 import { LlmError } from "@/lib/llm/client";
 import { withRequestLocale } from "@/lib/llm/output-locale";
 import { requestOwner } from "@/lib/bank/http";
@@ -16,7 +17,7 @@ async function handlePOST(req: Request) {
   if (!figs.success) return NextResponse.json({ error: "invalid figures" }, { status: 400 });
   const known = figureTextOf(body.figure_text);
   const fig: { description?: string; note?: string } = known ? { description: known } : figs.data.length ? await describeProblemFigures({ owner: await requestOwner(), problemText: body.problem_text.trim(), figures: figs.data }) : {};
-  const session = createSession(fig.description ? problemWithFigure(body.problem_text, fig.description) : body.problem_text.trim());
+  const session = await createSessionForRequest(fig.description ? problemWithFigure(body.problem_text, fig.description) : body.problem_text.trim());
   if (fig.description) updateSession(session.id, { figure_description: fig.description });
   try {
     const result = await enumerateMethods(session.problem_text);

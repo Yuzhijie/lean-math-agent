@@ -1,8 +1,9 @@
+import { getSessionForRequest } from "@/lib/session-access";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { generateFigure } from "@/lib/figure/generate";
 import { LlmError } from "@/lib/llm/client";
-import { getSessionAsync, updateSession } from "@/lib/session-store";
+import { updateSession } from "@/lib/session-store";
 import { withRequestLocale } from "@/lib/llm/output-locale";
 
 const bodySchema = z.object({
@@ -25,7 +26,7 @@ async function handlePOST(req: Request) {
     return NextResponse.json({ error: "invalid request", detail: parsed.error.issues }, { status: 400 });
   }
   const body = parsed.data;
-  const session = body.session_id ? await getSessionAsync(body.session_id) : undefined;
+  const session = body.session_id ? await getSessionForRequest(body.session_id) : undefined;
   if (body.session_id && !session) {
     return NextResponse.json({ error: "session not found" }, { status: 404 });
   }

@@ -43,6 +43,11 @@ export interface ProofSessionState {
   solveEvents: Array<{ stage: string; detail: string }>;
   /** What the last solve run consumed (LLM calls/tokens, Lean verifications, wall time). */
   runMetrics: RunMetrics | null;
+  /** The running solve's job (for cancelling) and its place in the queue while waiting. */
+  jobId: string | null;
+  queuePosition: number | null;
+  /** The user asked to cancel and the server has not confirmed yet. */
+  cancelling: boolean;
 
   /**
    * Figures that belong to the problem (question bank images), sent with
@@ -147,7 +152,12 @@ export type Action =
       type: "SOLVE_PROGRESS";
       stage: string;
       detail: string;
+      /** Place in the queue (stage "queued"). */
+      position?: number;
     }
+  | { type: "SOLVE_JOB"; jobId: string; sessionId?: string }
+  | { type: "SOLVE_CANCELLING" }
+  | { type: "SOLVE_CANCELLED"; detail: string }
 
   // load session from history
   | {
@@ -199,6 +209,9 @@ export const INITIAL_STATE: ProofSessionState = {
   solvedProblemType: null,
   solveEvents: [],
   runMetrics: null,
+  jobId: null,
+  queuePosition: null,
+  cancelling: false,
   problemFigures: null,
   figureDescription: null,
   autoformalizeDetail: null,
@@ -238,7 +251,7 @@ function normalizeSteps(
 
 // ── Reducer ────────────────────────────────────────────────────────────
 
-function reducer(
+export function reducer(
   state: ProofSessionState,
   action: Action,
 ): ProofSessionState {
@@ -312,6 +325,9 @@ function reducer(
       return {
         ...state,
         busy: null,
+        jobId: null,
+        queuePosition: null,
+        cancelling: false,
         error: action.message,
         autoformalizeDetail: action.autoformalizeDetail ?? null,
         validationResults: action.validationResults ?? null,
@@ -381,6 +397,9 @@ function reducer(
       const nextSteps = action.steps ? normalizeSteps(action.steps) : [];
       return {
         ...state,
+        jobId: null,
+        queuePosition: null,
+        cancelling: false,
         sessionId: action.sessionId,
         solveEvents: action.solveEvents,
         solvedProblemType: action.problemType,
@@ -411,6 +430,24 @@ function reducer(
           { stage: action.stage, detail: action.detail },
         ],
         busy: action.stage,
+        queuePosition: action.stage === "queued" ? (action.position ?? null) : null,
+      };
+
+    case "SOLVE_JOB":
+      // The session id is taken from the result (setting it early would skip the tab choice on arrival).
+      return { ...state, jobId: action.jobId };
+
+    case "SOLVE_CANCELLING":
+      return { ...state, cancelling: true };
+
+    case "SOLVE_CANCELLED":
+      return {
+        ...state,
+        solveEvents: [...state.solveEvents, { stage: "cancelled", detail: action.detail }],
+        busy: null,
+        jobId: null,
+        queuePosition: null,
+        cancelling: false,
       };
 
     // ── Load session from history ─────────────────────────────────

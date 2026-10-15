@@ -23,6 +23,7 @@ import { generateNLSolution, generateNLTheoremSolution } from "../llm/nl-solutio
 import { planSteps } from "../llm/plan";
 import { budgetPreset } from "../prover/budget";
 import { costCapReached, scopeCostCap } from "../llm/usage-tracker";
+import { CancelledError, throwIfCancelled } from "../jobs";
 import { buildProverContext, rememberVerifiedProof } from "../prover/context";
 import { proveBySketch, sketchEnabled } from "../prover/sketch";
 import { proveWholeTheorem, wholeProofEnabled } from "../prover/whole-proof";
@@ -165,6 +166,7 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
     theorem_type: theoremType,
   };
 
+  throwIfCancelled();
   const { budget, preset } = budgetPreset(opts.budget);
   emit("budget", lt(`搜索预算：${budget}`, `Search budget: ${budget}`));
 
@@ -251,6 +253,7 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
     emit("retrieval", lt(`检索到 ${proverContext.premises.length} 条相关引理、${proverContext.recalled.length} 个相似的已验证证明`, `Retrieved ${proverContext.premises.length} relevant lemmas and ${proverContext.recalled.length} similar verified proofs`));
   }
 
+  throwIfCancelled();
   // ── 4. Whole-proof prover loop ───────────────────────────────────────
   const wholeProofOn = opts.whole_proof ?? wholeProofEnabled();
   let wholeProofSummary: string | undefined;
@@ -334,9 +337,13 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
           : lt(`整体证明未通过（${wholeProofSummary}），转入分步证明`, `Whole proof failed (${wholeProofSummary}); switching to step-by-step proof`),
       );
     } catch (e) {
+      if (e instanceof CancelledError) throw e;
       emit("whole_proof", lt(`⚠️ 整体证明出错: ${e instanceof Error ? e.message : "未知错误"}`, `⚠️ Whole proof error: ${e instanceof Error ? e.message : "unknown error"}`));
     }
   }
+
+  // Stages catch their own errors; a cancel is honoured between them.
+  throwIfCancelled();
 
   // ── 4b. Sketch-and-fill: proof skeleton with holes, each hole closed by
   //        the hammer or goal-level tactic search ────────────────────────
@@ -416,10 +423,12 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
       }
       emit("sketch", sk.unavailable ? lt("⚠️ Lean 不可用，跳过骨架分解", "⚠️ Lean unavailable; skipping sketch decomposition") : lt(`骨架分解未通过（${sketchSummary}），转入分步证明`, `Sketch decomposition failed (${sketchSummary}); switching to step-by-step proof`));
     } catch (e) {
+      if (e instanceof CancelledError) throw e;
       emit("sketch", lt(`⚠️ 骨架分解出错: ${e instanceof Error ? e.message : "未知错误"}`, `⚠️ Sketch decomposition error: ${e instanceof Error ? e.message : "unknown error"}`));
     }
   }
 
+  throwIfCancelled();
   // PROOF_COST_CAP_USD: the automatic stages spent this problem's budget — stop before the stepwise search.
   if (costCapReached()) {
     const reason = lt(`已达到本题费用上限（$${scopeCostCap()}），停止证明搜索`, `Cost cap for this problem reached ($${scopeCostCap()}); proof search stopped`);
@@ -538,6 +547,7 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
     }
   }
 
+  throwIfCancelled();
   // ── 8. Best-first stepwise search ────────────────────────────────────
   const adaptiveMaxSorry = opts.max_sorry ?? Math.max(2, Math.ceil(proofSteps.length * 0.5));
   emit("solving", lt("开始最佳优先证明搜索...", "Starting best-first proof search..."));

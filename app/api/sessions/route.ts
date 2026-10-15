@@ -6,11 +6,12 @@ import {
 } from "@/lib/session-store";
 
 // NOTE: the unauthenticated `DELETE /api/sessions` handler (clear ALL
-// sessions) was removed. Sessions are not scoped to a user yet, so it let
-// anyone wipe every user's history. Individual deletion remains available
+// sessions) was removed: it let anyone wipe every user's history. Sessions are
+// now scoped to their owner (lib/session-access.ts). Individual deletion remains available
 // at `DELETE /api/session/[id]`; a bulk clear should come back only behind
 // authentication and scoped to the caller's own sessions.
 import type { Session } from "@/lib/types";
+import { requestOwner } from "@/lib/bank/http";
 
 export const dynamic = "force-dynamic";
 
@@ -38,10 +39,12 @@ export async function GET(req: Request) {
     Math.max(1, parseInt(searchParams.get("per_page") ?? "20", 10)),
   );
   const q = searchParams.get("q")?.trim() ?? "";
+  // Each user sees only their own sessions.
+  const owner = await requestOwner();
 
   // Use pagination/search when params are provided, fall back to list all
   if (q) {
-    const result = await searchSessions(q, page, perPage);
+    const result = await searchSessions(q, page, perPage, owner);
     return NextResponse.json({
       sessions: result.sessions.map(toSummary),
       total: result.total,
@@ -51,7 +54,7 @@ export async function GET(req: Request) {
   }
 
   if (searchParams.has("page") || searchParams.has("per_page")) {
-    const result = await listSessionsPaginated(page, perPage);
+    const result = await listSessionsPaginated(page, perPage, owner);
     return NextResponse.json({
       sessions: result.sessions.map(toSummary),
       total: result.total,
@@ -61,7 +64,7 @@ export async function GET(req: Request) {
   }
 
   // Legacy: return all sessions as flat array (backward compat)
-  const sessions = await listSessionsFromDisk();
+  const sessions = await listSessionsFromDisk(owner);
   const summaries = sessions.map(toSummary);
   return NextResponse.json(summaries);
 }

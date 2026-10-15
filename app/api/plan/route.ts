@@ -1,13 +1,10 @@
+import { getSessionForRequest } from "@/lib/session-access";
 import { NextResponse } from "next/server";
 import { planSteps } from "@/lib/llm/plan";
 import { normalizeTheoremType } from "@/lib/llm/autoformalize";
 import { validateTheoremStatement } from "@/lib/lean/sanitize";
 import { LlmError } from "@/lib/llm/client";
-import {
-  getSessionAsync,
-  resetStepsForMethod,
-  updateSession,
-} from "@/lib/session-store";
+import { resetStepsForMethod, updateSession } from "@/lib/session-store";
 import type { ProofStep } from "@/lib/types";
 import { generateNLSolution } from "@/lib/llm/nl-solution";
 import { withRequestLocale } from "@/lib/llm/output-locale";
@@ -23,7 +20,7 @@ async function handlePOST(req: Request) {
       { status: 400 },
     );
   }
-  const session = await getSessionAsync(body.session_id);
+  const session = await getSessionForRequest(body.session_id);
   if (!session) {
     return NextResponse.json({ error: "session not found" }, { status: 404 });
   }

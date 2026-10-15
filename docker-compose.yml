@@ -10,6 +10,11 @@ services:
     environment:
       - NODE_ENV=production
       - DATABASE_URL=file:/app/data/prod.db
+      # Sessions, usage (quotas) and question banks on the volume, so they survive rebuilds.
+      - SQLITE_DB_PATH=/app/data/sessions.db
+      - QUOTA_DB_PATH=/app/data/usage.db
+      - SESSION_STORE_PATH=/app/data/sessions
+      - BANK_STORE_PATH=/app/data/banks
       - NEXTAUTH_URL=http://localhost:3000
       - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
       - GITHUB_ID=${GITHUB_ID}

@@ -1,12 +1,10 @@
+import { getSessionForRequest, createSessionForRequest } from "@/lib/session-access";
 import { NextResponse } from "next/server";
 import { autoformalize } from "@/lib/llm/autoformalize";
-import {
-  createSession,
-  updateSession,
-  getSessionAsync,
-  saveSessionToDisk,
-} from "@/lib/session-store";
+import { updateSession, saveSessionToDisk } from "@/lib/session-store";
 import { LlmError } from "@/lib/llm/client";
+import { CancelledError, runJob, TooManyJobsError } from "@/lib/jobs";
+import { admitSolve, recordSpend, runCostCap } from "@/lib/quota";
 import { withUsageScope } from "@/lib/llm/usage-tracker";
 import { classifyProblem } from "@/lib/llm/classify-problem";
 import { solveComputational } from "@/lib/compute/solver";
@@ -45,11 +43,15 @@ interface SolveRequest {
 
 async function handlePOST(req: Request) {
   const body = (await req.json()) as SolveRequest;
+  const owner = await requestOwner();
+  // Plan limits, daily spend and the rate limit (lib/quota.ts).
+  const admit = await admitSolve(owner, lt);
+  if (!admit.ok) return NextResponse.json({ error: admit.reason, quota: admit }, { status: 429 });
 
   // Get or create session
   let session;
   if (body.session_id) {
-    session = await getSessionAsync(body.session_id);
+    session = await getSessionForRequest(body.session_id);
     if (!session) {
       return NextResponse.json({ error: "session not found" }, { status: 404 });
     }
@@ -58,7 +60,7 @@ async function handlePOST(req: Request) {
     if (!figs.success) return NextResponse.json({ error: "invalid figures" }, { status: 400 });
     const known = figureTextOf(body.figure_text);
     const fig = known ? { description: known } : figs.data.length ? await describeProblemFigures({ owner: await requestOwner(), problemText: body.problem_text.trim(), figures: figs.data }) : {};
-    session = createSession(fig.description ? problemWithFigure(body.problem_text, fig.description) : body.problem_text.trim());
+    session = await createSessionForRequest(fig.description ? problemWithFigure(body.problem_text, fig.description) : body.problem_text.trim());
     if (fig.description) session = updateSession(session.id, { figure_description: fig.description });
   } else {
     return NextResponse.json(
@@ -72,9 +74,23 @@ async function handlePOST(req: Request) {
   const events: Array<{ stage: string; detail: string }> = [];
   const sess: Session = session;
 
+  // A job like the streaming route's: queued behind running solves, cancelled when the client goes away.
+  try {
+    return await runJob({ owner, kind: "solve", sessionId: sess.id, signal: req.signal, maxActive: admit.concurrent }, () => solveIn(sess));
+  } catch (e) {
+    if (e instanceof TooManyJobsError) return NextResponse.json({ error: e.message, session_id: sess.id }, { status: 429 });
+    if (e instanceof CancelledError) {
+      updateSession(sess.id, { pipeline_stage: "cancelled" });
+      return NextResponse.json({ error: "cancelled", session_id: sess.id }, { status: 499 });
+    }
+    throw e;
+  }
+
   // Everything below runs in one usage scope so LLM calls (by role/model)
   // and Lean verifications are attributed to this run.
+  function solveIn(sess: Session): Promise<Response> {
   return withUsageScope(async (metrics) => {
+   try {
     try {
       // ── Stage 0: Classify problem type ──────────────────────────────
       const classification = await classifyProblem(sess.problem_text);
@@ -99,6 +115,7 @@ async function handlePOST(req: Request) {
       await saveSessionToDisk(sess.id);
       return response;
     } catch (e) {
+      if (e instanceof CancelledError) throw e;
       updateSession(sess.id, { pipeline_stage: "failed", metrics: metrics() });
       await saveSessionToDisk(sess.id);
       const msg = e instanceof LlmError ? e.message : "solve pipeline failed";
@@ -112,7 +129,11 @@ async function handlePOST(req: Request) {
         { status: 502 },
       );
     }
-  });
+   } finally {
+    await recordSpend(owner, metrics().estimated_cost);
+   }
+  }, { costCapUsd: runCostCap(admit) });
+  }
 }
 
 // ── Computational Problem Handler ─────────────────────────────────────

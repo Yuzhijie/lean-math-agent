@@ -1,5 +1,6 @@
+import { getSessionForRequest } from "@/lib/session-access";
 import { NextResponse } from "next/server";
-import { getSessionAsync, updateSession } from "@/lib/session-store";
+import { updateSession } from "@/lib/session-store";
 import { withUsageScope } from "@/lib/llm/usage-tracker";
 import { attemptLeanFormalization } from "@/lib/pipeline/lean-attempt";
 import { lt, withRequestLocale } from "@/lib/llm/output-locale";
@@ -14,7 +15,7 @@ async function handlePOST(req: Request) {
   if (!body.session_id?.trim()) {
     return NextResponse.json({ error: "session_id required" }, { status: 400 });
   }
-  const session = await getSessionAsync(body.session_id);
+  const session = await getSessionForRequest(body.session_id);
   if (!session) {
     return NextResponse.json({ error: lt("会话不存在", "session not found") }, { status: 404 });
   }

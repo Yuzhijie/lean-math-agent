@@ -311,11 +311,17 @@ export function useProofActions(
           try {
             const event = JSON.parse(dataLine.slice(6)) as Record<string, unknown>;
 
-            if (event.type === "progress") {
+            if (event.type === "job") {
+              dispatch({ type: "SOLVE_JOB", jobId: event.job_id as string, sessionId: event.session_id as string | undefined });
+            } else if (event.type === "cancelled") {
+              dispatch({ type: "SOLVE_CANCELLED", detail: (event.detail as string) ?? tr("已取消", "Cancelled") });
+              return;
+            } else if (event.type === "progress") {
               dispatch({
                 type: "SOLVE_PROGRESS",
                 stage: event.stage as string,
                 detail: event.detail as string,
+                position: event.position as number | undefined,
               });
             } else if (event.type === "result") {
               const data = event.data as Record<string, unknown>;
@@ -371,6 +377,21 @@ export function useProofActions(
       });
     }
   }, [dispatch, state.problemText, figures, figureText, tr]);
+
+  // ── Cancel the running solve ─────────────────────────────────────
+  // The server stops the job at its next model call or stage; the stream then ends with `cancelled`.
+
+  const cancelSolve = useCallback(async () => {
+    if (!state.jobId) return;
+    dispatch({ type: "SOLVE_CANCELLING" });
+    try {
+      const res = await fetch(`/api/jobs/${encodeURIComponent(state.jobId)}/cancel`, { method: "POST" });
+      // Already ended (or unknown): nothing left to wait for.
+      if (!res.ok) dispatch({ type: "SOLVE_CANCELLED", detail: tr("已取消", "Cancelled") });
+    } catch {
+      dispatch({ type: "SOLVE_CANCELLED", detail: tr("已取消", "Cancelled") });
+    }
+  }, [dispatch, state.jobId, tr]);
 
   // ── Switch method ────────────────────────────────────────────────
 
@@ -482,6 +503,7 @@ export function useProofActions(
     proveAll,
     verify,
     solveAll,
+    cancelSolve,
     attemptLean,
     switchMethod,
     useGeneratedProblem,

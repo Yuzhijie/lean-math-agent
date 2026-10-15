@@ -88,6 +88,8 @@ export type PipelineStage =
   | "computing"
   | "solving"
   | "lean_attempting"   // attempting Lean formal proof
+  | "queued"            // waiting for a free solve slot (lib/jobs.ts)
+  | "cancelled"         // stopped by the user
   | "reviewing"
   | "complete"
   | "failed";
@@ -203,6 +205,8 @@ export interface ValidationResult {
 export interface Session {
   id: string;
   schema_version?: number;   // for future migrations (default: 1)
+  /** The user it belongs to (signed-in user id, or "local" without sign-in; absent on older sessions = "local"). */
+  owner?: string;
   problem_text: string;
   pipeline_stage: PipelineStage;
   math_domain?: MathDomain;

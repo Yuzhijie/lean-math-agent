@@ -13,6 +13,10 @@ import { afterAll } from "vitest";
 const root = mkdtempSync(path.join(tmpdir(), "lean-math-agent-test-"));
 
 process.env.SESSION_STORE_PATH = path.join(root, "sessions");
+// The JSON backend in unit tests (its files are inspected); SQLite has its own tests.
+process.env.SESSION_BACKEND ??= "json";
+process.env.SQLITE_DB_PATH = path.join(root, "sessions.db");
+process.env.QUOTA_DB_PATH = path.join(root, "usage.db");
 process.env.LLM_CACHE_PATH = path.join(root, "llm-cache.json");
 process.env.PROOF_MEMORY_PATH = path.join(root, "proof-memory.json");
 process.env.PREMISE_INDEX_PATH = path.join(root, "premise-index.json"); // absent → curated seed only

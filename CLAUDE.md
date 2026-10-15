@@ -18,7 +18,7 @@ AI-powered Lean 4 math theorem prover + problem solver. Single-page Next.js app.
 | LLM | OpenAI-compatible API (configurable via env), role routing (general / prover / planner / vision), image input, sampling, fallback chain, LRU cache, per-run metrics |
 | Lean | Lean 4 + Mathlib v4.33.1 + Batteries + Aesop; verification via persistent `leanprover-community/repl` workers (env reuse, sorry goals, tactic mode, axiom + statement checks), `lake env lean` fallback |
 | Compute | Python SymPy HTTP microservice (9 endpoints) |
-| State | In-memory Map + JSON disk persistence |
+| State | Sessions in SQLite (`.data/sessions.db`, each owned by a user; JSON files with SESSION_BACKEND=json), in-memory cache |
 | Tests | Vitest 5 (95 test files) |
 
 ## Project Structure
@@ -49,6 +49,7 @@ app/
     ProblemGenerator.tsx            # Problem generator: method 1 (default when a bank has questions) = local bank as template — Level/Difficulty/Topic pick bank questions sent to the model as the template, results with checks + "Add to bank"; method 2 = built-in by grade/difficulty/domain. Bank mode streams progress (`stream: true` → NDJSON progress/result/error lines; round, stage chips, elapsed time); the result summary says "N requested, M passed, K failed (show)"; each card shows a status (可用 / 需人工看 / 未通过) and its failed or to-review checks inline (lib/bank/generation-view.ts); actions: one main button ("加入题库" for bank questions, else "使用此题"), hints/answer as icon toggles, formalize under "⋯"; figures are thumbnails (QuestionFigure `compact`, max 14rem) that open full size in a dialog (also on the bank page); "导出 PDF" under the result summary opens the printable worksheet (bank results by generation id, built-in results handed over in localStorage)
     BankTemplateControls.tsx        # Level / Difficulty / Topic pickers from the bank (template-options), live count of matching template questions
     StepPane.tsx                    # Proof step list with status badges
+    PipelineProgress.tsx            # Live stage timeline of a solve (labels incl. queued/budget/retrieval/whole_proof/sketch/cancelled), queue place and a Cancel button while it runs
     SessionHistory.tsx              # Past sessions: SessionHistoryList (search, list, pagination; compact, disabled, current) in the page sidebar and in the slide-out Sheet
     ProblemExamples.tsx             # Example problems (compute, geometry, proof, optimize, word problem) under an empty problem box
   bank/page.tsx                     # Question bank page: banks + category tree, item list/editor, import wizard, generate panel ("导出 PDF" next to the candidates opens the printable worksheet for that generation)
@@ -78,8 +79,13 @@ app/
     payments/webhook/route.ts       # Stripe webhook handler
     plan/route.ts                   # Method → proof step sequence
     prove-step/route.ts             # Single step + repair loop (≤3 retries)
-    session/[id]/route.ts           # GET session state
-    solve/route.ts                  # One-click pipeline (classifies + dispatches; theorem path in lib/pipeline)
+    session/[id]/route.ts           # GET / DELETE one of the caller's sessions
+    sessions/route.ts               # The caller's sessions (paged, search)
+    jobs/route.ts                   # GET the caller's solve jobs (running, queued with place, recently ended)
+    jobs/[id]/cancel/route.ts       # POST cancel one of the caller's jobs
+    quota/route.ts                  # GET the caller's plan and usage (solves this month, spend today)
+    solve/route.ts                  # One-click pipeline (classifies + dispatches; theorem path in lib/pipeline); admitted by lib/quota (429 with the reason), run as a job (queue, cancel on disconnect → 499)
+    solve-stream/route.ts           # Same as SSE: first frame {type:"job", job_id, session_id}, progress frames (stage "queued" carries `position`), then result / error / {type:"cancelled"}
     solve-compute/route.ts          # Standalone computational solver
     solve-geometry/route.ts         # Geometry solver (Clingo ASP)
     verify/route.ts                 # Final Lean verification
@@ -90,7 +96,10 @@ lib/
   auth.ts                           # NextAuth configuration (JWT, providers, callbacks)
   db.ts                             # Prisma client singleton: client generated into lib/generated/prisma (git-ignored; `npx prisma generate`, also run by postinstall) + better-sqlite3 driver adapter
   db-url.ts                         # SQLite URL for prisma.config.ts and the adapter: relative file: paths resolve against prisma/ (Prisma 5 behaviour) → prisma/.data/prod.db
-  session-store.ts                  # In-memory + disk persistence
+  session-store.ts                  # Sessions: in-memory cache + SQLite (default, SQLITE_DB_PATH; the JSON files are imported the first time the table is empty) or JSON files (SESSION_BACKEND=json); `owner` column, list/search per owner
+  session-access.ts                 # getSessionForRequest / createSessionForRequest: API routes see only the caller's sessions (someone else's = not found; sessions without owner = "local")
+  jobs.ts                           # Solve jobs: SOLVE_CONCURRENCY running (default 2), the rest queued in order with their place; per-user limit (plan's concurrentSolvers, else JOBS_PER_USER); cancel by owner (POST /api/jobs/:id/cancel) or when the client goes away; the cancel signal travels in AsyncLocalStorage — the LLM client refuses new calls and aborts the one in flight (no retry/fallback), verifyLeanSource refuses to start, the theorem pipeline stops at stage boundaries (CancelledError)
+  quota.ts                          # Per-user limits: plan from the active subscription (else free) — proofsPerMonth solves a month, concurrentSolvers at once; optional daily spend QUOTA_DAILY_USD_<PLAN> (what is left caps the run's cost with PROOF_COST_CAP_USD); RATE_LIMIT_PER_MIN starts a minute (default 6); usage in QUOTA_DB_PATH (default .data/usage.db); the local single user is unlimited unless QUOTA_LOCAL_PLAN
   utils.ts                          # cn() utility (clsx + tailwind-merge)
   math-segments.ts                  # Math text segmenter ($, $$, \(, \[)
   markdown-table.ts                 # Markdown tables in question text (scans keep tables that way): split/parse/remove; MathText renders them as tables (span-based, valid inside <p>)
@@ -301,6 +310,8 @@ See `.env.example`:
 - `LEAN_SERVER_MODE` (`server` = REPL workers, `spawn` = `lake env lean` per file), `LEAN_REPL_WORKERS`, `LEAN_REPL_MAX_USES`, `LEAN_SERVER_STARTUP_MS`, `LEAN_ALLOW_NATIVE_DECIDE` — verification backend
 - `LLM_RETRY_*`, `LLM_CACHE_*` — Retry and cache settings
 - `COMPUTE_ENGINE_URL` — Python SymPy server URL
+- `SESSION_BACKEND` (sqlite | json), `SQLITE_DB_PATH`, `SESSION_STORE_PATH` — session storage
+- `SOLVE_CONCURRENCY`, `JOBS_PER_USER` — solve queue; `RATE_LIMIT_PER_MIN`, `QUOTA_DAILY_USD_FREE|PRO|ENTERPRISE`, `QUOTA_LOCAL_PLAN`, `QUOTA_DB_PATH` — per-user limits
 
 ## Running
 
@@ -336,13 +347,13 @@ npm run premises:build         # Index the sandbox's Mathlib for premise retriev
 ### 🔲 High Priority (make existing features more usable)
 1. **Proof step tree visualization** — Current StepPane is a flat list; should show tree structure with branching
 2. ~~**Session history sidebar**~~ — done: sidebar on wide screens, slide-out panel otherwise
-3. **Real-time progress** — Replace polling with SSE or WebSocket for solve pipeline events
+3. ~~**Real-time progress**~~ — done: SSE with queue place, stage timeline, Cancel
 4. **Error UX** — Better error boundaries, loading states, retry buttons
 
 ### 🔲 Medium Priority (expand capabilities)
 5. **Algebra step-by-step display** — `/api/solve` returns `solution_steps` but UI doesn't render them well
 6. **Method comparison view** — Show side-by-side evaluation scores for enumerated methods
-7. **Session persistence upgrade** — Replace JSON file store with SQLite or similar
+7. ~~**Session persistence upgrade**~~ — done: SQLite by default, sessions owned by users
 8. **Test coverage gaps** — No API route integration tests, no frontend component tests
 
 ### ✅ Low Priority (P3 — completed in v0.2.0)

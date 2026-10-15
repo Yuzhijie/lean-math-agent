@@ -1,18 +1,30 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { CheckCircle2, Loader2 } from "lucide-react";
+import { CheckCircle2, CircleSlash, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { useI18n } from "@/lib/i18n";
 
 type Props = {
   events: Array<{ stage: string; detail: string }>;
   busy: string | null;
+  /** Place in the solve queue while waiting (1 = next). */
+  queuePosition?: number | null;
+  /** Shown as a Cancel button while the solve runs or waits. */
+  onCancel?: () => void;
+  cancelling?: boolean;
 };
 
 // ── Stage labels ──────────────────────────────────────────────────────
 
 function getStageLabels(tr: (zh: string, en: string) => string): Record<string, string> {
   return {
+    queued: tr("排队等待", "Waiting in the queue"),
+    budget: tr("搜索预算", "Search budget"),
+    retrieval: tr("检索引理", "Retrieve lemmas"),
+    whole_proof: tr("整体证明", "Whole proof"),
+    sketch: tr("骨架分解", "Sketch and fill"),
+    cancelled: tr("已取消", "Cancelled"),
     reading_figure: tr("读取题目图形", "Read the figure"),
     classifying: tr("分析问题", "Analyze problem"),
     extracting: tr("提取结构", "Extract structure"),
@@ -36,7 +48,7 @@ function getStageLabels(tr: (zh: string, en: string) => string): Record<string, 
 
 // ── Component ─────────────────────────────────────────────────────────────
 
-export function PipelineProgress({ events, busy }: Props) {
+export function PipelineProgress({ events, busy, queuePosition, onCancel, cancelling }: Props) {
   const { tr } = useI18n();
   const stageLabels = getStageLabels(tr);
   if (events.length === 0 && !busy) return null;
@@ -52,6 +64,8 @@ export function PipelineProgress({ events, busy }: Props) {
   const lastStage = stages.length > 0 ? stages[stages.length - 1][0] : null;
   const isComplete = lastStage === "complete";
   const isFailed = lastStage === "failed";
+  const isCancelled = lastStage === "cancelled";
+  const running = !isComplete && !isFailed && !isCancelled;
 
   return (
     <div className="rounded-lg border border-primary/20 bg-card animate-fade-in">
@@ -61,17 +75,38 @@ export function PipelineProgress({ events, busy }: Props) {
             <CheckCircle2 className="h-3.5 w-3.5 text-success" />
           ) : isFailed ? (
             <CheckCircle2 className="h-3.5 w-3.5 text-destructive" />
+          ) : isCancelled ? (
+            <CircleSlash className="h-3.5 w-3.5 text-muted-foreground" />
           ) : (
             <Loader2 className="h-3.5 w-3.5 text-primary animate-spin" />
           )}
-          {isComplete ? tr("求解完成", "Solved") : isFailed ? tr("求解失败", "Solving failed") : tr("求解中...", "Solving...")}
+          {isComplete
+            ? tr("求解完成", "Solved")
+            : isFailed
+              ? tr("求解失败", "Solving failed")
+              : isCancelled
+                ? tr("已取消", "Cancelled")
+                : queuePosition
+                  ? tr(`排队中（第 ${queuePosition} 位）`, `Queued (#${queuePosition})`)
+                  : tr("求解中...", "Solving...")}
+          {running && onCancel && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="ml-auto h-6 px-2 text-[11px] normal-case tracking-normal"
+              onClick={onCancel}
+              disabled={cancelling}
+            >
+              {cancelling ? tr("正在取消…", "Cancelling…") : tr("取消", "Cancel")}
+            </Button>
+          )}
         </h3>
       </div>
       <div className="p-4">
         <div className="space-y-0">
           {stages.map(([stage, detail], i) => {
             const isLast = i === stages.length - 1;
-            const isActive = isLast && !isComplete && !isFailed;
+            const isActive = isLast && running;
             const isDone = !isLast || isComplete;
             const label = stageLabels[stage] ?? stage;
 

@@ -1,8 +1,9 @@
+import { getSessionForRequest } from "@/lib/session-access";
 import { NextResponse } from "next/server";
 import { assembleLeanSource, stepCodesUpTo } from "@/lib/lean/assemble";
 import { proveStepWithRepair } from "@/lib/llm/prove-step";
 import { LlmError } from "@/lib/llm/client";
-import { getSessionAsync, updateSession } from "@/lib/session-store";
+import { updateSession } from "@/lib/session-store";
 import { withRequestLocale } from "@/lib/llm/output-locale";
 
 async function handlePOST(req: Request) {
@@ -18,7 +19,7 @@ async function handlePOST(req: Request) {
       { status: 400 },
     );
   }
-  const session = await getSessionAsync(body.session_id);
+  const session = await getSessionForRequest(body.session_id);
   if (!session) {
     return NextResponse.json({ error: "session not found" }, { status: 404 });
   }

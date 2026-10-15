@@ -1,6 +1,7 @@
+import { getSessionForRequest, createSessionForRequest } from "@/lib/session-access";
 import { NextResponse } from "next/server";
 import { autoformalize } from "@/lib/llm/autoformalize";
-import { createSession, updateSession, getSessionAsync } from "@/lib/session-store";
+import { updateSession } from "@/lib/session-store";
 import { LlmError } from "@/lib/llm/client";
 import { withRequestLocale } from "@/lib/llm/output-locale";
 
@@ -13,7 +14,7 @@ async function handlePOST(req: Request) {
   // Either use existing session or create new one
   let session;
   if (body.session_id) {
-    session = await getSessionAsync(body.session_id);
+    session = await getSessionForRequest(body.session_id);
     if (!session) {
       return NextResponse.json(
         { error: "session not found" },
@@ -21,7 +22,7 @@ async function handlePOST(req: Request) {
       );
     }
   } else if (body.problem_text?.trim()) {
-    session = createSession(body.problem_text.trim());
+    session = await createSessionForRequest(body.problem_text.trim());
   } else {
     return NextResponse.json(
       { error: "problem_text or session_id required" },

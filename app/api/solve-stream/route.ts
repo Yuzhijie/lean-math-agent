@@ -1,11 +1,9 @@
+import { getSessionForRequest, createSessionForRequest } from "@/lib/session-access";
 import { NextResponse } from "next/server";
-import {
-  createSession,
-  updateSession,
-  getSessionAsync,
-  saveSessionToDisk,
-} from "@/lib/session-store";
+import { updateSession, saveSessionToDisk } from "@/lib/session-store";
 import { LlmError } from "@/lib/llm/client";
+import { CancelledError, runJob, TooManyJobsError } from "@/lib/jobs";
+import { admitSolve, recordSpend, runCostCap } from "@/lib/quota";
 import { withUsageScope } from "@/lib/llm/usage-tracker";
 import { classifyProblem } from "@/lib/llm/classify-problem";
 import { solveComputational } from "@/lib/compute/solver";
@@ -52,16 +50,20 @@ function sseFrame(data: Record<string, unknown>): string {
 
 async function handlePOST(req: Request) {
   const body = (await req.json()) as SolveRequest;
+  const jobOwner = await requestOwner();
+  // Plan limits, daily spend and the rate limit (lib/quota.ts) — before anything is created or spent.
+  const admit = await admitSolve(jobOwner, lt);
+  if (!admit.ok) return NextResponse.json({ error: admit.reason, quota: admit }, { status: 429 });
 
   // Get or create session
   let session;
   if (body.session_id) {
-    session = await getSessionAsync(body.session_id);
+    session = await getSessionForRequest(body.session_id);
     if (!session) {
       return NextResponse.json({ error: "session not found" }, { status: 404 });
     }
   } else if (body.problem_text?.trim()) {
-    session = createSession(body.problem_text.trim());
+    session = await createSessionForRequest(body.problem_text.trim());
   } else {
     return NextResponse.json(
       { error: "problem_text or session_id required" },
@@ -72,7 +74,7 @@ async function handlePOST(req: Request) {
   const figs = figureRefsSchema.safeParse(body.figures ?? []);
   if (!figs.success) return NextResponse.json({ error: "invalid figures" }, { status: 400 });
   const figures = body.session_id ? [] : figs.data;
-  const owner = figures.length ? await requestOwner() : "";
+  const owner = jobOwner;
 
   const opts = body.options ?? {};
   const useMathlib = opts.use_mathlib ?? true;
@@ -80,15 +82,64 @@ async function handlePOST(req: Request) {
 
   // Create a TransformStream for SSE
   const encoder = new TextEncoder();
+  // Cancelled when the client goes away (stream cancelled / request aborted) or via /api/jobs/:id/cancel.
+  const gone = new AbortController();
   const stream = new ReadableStream({
+    cancel() {
+      gone.abort();
+    },
     async start(controller) {
+      let closed = false;
       const emit = (data: Record<string, unknown>) => {
-        controller.enqueue(encoder.encode(sseFrame(data)));
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(sseFrame(data)));
+        } catch {
+          closed = true; // the client went away
+        }
       };
+      req.signal?.addEventListener("abort", () => gone.abort(), { once: true });
+
+      try {
+        await runJob(
+          {
+            owner: jobOwner,
+            kind: "solve",
+            sessionId: sess.id,
+            signal: gone.signal,
+            maxActive: admit.concurrent,
+            onStart: (job) => emit({ type: "job", job_id: job.id, session_id: sess.id }),
+            onQueued: (position) => {
+              updateSession(sess.id, { pipeline_stage: "queued" });
+              emit({ type: "progress", stage: "queued", position, detail: lt(`排队中：前面还有 ${position - 1} 个求解`, `Queued: ${position - 1} solve(s) ahead`) });
+            },
+          },
+          () => runSolve(),
+        );
+      } catch (e) {
+        if (e instanceof CancelledError) {
+          updateSession(sess.id, { pipeline_stage: "cancelled" });
+          await saveSessionToDisk(sess.id);
+          emit({ type: "cancelled", detail: lt("已取消", "Cancelled") });
+        } else if (e instanceof TooManyJobsError) {
+          emit({ type: "error", error: lt(`同时最多进行 ${e.limit} 个求解，请等前面的完成或取消`, `At most ${e.limit} solves at a time; wait for one to finish or cancel it`) });
+        } else {
+          emit({ type: "error", error: "solve pipeline failed" });
+        }
+      } finally {
+        closed = true;
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
+      }
 
       // One usage scope per run: LLM calls and Lean verifications are
       // attributed to it and reported as `metrics` in the result frame.
+      async function runSolve(): Promise<void> {
       await withUsageScope(async (metrics) => {
+       try {
         try {
           // ── Figures: read once by the vision model, appended to the problem text ──
           let figureDescription: string | undefined;
@@ -140,14 +191,21 @@ async function handlePOST(req: Request) {
           // Emit final result
           emit({ type: "result", data: { ...resultData, ...(figureDescription ? { figure_description: figureDescription } : {}), metrics: m } });
         } catch (e) {
+          if (e instanceof CancelledError) {
+            updateSession(sess.id, { metrics: metrics() });
+            throw e;
+          }
           updateSession(sess.id, { pipeline_stage: "failed", metrics: metrics() });
           await saveSessionToDisk(sess.id);
           const msg = e instanceof LlmError ? e.message : "solve pipeline failed";
           emit({ type: "error", error: msg });
-        } finally {
-          controller.close();
         }
-      });
+       } finally {
+        // The run's spend counts against the owner's daily limit, whatever the outcome.
+        await recordSpend(jobOwner, metrics().estimated_cost);
+       }
+      }, { costCapUsd: runCostCap(admit) });
+      }
     },
   });
 

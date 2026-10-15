@@ -18,6 +18,7 @@
  * The `log` string keeps the old `<file>:<line>:<col>: <severity>: <msg>`
  * format consumed by `parse-log.ts`; everything else is structured.
  */
+import { throwIfCancelled } from "../jobs";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -248,6 +249,8 @@ export async function verifyLeanSource(
   source: string,
   opts: VerifyLeanOpts = {},
 ): Promise<LeanVerifyResult> {
+  // A cancelled job starts no new Lean work (one already running finishes).
+  throwIfCancelled();
   const started = Date.now();
   const result = await verifyLeanSourceUncounted(sessionId, source, opts, started);
   // Attribute the verification to the running pipeline (usage scope), so

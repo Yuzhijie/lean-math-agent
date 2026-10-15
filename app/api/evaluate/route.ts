@@ -1,6 +1,7 @@
+import { getSessionForRequest } from "@/lib/session-access";
 import { NextResponse } from "next/server";
 import { runMultiAgentEvaluation } from "@/lib/agents/orchestrator";
-import { getSessionAsync, updateSession } from "@/lib/session-store";
+import { updateSession } from "@/lib/session-store";
 import { LlmError } from "@/lib/llm/client";
 import type { MathDomain } from "@/lib/types";
 import { withRequestLocale } from "@/lib/llm/output-locale";
@@ -15,7 +16,7 @@ async function handlePOST(req: Request) {
     return NextResponse.json({ error: "session_id required" }, { status: 400 });
   }
 
-  const session = await getSessionAsync(body.session_id);
+  const session = await getSessionForRequest(body.session_id);
   if (!session) {
     return NextResponse.json({ error: "session not found" }, { status: 404 });
   }

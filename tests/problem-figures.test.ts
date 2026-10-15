@@ -138,7 +138,9 @@ describe("solving with figures", () => {
     fakeVision();
     const text = await (await solveStream(post({ problem_text: PROBLEM, figures }))).text();
     const frames = text.split("\n\n").filter((f) => f.startsWith("data: ")).map((f) => JSON.parse(f.slice(6)) as { type: string; stage?: string; data?: Record<string, unknown> });
-    expect(frames[0]).toMatchObject({ type: "progress", stage: "reading_figure" });
+    // The stream starts with the job (its id, for cancelling), then the figure is read.
+    expect(frames[0]).toMatchObject({ type: "job", session_id: expect.any(String) });
+    expect(frames[1]).toMatchObject({ type: "progress", stage: "reading_figure" });
     const result = frames.find((f) => f.type === "result")!.data!;
     expect(result.figure_description).toBe(DESCRIPTION);
     // Every later step sees the description.
