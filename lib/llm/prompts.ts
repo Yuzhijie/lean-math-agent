@@ -290,12 +290,29 @@ theorem ex (a b : ℝ) (ha : 0 < a) (hb : 0 < b) : 2 ≤ a / b + b / a := by
   linarith
 \`\`\``;
 
+export const INFORMAL_PROOF_SYSTEM = `You are a strong competition mathematician. Write a careful, complete informal proof of the statement, as a short list of numbered steps.
+Each step states ONE intermediate fact precisely (an equation, an inequality, a case, a bound, a membership), in terms of the statement's variables, followed by a one-line reason. The facts must be small enough that each could be proved on its own, and together they must prove the statement. Name every case split explicitly.
+No Lean code. At most 8 steps.`;
+
+export function informalProofUserMessage(args: { theoremType: string; problemText?: string; goalState?: string }): string {
+  return [
+    args.problemText ? `Problem: ${args.problemText}` : "",
+    `Formal statement (Lean 4): ${args.theoremType}`,
+    args.goalState ? `Goal state:\n${args.goalState}` : "",
+    "Write the numbered informal proof.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 export function sketchUserMessage(args: {
   theoremName: string;
   theoremType: string;
   goalState?: string;
   problemText?: string;
   sketchHint?: string;
+  /** A numbered informal proof (INFORMAL_PROOF_SYSTEM): the sketch follows its steps. */
+  informalProof?: string;
   previousErrors?: string;
   premises?: string;
 }): string {
@@ -303,7 +320,8 @@ export function sketchUserMessage(args: {
   parts.push(`Write a proof sketch with sorry holes for:\n\`\`\`lean\ntheorem ${args.theoremName} ${args.theoremType} := by\n  sorry\n\`\`\``);
   if (args.goalState) parts.push(`Initial goal state:\n\`\`\`\n${args.goalState}\n\`\`\``);
   if (args.problemText) parts.push(`Original problem: ${args.problemText}`);
-  if (args.sketchHint) parts.push(`Informal proof idea (a hint):\n${args.sketchHint}`);
+  if (args.informalProof) parts.push(`Informal proof — follow it step by step: one \`have\` per numbered step (its fact as the statement, \`:= by sorry\` unless it is immediate), then combine them:\n${args.informalProof}`);
+  else if (args.sketchHint) parts.push(`Informal proof idea (a hint):\n${args.sketchHint}`);
   if (args.premises) parts.push(args.premises);
   if (args.previousErrors) parts.push(`Your previous sketch did not elaborate. Lean said:\n${args.previousErrors}\nFix the structure (statements of the holes, tactic names, syntax) and write the sketch again.`);
   parts.push("Return the sketch in one ```lean block.");

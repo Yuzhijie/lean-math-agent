@@ -159,6 +159,8 @@ export function resetUsage(): void {
 
 interface Scope {
   startedAt: number;
+  /** Stop making LLM calls once the scope's estimated cost reaches this (USD); see costCapReached. */
+  costCapUsd?: number;
   llm: UsageRecord[];
   verifications: Array<{ backend: string; durationMs: number }>;
 }
@@ -172,8 +174,10 @@ const scopeStorage = new AsyncLocalStorage<Scope>();
  */
 export async function withUsageScope<T>(
   fn: (metrics: () => RunMetrics) => Promise<T>,
+  opts: { costCapUsd?: number } = {},
 ): Promise<T> {
-  const scope: Scope = { startedAt: Date.now(), llm: [], verifications: [] };
+  const cap = opts.costCapUsd ?? proofCostCapUsd();
+  const scope: Scope = { startedAt: Date.now(), llm: [], verifications: [], ...(cap !== undefined ? { costCapUsd: cap } : {}) };
   return scopeStorage.run(scope, () => fn(() => summarizeScope(scope)));
 }
 
@@ -181,6 +185,29 @@ export async function withUsageScope<T>(
 export function recordVerification(backend: string, durationMs: number): void {
   const scope = scopeStorage.getStore();
   if (scope) scope.verifications.push({ backend, durationMs });
+}
+
+/** PROOF_COST_CAP_USD: the default cost cap of a usage scope (one solve, one benchmark theorem); unset or ≤ 0 = none. */
+export function proofCostCapUsd(): number | undefined {
+  const v = Number(process.env.PROOF_COST_CAP_USD);
+  return process.env.PROOF_COST_CAP_USD && Number.isFinite(v) && v > 0 ? v : undefined;
+}
+
+/**
+ * The current scope has spent its cost cap (estimated from LLM_PRICES). Calls already in flight finish;
+ * new ones are refused by the client and the prover stages stop. False outside a scope, without a cap,
+ * or when no model in use is priced (nothing to measure against).
+ */
+export function costCapReached(): boolean {
+  const scope = scopeStorage.getStore();
+  if (!scope?.costCapUsd) return false;
+  const spent = estimateCost(scope.llm);
+  return spent !== undefined && spent >= scope.costCapUsd;
+}
+
+/** The current scope's cost cap, if any. */
+export function scopeCostCap(): number | undefined {
+  return scopeStorage.getStore()?.costCapUsd;
 }
 
 /** Metrics of the current scope, or undefined outside one. */

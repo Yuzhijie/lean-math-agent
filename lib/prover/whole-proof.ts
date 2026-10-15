@@ -22,10 +22,10 @@ import { localHintsForUnknownIdentifiers } from "../lean/premises";
 import { verifyLeanSource, type LeanVerifyResult } from "../lean/sandbox";
 import { sanitizeLeanBody } from "../lean/sanitize";
 import { formatSuggestions, librarySearchSuggestions } from "../lean/suggest";
-import { LlmError, sampleText, type ChatMessage } from "../llm/client";
+import { CostCapError, LlmError, sampleText, type ChatMessage } from "../llm/client";
 import { WHOLE_PROOF_SYSTEM, nativeProverPrompt, nativeProverRepairPrompt, wholeProofRepairMessage, wholeProofUserMessage } from "../llm/prompts";
 import { nativeProverSettings, proverPromptStyle } from "../llm/config";
-import { expectedLatencyMs } from "../llm/usage-tracker";
+import { costCapReached, expectedLatencyMs, scopeCostCap } from "../llm/usage-tracker";
 import { lt } from "../llm/output-locale";
 
 // ── Configuration ─────────────────────────────────────────────────────
@@ -43,6 +43,11 @@ export interface WholeProofConfig {
   timeBudgetMs: number;
   /** Run `exact?`/`apply?`/`simp?` on the best failure before repairing (WHOLE_PROOF_SUGGEST, default true). */
   suggest: boolean;
+  /**
+   * Give up after the first round when no sampled proof got past its first tactic (PROOF_EARLY_STOP,
+   * default false): repairs of such failures rarely succeed and cost most of a failed theorem's budget.
+   */
+  earlyStop: boolean;
   useMathlib: boolean;
 }
 
@@ -58,6 +63,7 @@ export function loadWholeProofConfig(overrides: Partial<WholeProofConfig> = {}):
     maxTokens: overrides.maxTokens ?? num("WHOLE_PROOF_MAX_TOKENS", 4096),
     timeBudgetMs: overrides.timeBudgetMs ?? num("WHOLE_PROOF_BUDGET_MS", 180_000),
     suggest: overrides.suggest ?? process.env.WHOLE_PROOF_SUGGEST !== "false",
+    earlyStop: overrides.earlyStop ?? process.env.PROOF_EARLY_STOP === "true",
     useMathlib: overrides.useMathlib ?? true,
   };
 }
@@ -76,6 +82,8 @@ export interface WholeProofCandidate {
   errors: number;
   /** First error, one line (empty when ok). */
   summary: string;
+  /** Tactic lines that elaborated before the first error (all of them when ok); undefined when not known. */
+  progress?: number;
 }
 
 export interface WholeProofProgress {
@@ -100,6 +108,10 @@ export interface WholeProofResult {
   samples: number;
   /** Library-search suggestions that were fed back to the model. */
   suggestions: string[];
+  /** Stopped after round 0: no candidate got past its first tactic (config.earlyStop). */
+  gaveUpEarly?: boolean;
+  /** Stopped because the run's cost cap (PROOF_COST_CAP_USD) was reached. */
+  costCapped?: boolean;
   log: string;
   durationMs: number;
 }
@@ -183,7 +195,14 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
   let roundsRun = 0;
   const seenTactics = new Set<string>();
 
+  let gaveUpEarly = false;
+  let costCapped = false;
   for (let round = 0; round <= cfg.rounds; round++) {
+    if (costCapReached()) {
+      log.push(`round ${round}: cost cap reached ($${scopeCostCap()} for this run); stopping`);
+      costCapped = true;
+      break;
+    }
     if (round > 0 && timeLeft() < expectedLatencyMs("prover") * 0.8) {
       // A repair round that cannot finish is wasted tokens (aborted calls
       // still bill what they generated).
@@ -213,6 +232,7 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       log.push(`round ${round}: sampling failed: ${msg}`);
+      if (e instanceof CostCapError) costCapped = true;
       if (e instanceof LlmError && /LLM_API_KEY/.test(msg)) throw e;
       break;
     }
@@ -248,6 +268,7 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
         ok: v.verification.ok,
         errors: v.verification.messages.filter((m) => m.severity === "error").length,
         summary: v.verification.ok ? "" : summarizeFailure(v.verification),
+        progress: v.verification.ok ? v.tactics.split("\n").filter((l) => l.trim()).length : compilingPrefix(v.verification, v.source)?.length,
       });
     }
 
@@ -282,6 +303,15 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
     });
 
     if (round === cfg.rounds) break;
+    // Early stop: nothing got past its first tactic (a known 0 for every candidate of this round).
+    if (cfg.earlyStop && round === 0) {
+      const prog = candidates.filter((c) => c.round === 0).map((c) => c.progress);
+      if (prog.length && prog.every((p) => p === 0)) {
+        log.push(`round 0: no candidate got past its first tactic; giving up early (PROOF_EARLY_STOP)`);
+        gaveUpEarly = true;
+        break;
+      }
+    }
 
     // ── Pick the most promising failure and build feedback ──────────
     const best = await pickBestFailure(args.sessionId, verified, assemble);
@@ -346,7 +376,7 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
     });
   }
 
-  return done({ rounds: roundsRun, samples: totalSamples });
+  return done({ rounds: roundsRun, samples: totalSamples, ...(gaveUpEarly ? { gaveUpEarly } : {}), ...(costCapped ? { costCapped } : {}) });
 }
 
 // ── Candidate ranking ─────────────────────────────────────────────────

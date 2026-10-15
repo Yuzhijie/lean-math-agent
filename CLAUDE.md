@@ -151,8 +151,8 @@ lib/
     theorem-pipeline.ts             # Theorem pipeline shared by /api/solve and /api/solve-stream
     lean-attempt.ts                 # Lean formalization attempt for non-theorem problems; solves skip it unless `options.lean_attempt: true` (the UI starts it from the Lean tab)
   prover/
-    whole-proof.ts                  # Whole-proof loop: sample k proofs → verify → repair with feedback + suggestions; a native prover (proverPromptStyle) gets nativeProverPrompt (no system message, plan first, LLM_PROVER_MAX_TOKENS/TIMEOUT_MS) and a self-correction turn (its proof as the assistant turn + Lean's errors); extractTactics(text, theoremName) takes the target declaration when the answer also defines helper lemmas (logged, not carried over)
-    sketch.ts                       # Sketch-and-fill: skeleton with `have … := by sorry` holes → each hole closed by hammer/goal search → splice → strict verify
+    whole-proof.ts                  # Whole-proof loop: sample k proofs → verify → repair with feedback + suggestions; each candidate records `progress` (tactic lines before the first error); earlyStop (PROOF_EARLY_STOP) gives up after round 0 when no candidate got past its first tactic (gaveUpEarly); stops when the run's cost cap is reached (costCapped); a native prover (proverPromptStyle) gets nativeProverPrompt (no system message, plan first, LLM_PROVER_MAX_TOKENS/TIMEOUT_MS) and a self-correction turn (its proof as the assistant turn + Lean's errors); extractTactics(text, theoremName) takes the target declaration when the answer also defines helper lemmas (logged, not carried over)
+    sketch.ts                       # Sketch-and-fill: numbered informal proof first (planner role, high effort; SKETCH_INFORMAL, skipped when the caller gives a hint) → skeleton with one `have … := by sorry` per step → each hole: hammer, then the whole-proof prover on the hole as a lemma of its own (goal-statement.ts; checked to elaborate first; SKETCH_HOLE_PROVER auto = when LLM_PROVER_MODEL is set), then goal search → splice → strict verify
     budget.ts                       # PROOF_BUDGET presets (low/normal/high) for whole-proof, sketch and goal search; `sketchStage` false on low (sketch-and-fill proved nothing on the miniF2F baselines); SKETCH_ENABLED=true forces it on
     context.ts                      # Prover context: retrieved premises + recalled proofs as one prompt block; rememberVerifiedProof
   llm/
@@ -161,7 +161,7 @@ lib/
     config.ts                       # LLM config from env vars (role chains, prices); proverPromptStyle (LLM_PROVER_PROMPT auto|native|chat — auto = native when the prover model name contains "prover"), nativeProverSettings, chatProverRole (sketch + goal-search use the general chain when the prover is native)
     cache.ts                        # LRU response cache (SHA-256 keyed)
     logger.ts                       # Structured JSON logger
-    usage-tracker.ts                # Usage records + per-run scope (RunMetrics)
+    usage-tracker.ts                # Usage records + per-run scope (RunMetrics); per-scope cost cap (withUsageScope opts.costCapUsd, default PROOF_COST_CAP_USD): costCapReached() once the scope's estimated cost (LLM_PRICES) reaches it — the client then refuses new calls (CostCapError), the prover stages stop and the theorem pipeline returns before the stepwise search (cost_capped)
     prompts.ts                      # Prompts (enumerate/plan/prove-step/whole-proof, Lean 4 pitfalls)
     agent-prompt.ts                 # Agent system prompts (6 roles + 10 domains)
     autoformalize.ts                # Autoformalization: candidate voting (AUTOFORMALIZE_CANDIDATES) + 6 validation layers (elaborate, refute, non-trivial, back-translate, numeric, relevance); the non-trivial layer judges the statement against the original problem text (a faithful statement of an easy problem such as n + 0 = n passes; only a formalization that became easier than the problem fails)
@@ -192,6 +192,8 @@ lib/
     sanitize.ts                     # Forbidden-command filter (#eval, elab, unsafe, axiom, …) + statement validation
     axioms.ts                       # `#print axioms` / `#check` parsing, standard-axiom allowlist
     trivial-proof.ts                # Single-tactic proof attempts (with full verification)
+    goal-statement.ts               # A printed goal state → lemma statement (hypotheses as binders with the same names, inaccessible names renamed, instances as [..], universes as Type*), for proving a sketch hole on its own
+    statement-prop.ts               # Binder-form theorem type → one proposition (∀ binders, goal); top-level colon split
     modernize.ts                    # Rewrites removed/Lean 3 syntax in model output (∑ x in s → ∑ x ∈ s, cases … with x → cases', λ x, e)
     feedback.ts                     # Verification result → proof-relative feedback for the model
     suggest.ts                      # exact?/apply?/simp? probes at the failing goal ("Try this" parsing)
@@ -218,7 +220,9 @@ bench/
   minif2f-*.json                    # Downloaded by `npm run bench:fetch` (git-ignored)
 
 scripts/
-  bench.ts                          # Prover benchmark: cascade/whole_proof/sketch/stepwise, budgets, proved-by + failure taxonomy; --concurrency n (runPool; LEAN_REPL_WORKERS defaults to n), --max-cost usd (no new theorems once spent; the rest listed as skipped), --memory readonly (default: recall but do not store, so runs do not feed later runs) | write | off; environment failures (`infra_error`: model call failed, a Lean worker hung on the statement check) are retried once at the end (--no-retry); statements are repaired on load (fixStatement); result JSON records concurrency, memory, commit, models, elapsed time
+  bench.ts                          # Prover benchmark: cascade/whole_proof/sketch/stepwise, budgets, proved-by + failure taxonomy; --cost-cap usd per theorem (default PROOF_COST_CAP_USD; failure budget_exhausted, row cost_capped), --early-stop (row early_stop; later stages skipped), --no-retrieval; in the cascade sketch-and-fill runs on hard theorems only (SKETCH_HARD_ONLY=false: all); --concurrency n (runPool; LEAN_REPL_WORKERS defaults to n), --max-cost usd (no new theorems once spent; the rest listed as skipped), --memory readonly (default: recall but do not store, so runs do not feed later runs) | write | off; environment failures (`infra_error`: model call failed, a Lean worker hung on the statement check) are retried once at the end (--no-retry); statements are repaired on load (fixStatement); result JSON records concurrency, memory, commit, models, elapsed time
+  bench-ablation.ts                  # `npm run bench:ablation`: the benchmark once per variant (base, no_retrieval, seed_premises, whole_proof, early_stop, sketch, normal, cost_cap) on the same deterministic sample of miniF2F theorems (every k-th per difficulty, --sample 60) → bench/ABLATION.md: proved, cost, cost per proof, gained/lost vs base, marginal theorems per dollar
+  bench-formalize.ts                # `npm run bench:formalize`: miniF2F informal statements → autoformalize → compared with the official Lean statement (same signature / hammer proves official ↔ ours / not shown / refuted) → bench/FORMALIZATION.md: faithful share, acceptance, layers too strict or too loose, failed layers, cost
   bench-report.ts                   # Result JSON files → Markdown (bench/BASELINE.md): one row per run, proved-by / failures / cost of failures per run, gained and lost theorems between consecutive runs
   bench-baseline.ts                 # `npm run bench:baseline`: retest the first 20 miniF2F theorems (normal budget), then all 244 (low budget, --max-cost 12), 3 at a time, then BASELINE.md from every miniF2F result; `--rerun <full.json>` re-runs only the theorems a fix touched and merges them; `--prover <merged.json>` tries the configured prover on that run's failures (bench --only-failed) and merges into "<full>-prover.json"; runs under `caffeinate -i` on macOS
   prover-check.ts                   # `npm run prover:check`: one call to the prover endpoint (model/host, prompt style, latency, tokens/s, cost, proof read back, verified when Lean is available)
@@ -287,7 +291,8 @@ See `.env.example`:
 - `LLM_PROVER_*` (incl. `LLM_PROVER_STEPWISE`), `LLM_PLANNER_*`, `LLM_VISION_*`, `LLM_PRICES` — role endpoints and cost table (vision: reads scans/photos imported into banks; `BANK_OCR_MAX_PAGES` caps pages read per import, default 30; `BANK_OCR_CONCURRENCY` pages read at once, default 5)
 - `LLM_REASONING_EFFORT`, `LLM_<ROLE>_REASONING_EFFORT`, `LLM_REASONING_TOKEN_BUDGET`, `LLM_SAMPLING_PARAMS`, `LLM_MAX_TOKENS_PARAM`, `LLM_REASONING_PARAM` — OpenAI reasoning-model dialect (GPT-5.x/GPT-6/o-series auto-detected: no temperature/top_p, `max_completion_tokens`, `reasoning_effort`; on openrouter.ai `max_tokens` + `reasoning: { effort }`)
 - `WHOLE_PROOF_*`, `LEAN_SUGGEST_TIMEOUT_MS`, `LOOGLE_URL` — whole-proof loop, library search
-- `PROOF_BUDGET`, `LEAN_TACTIC_TIMEOUT_MS`, `LEAN_HAMMER_BUDGET_MS`, `GOAL_SEARCH_*`, `SKETCH_*` — budgets, hammer, goal-level search, sketch-and-fill
+- `PROOF_BUDGET`, `LEAN_TACTIC_TIMEOUT_MS`, `LEAN_HAMMER_BUDGET_MS`, `GOAL_SEARCH_*`, `SKETCH_*` (incl. `SKETCH_INFORMAL`, `SKETCH_HOLE_PROVER`, `SKETCH_HARD_ONLY`) — budgets, hammer, goal-level search, sketch-and-fill
+- `PROOF_COST_CAP_USD` (per solve / per benchmark theorem), `PROOF_EARLY_STOP` — spend limits
 - `PREMISES_ENABLED`, `PREMISE_INDEX_PATH`, `PREMISES_TOP_K`, `PROOF_MEMORY_*` — premise retrieval and proof memory
 - `AUTOFORMALIZE_CANDIDATES`, `REFUTE_ENABLED`, `REFUTE_TIMEOUT_MS`, `REFUTE_TRIALS` — formalization voting and counterexample search
 - `PROOF_SEARCH_SAMPLES`, `PROOF_SEARCH_BEAM`, `PROOF_SEARCH_MAX_EXPANSIONS`, `SOLVE_MULTI_AGENT` — stepwise search
@@ -308,6 +313,8 @@ npm run bench -- --samples 4   # Prover benchmark over bench/theorems.json (LLM 
 npm run bench:fetch            # Download miniF2F → bench/minif2f-test.json; then: npm run bench -- --file bench/minif2f-test.json --limit 20
 npm run bench:baseline         # Retest 20 + miniF2F 244 (low budget, cost cap) → bench/BASELINE.md (spends real LLM money)
 npm run bench:report -- bench/results/*.json --out bench/BASELINE.md
+npm run bench:ablation -- --variants base,no_retrieval,early_stop,sketch   # ablations on 60 theorems → bench/ABLATION.md
+npm run bench:formalize -- --sample 40   # autoformalization vs official miniF2F statements → bench/FORMALIZATION.md
 npm run premises:build         # Index the sandbox's Mathlib for premise retrieval (minutes; needs the built sandbox)
 ```
 

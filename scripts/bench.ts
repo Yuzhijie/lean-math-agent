@@ -8,13 +8,18 @@
  *                    [--budget low|normal|high] [--samples 4] [--rounds 2]
  *                    [--only id,id] [--difficulty easy|medium|hard] [--limit n] [--offset n]
  *                    [--json path] [--no-mathlib] [--no-retrieval]
- *                    [--concurrency n] [--max-cost usd] [--memory readonly|write|off]
+ *                    [--concurrency n] [--max-cost usd] [--cost-cap usd] [--early-stop] [--memory readonly|write|off]
  *
  *   --concurrency n   theorems proved at once (default 1); LEAN_REPL_WORKERS defaults to n
  *   --max-cost usd    stop starting new theorems once the run has spent this much (estimated
  *                     from LLM_PRICES); the theorems not started are listed as skipped
  *   --only-failed f   only the theorems the result file f did not prove
  *   --no-retry        do not re-run theorems that failed for environment reasons (infra_error)
+ *   --cost-cap usd    per-theorem cost cap (default PROOF_COST_CAP_USD): once a theorem has spent this,
+ *                     no more model calls for it (failure "budget_exhausted")
+ *   SKETCH_HARD_ONLY  in the cascade, sketch-and-fill runs on hard theorems only (default; "false" = all)
+ *   --early-stop      give up after the first whole-proof round when no sample got past its first
+ *                     tactic, and skip sketch-and-fill for it (PROOF_EARLY_STOP=true)
  *   --memory          proof memory: "readonly" (default) recalls stored proofs but does not add
  *                     the run's own, so results do not depend on order or earlier runs of the same
  *                     file; "write" also stores them; "off" disables recall
@@ -33,7 +38,7 @@ import path from "node:path";
 import { checkLeanAvailable, verifyLeanSource } from "../lib/lean/sandbox";
 import { fixStatement } from "./fetch-benchmark";
 import { shutdownReplPool } from "../lib/lean/repl";
-import { withUsageScope, type RunMetrics } from "../lib/llm/usage-tracker";
+import { costCapReached, proofCostCapUsd, withUsageScope, type RunMetrics } from "../lib/llm/usage-tracker";
 import { proveWholeTheorem, type WholeProofResult } from "../lib/prover/whole-proof";
 import { proveBySketch, type SketchResult } from "../lib/prover/sketch";
 import { budgetPreset, parseBudget } from "../lib/prover/budget";
@@ -108,6 +113,10 @@ interface BenchRow {
   skipped?: boolean;
   /** Run a second time after an environment failure (the row is the second attempt). */
   retried?: boolean;
+  /** Whole proof gave up after round 0 (--early-stop). */
+  early_stop?: boolean;
+  /** The theorem's cost cap stopped it (--cost-cap). */
+  cost_capped?: boolean;
 }
 
 /** Run `fn` over `items` with at most `n` running at once; results keep the input order. */
@@ -165,8 +174,10 @@ export function classifyFailure(input: { log?: string; summary?: string; timedOu
   return { kind: first.kind as FailureKind, detail };
 }
 
-function wholeProofFailure(r: WholeProofResult): { kind: FailureKind; detail: string } {
+export function wholeProofFailure(r: WholeProofResult): { kind: FailureKind; detail: string } {
   if (r.unavailable) return { kind: "lean_unavailable", detail: r.log.split("\n")[0] ?? "" };
+  // Our own cost cap, not the model being unreachable: never an infra_error (which would be retried).
+  if (r.costCapped && !r.candidates.length) return { kind: "budget_exhausted", detail: "cost cap reached" };
   const samplingFailed = r.log.split("\n").find((l) => /sampling failed:/.test(l));
   if (r.candidates.length === 0 && samplingFailed) return { kind: "infra_error", detail: samplingFailed.replace(/^.*sampling failed:\s*/, "model call failed: ").slice(0, 160) };
   if (r.candidates.length === 0) return { kind: "no_candidate", detail: "no parseable proof was sampled" };
@@ -215,6 +226,13 @@ async function main(): Promise<void> {
   const concurrency = Math.max(1, Math.floor(Number(arg("concurrency") ?? 1)) || 1);
   const maxCost = arg("max-cost") !== undefined ? Number(arg("max-cost")) : undefined;
   const memory = (arg("memory") ?? "readonly") as "readonly" | "write" | "off";
+  const costCap = arg("cost-cap") !== undefined ? Number(arg("cost-cap")) : proofCostCapUsd();
+  if (costCap !== undefined && !(costCap > 0)) {
+    console.error(`--cost-cap must be a positive number of dollars (got ${arg("cost-cap")})`);
+    process.exit(2);
+  }
+  const earlyStop = flag("early-stop") || process.env.PROOF_EARLY_STOP === "true";
+  if (earlyStop) process.env.PROOF_EARLY_STOP = "true";
   if (!["readonly", "write", "off"].includes(memory)) {
     console.error(`--memory must be readonly, write or off (got ${memory})`);
     process.exit(2);
@@ -241,6 +259,9 @@ async function main(): Promise<void> {
       (opens?.length ? ` opens=${opens.join(" ")}` : "") +
       (concurrency > 1 ? ` concurrency=${concurrency} repl_workers=${process.env.LEAN_REPL_WORKERS}` : "") +
       (maxCost !== undefined ? ` max_cost=$${maxCost}` : "") +
+      (costCap !== undefined ? ` cost_cap=$${costCap}/theorem` : "") +
+      (earlyStop ? " early_stop" : "") +
+      (retrieval ? "" : " no_retrieval") +
       ` memory=${memory}`,
   );
 
@@ -314,11 +335,17 @@ async function main(): Promise<void> {
             return { ...base, ok: true, proved_by: "whole_proof", rounds: r.rounds, samples: r.samples, tactics: r.tactics, ...fromMetrics(metrics(), started) };
           }
           failure = wholeProofFailure(r);
-          if (r.unavailable) return { ...base, ok: false, proved_by: "none", rounds: r.rounds, samples: r.samples, failure, ...fromMetrics(metrics(), started) };
+            if (r.unavailable) return { ...base, ok: false, proved_by: "none", rounds: r.rounds, samples: r.samples, failure, ...fromMetrics(metrics(), started) };
+          // Early stop / cost cap: the later stages are skipped too.
+          if (r.gaveUpEarly || r.costCapped || costCapReached())
+            return { ...base, ok: false, proved_by: "none", rounds: r.rounds, samples: r.samples, failure, ...(r.gaveUpEarly ? { early_stop: true } : {}), ...(r.costCapped || costCapReached() ? { cost_capped: true } : {}), ...fromMetrics(metrics(), started) };
         }
         // 3. Sketch-and-fill.
         let holes: string | undefined;
-        if (strategy === "sketch" || (strategy === "cascade" && (preset.sketchStage || process.env.SKETCH_ENABLED === "true"))) {
+        // In the cascade, sketch-and-fill runs on hard theorems only (SKETCH_HARD_ONLY=false: on all of them):
+        // on easy and medium ones it proved nothing in three baseline runs.
+        const sketchHere = process.env.SKETCH_HARD_ONLY === "false" || !t.difficulty || t.difficulty === "hard";
+        if (strategy === "sketch" || (strategy === "cascade" && sketchHere && (preset.sketchStage || process.env.SKETCH_ENABLED === "true"))) {
           const r = await proveBySketch({
             sessionId: `bench-${t.id}`,
             theoremName: t.name,
@@ -330,7 +357,7 @@ async function main(): Promise<void> {
             opens,
             config: { ...preset.sketch, useMathlib, goalSearch: { ...preset.goalSearch, useMathlib } },
           });
-          holes = `${r.holesSolved}/${r.holes}`;
+          holes = `${r.holesSolved}/${r.holes}${r.holesByProver ? ` (${r.holesByProver} by the prover)` : ""}`;
           if (r.ok) {
             void remember({ theoremName: t.name, theoremType: t.type, tactics: r.tactics ?? "", strategy: "sketch", problemText: t.informal });
             return { ...base, ok: true, proved_by: "sketch", rounds: wholeRounds, samples: wholeSamples, holes, tactics: r.tactics, ...fromMetrics(metrics(), started) };
@@ -341,9 +368,10 @@ async function main(): Promise<void> {
         return { ...base, ok: false, proved_by: "none", rounds: wholeRounds, samples: wholeSamples, holes, failure: failure ?? { kind: "other", detail: "" }, ...fromMetrics(metrics(), started) };
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
+        if (costCapReached()) return { ...base, ok: false, proved_by: "none", cost_capped: true, failure: { kind: "budget_exhausted", detail: "cost cap reached" }, ...fromMetrics(metrics(), started) };
         return { ...base, ok: false, proved_by: "none", error: msg, failure: { kind: "llm_error", detail: msg.slice(0, 160) }, ...fromMetrics(metrics(), started) };
       }
-    });
+    }, { costCapUsd: costCap });
     spent += row.cost ?? 0;
     console.log(
       `${row.ok ? "PASS" : "FAIL"}  ${row.id.padEnd(28)} ${row.difficulty.padEnd(6)} ${row.proved_by.padEnd(11)} ` +
@@ -352,6 +380,8 @@ async function main(): Promise<void> {
         ` lean=${row.lean_verifications}` +
         (row.rounds !== undefined ? ` rounds=${row.rounds}` : "") +
         (row.holes ? ` holes=${row.holes}` : "") +
+        (row.early_stop ? " early-stop" : "") +
+        (row.cost_capped ? " capped" : "") +
         (row.failure ? `  [${row.failure.kind}] ${row.failure.detail.slice(0, 70)}` : ""),
     );
     return row;
@@ -411,6 +441,8 @@ async function main(): Promise<void> {
         memory,
         retrieval,
         max_cost: maxCost,
+        ...(costCap !== undefined ? { theorem_cost_cap: costCap } : {}),
+        ...(earlyStop ? { early_stop: true } : {}),
         commit: gitCommit(),
         model: process.env.LLM_MODEL,
         prover_model: process.env.LLM_PROVER_MODEL,

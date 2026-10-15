@@ -134,7 +134,7 @@ describeLean("proveBySketch (real REPL)", { timeout: LEAN_TEST_TIMEOUT }, () => 
       sessionId: "sketch-test",
       theoremName: "t",
       theoremType: type,
-      config: { samples: 1, repairs: 0, useMathlib: false, goalSearch: { useMathlib: false } },
+      config: { samples: 1, repairs: 0, useMathlib: false, informalFirst: false, holeProver: false, goalSearch: { useMathlib: false } },
     });
     expect(r.ok).toBe(true);
     expect(r.holes).toBe(2);
@@ -161,7 +161,7 @@ describeLean("proveBySketch (real REPL)", { timeout: LEAN_TEST_TIMEOUT }, () => 
       sessionId: "sketch-repair",
       theoremName: "t",
       theoremType: type,
-      config: { samples: 1, repairs: 1, useMathlib: false, goalSearch: { useMathlib: false } },
+      config: { samples: 1, repairs: 1, useMathlib: false, informalFirst: false, holeProver: false, goalSearch: { useMathlib: false } },
     });
     expect(calls).toBe(2);
     expect(r.ok).toBe(true);

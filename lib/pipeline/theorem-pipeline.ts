@@ -22,6 +22,7 @@ import { enumerateMethods } from "../llm/enumerate";
 import { generateNLSolution, generateNLTheoremSolution } from "../llm/nl-solution";
 import { planSteps } from "../llm/plan";
 import { budgetPreset } from "../prover/budget";
+import { costCapReached, scopeCostCap } from "../llm/usage-tracker";
 import { buildProverContext, rememberVerifiedProof } from "../prover/context";
 import { proveBySketch, sketchEnabled } from "../prover/sketch";
 import { proveWholeTheorem, wholeProofEnabled } from "../prover/whole-proof";
@@ -342,7 +343,8 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
   // SKETCH_ENABLED=true forces the stage on the low budget too; =false turns it off everywhere.
   const sketchOn = opts.sketch ?? (process.env.SKETCH_ENABLED === "true" || (sketchEnabled() && preset.sketchStage));
   let sketchSummary: string | undefined;
-  if (sketchOn && preflight.status !== "unavailable" && process.env.LEAN_SERVER_MODE !== "spawn") {
+  if (sketchOn && costCapReached()) emit("sketch", lt(`已达到本题费用上限（$${scopeCostCap()}），跳过骨架分解`, `Cost cap for this problem reached ($${scopeCostCap()}); skipping sketch decomposition`));
+  else if (sketchOn && preflight.status !== "unavailable" && process.env.LEAN_SERVER_MODE !== "spawn") {
     updateSession(session.id, { pipeline_stage: "solving" });
     emit("sketch", lt("骨架分解：生成带 sorry 的证明骨架，逐个子目标求解...", "Sketch decomposition: generating proof sketches with sorry holes and solving each subgoal..."));
     try {
@@ -416,6 +418,26 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
     } catch (e) {
       emit("sketch", lt(`⚠️ 骨架分解出错: ${e instanceof Error ? e.message : "未知错误"}`, `⚠️ Sketch decomposition error: ${e instanceof Error ? e.message : "unknown error"}`));
     }
+  }
+
+  // PROOF_COST_CAP_USD: the automatic stages spent this problem's budget — stop before the stepwise search.
+  if (costCapReached()) {
+    const reason = lt(`已达到本题费用上限（$${scopeCostCap()}），停止证明搜索`, `Cost cap for this problem reached ($${scopeCostCap()}); proof search stopped`);
+    updateSession(session.id, { build_status: "fail", pipeline_stage: "complete" });
+    emit("complete", `❌ ${reason}`);
+    return {
+      status: 200,
+      body: {
+        ...baseBody,
+        nl_solution: nlSolution,
+        fully_verified: false,
+        build_status: "fail",
+        failure_reason: reason,
+        cost_capped: true,
+        whole_proof: wholeProofSummary ? { summary: wholeProofSummary, ok: false } : undefined,
+        sketch: sketchSummary ? { summary: sketchSummary, ok: false } : undefined,
+      },
+    };
   }
 
   // ── 5. Methods (single enumerator or multi-agent strategists + critic) ─

@@ -1,11 +1,13 @@
 import { z } from "zod";
 import { isOpenAiReasoningModel, loadConfig, LlmConfigError, type LlmConfig, type ModelEndpoint, type ModelRole, type ReasoningEffort } from "./config";
 import { buildCacheKey, getGlobalCache } from "./cache";
-import { parseAndRecordUsage, recordLatency, setPriceTable, type RawUsage } from "./usage-tracker";
+import { costCapReached, parseAndRecordUsage, recordLatency, scopeCostCap, setPriceTable, type RawUsage } from "./usage-tracker";
 import { logLlm, logDebug, type LlmLogEntry } from "./logger";
 import { localizeMessages, outputLocale } from "./output-locale";
 
 export class LlmError extends Error {}
+/** The usage scope spent its cost cap (PROOF_COST_CAP_USD); not retried, not a fault of the model. */
+export class CostCapError extends LlmError {}
 
 /** Sampling / routing options shared by every entry point. */
 export interface CallOptions {
@@ -311,6 +313,7 @@ async function rawChatMessages(
     throw e;
   }
   setPriceTable(config.prices);
+  if (costCapReached()) throw new CostCapError(`cost cap reached ($${scopeCostCap()} for this run)`);
   const role: ModelRole = options.role ?? "general";
   const temp = options.temperature ?? 0.2;
   const requestTimeout = options.timeoutMs ?? config.timeoutMs;

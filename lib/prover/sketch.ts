@@ -12,20 +12,26 @@
  * Closing tactic scripts are spliced back into the sketch text and the
  * result goes through the strict verifier (statement lock, axioms, no
  * sorry) like any other proof.
+ *
+ * 2026-10 rework (the miniF2F baselines closed 1 hole in 54 sketches): the general model first writes
+ * a numbered informal proof (high effort) and the sketch follows it, one `have` per step; a hole the
+ * hammer leaves open goes to the dedicated prover as a lemma of its own (its goal state turned back into
+ * a statement, see goal-statement.ts) before the goal-level search.
  */
 import { chatProverRole } from "../llm/config";
+import { goalToStatement } from "../lean/goal-statement";
 import { assembleLeanSource } from "../lean/assemble";
 import { hammer } from "../lean/hammer";
 import { ProofSession, type ProofHole } from "../lean/proof-state";
 import { ReplError } from "../lean/repl";
-import type { LeanVerifyResult } from "../lean/sandbox";
+import { verifyLeanSource, type LeanVerifyResult } from "../lean/sandbox";
 import { splitHeader } from "../lean/sanitize";
-import { LlmError, sampleText } from "../llm/client";
-import { SKETCH_SYSTEM, sketchUserMessage } from "../llm/prompts";
-import { expectedLatencyMs } from "../llm/usage-tracker";
+import { chatText, LlmError, sampleText } from "../llm/client";
+import { INFORMAL_PROOF_SYSTEM, SKETCH_SYSTEM, informalProofUserMessage, sketchUserMessage } from "../llm/prompts";
+import { costCapReached, expectedLatencyMs } from "../llm/usage-tracker";
 import { lt } from "../llm/output-locale";
 import { goalSearch, type GoalSearchConfig } from "../search/goal-search";
-import { extractTactics } from "./whole-proof";
+import { extractTactics, proveWholeTheorem } from "./whole-proof";
 
 export interface SketchConfig {
   /** Sketches sampled per round (SKETCH_SAMPLES, default 2). */
@@ -45,6 +51,13 @@ export interface SketchConfig {
    * would burn the whole stage budget.
    */
   maxLlmHoles: number;
+  /** Write a numbered informal proof first and sketch from it (SKETCH_INFORMAL, default true). */
+  informalFirst: boolean;
+  /**
+   * Holes the hammer leaves open go to the whole-proof prover as lemmas before goal search
+   * (SKETCH_HOLE_PROVER: "auto" = when a dedicated prover is configured (LLM_PROVER_MODEL), "on", "off").
+   */
+  holeProver: boolean;
   useMathlib: boolean;
   goalSearch: Partial<GoalSearchConfig>;
 }
@@ -62,6 +75,10 @@ export function loadSketchConfig(overrides: Partial<SketchConfig> = {}): SketchC
     timeBudgetMs: overrides.timeBudgetMs ?? num("SKETCH_BUDGET_MS", 300_000),
     holeBudgetMs: overrides.holeBudgetMs ?? num("SKETCH_HOLE_BUDGET_MS", 60_000),
     maxLlmHoles: Math.max(0, Math.floor(overrides.maxLlmHoles ?? num("SKETCH_MAX_LLM_HOLES", 4))),
+    informalFirst: overrides.informalFirst ?? process.env.SKETCH_INFORMAL !== "false",
+    holeProver:
+      overrides.holeProver ??
+      (process.env.SKETCH_HOLE_PROVER === "on" ? true : process.env.SKETCH_HOLE_PROVER === "off" ? false : !!(process.env.LLM_PROVER_MODEL || process.env.LLM_PROVER_MODELS)),
     useMathlib: overrides.useMathlib ?? true,
     goalSearch: overrides.goalSearch ?? {},
   };
@@ -86,7 +103,11 @@ export interface SketchResult {
   sketches: number;
   holes: number;
   holesSolved: number;
+  /** Holes closed by the whole-proof prover (the rest by the hammer or goal search). */
+  holesByProver: number;
   llmCalls: number;
+  /** The informal proof the sketches followed, when one was written. */
+  informalProof?: string;
   log: string;
   durationMs: number;
 }
@@ -116,7 +137,9 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
   let holesTotal = 0;
   let holesSolved = 0;
   let llmCalls = 0;
+  let holesByProver = 0;
   let unavailable = false;
+  let informalProof: string | undefined;
 
   const done = (partial: Partial<SketchResult>): SketchResult => ({
     ok: false,
@@ -124,7 +147,9 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
     sketches,
     holes: holesTotal,
     holesSolved,
+    holesByProver,
     llmCalls,
+    ...(informalProof ? { informalProof } : {}),
     log: log.join("\n"),
     durationMs: Date.now() - started,
     ...partial,
@@ -133,9 +158,38 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
   let previousErrors: string | undefined;
   const seen = new Set<string>();
 
+  // Informal proof first (unless the caller gave one, e.g. the pipeline's natural-language solution).
+  if (cfg.informalFirst && !args.sketchHint && !costCapReached()) {
+    progress({ stage: "sampling", detail: lt("先写自然语言证明…", "Writing an informal proof first…") });
+    try {
+      informalProof = (
+        await chatText({
+          messages: [
+            { role: "system", content: INFORMAL_PROOF_SYSTEM },
+            { role: "user", content: informalProofUserMessage({ theoremType: args.theoremType, problemText: args.problemText, goalState: args.initialGoal }) },
+          ],
+          role: "planner",
+          reasoningEffort: "high",
+          temperature: 0.3,
+          maxTokens: 6000,
+          timeoutMs: Math.max(30_000, Math.min(timeLeft() / 2, 240_000)),
+        })
+      ).trim().slice(0, 4000);
+      llmCalls++;
+      log.push(`informal proof: ${informalProof.split("\n").filter((l) => l.trim()).length} line(s)`);
+    } catch (e) {
+      if (e instanceof LlmError && /LLM_API_KEY/.test(e.message)) throw e;
+      log.push(`informal proof failed: ${(e instanceof Error ? e.message : String(e)).slice(0, 160)}`);
+    }
+  }
+
   for (let round = 0; round <= cfg.repairs; round++) {
     if (timeLeft() < expectedLatencyMs("prover") * 0.8) {
       log.push(`round ${round}: not enough time left for another sketch round`);
+      break;
+    }
+    if (costCapReached()) {
+      log.push(`round ${round}: cost cap reached`);
       break;
     }
     progress({ stage: "sampling", detail: lt(`采样 ${cfg.samples} 个证明骨架…`, `Sampling ${cfg.samples} proof sketches…`) });
@@ -152,6 +206,7 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
               goalState: args.initialGoal,
               problemText: args.problemText,
               sketchHint: args.sketchHint,
+              informalProof,
               previousErrors,
               premises: args.premises,
             }),
@@ -244,6 +299,47 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
             log.push(`  hole ${i + 1}: ${Math.round(Math.max(0, budget) / 1000)}s left is not enough for a search`);
             break;
           }
+          // The dedicated prover on the hole as a lemma of its own (its tactics see the same names).
+          if (cfg.holeProver) {
+            const lemma = goalToStatement(hole.goal);
+            // The printed goal does not always reparse: check the lemma before paying for samples.
+            const elaborates =
+              lemma &&
+              (
+                await verifyLeanSource(
+                  args.sessionId,
+                  assembleLeanSource({ theoremName: `${args.theoremName}_hole${i + 1}`, theoremType: lemma.statement, stepCodes: ["sorry"], useMathlib: cfg.useMathlib, opens: args.opens }),
+                  { allowSorry: true, checkAxioms: false },
+                )
+              ).ok;
+            if (lemma && !elaborates) log.push(`  hole ${i + 1}: its goal does not elaborate as a lemma; goal search only`);
+            if (lemma && elaborates) {
+              progress({ stage: "hole", detail: lt(`证明模型处理子目标 ${i + 1}/${holes.length}: ${lastLine(hole.goal)}`, `Prover on subgoal ${i + 1}/${holes.length}: ${lastLine(hole.goal)}`) });
+              const pr = await proveWholeTheorem({
+                sessionId: args.sessionId,
+                theoremName: `${args.theoremName}_hole${i + 1}`,
+                theoremType: lemma.statement,
+                problemText: args.problemText,
+                opens: args.opens,
+                config: { samples: cfg.samples, rounds: 1, timeBudgetMs: budget, useMathlib: cfg.useMathlib, suggest: false },
+              });
+              llmCalls += pr.samples;
+              if (pr.ok && pr.tactics) {
+                scripts[i] = pr.tactics.split("\n");
+                holesSolved++;
+                holesByProver++;
+                log.push(`  hole ${i + 1} closed by the prover`);
+                continue;
+              }
+              log.push(`  hole ${i + 1}: prover did not close it${pr.candidates.length ? ` (${pr.candidates[0].summary.slice(0, 80)})` : ""}`);
+            } else if (!lemma) log.push(`  hole ${i + 1}: goal state could not be stated as a lemma`);
+          }
+          const rest = Math.min(cfg.holeBudgetMs, Math.floor(timeLeft() / (open.length - k)));
+          if (rest < expectedLatencyMs("prover") * 0.8) {
+            failed = true;
+            log.push(`  hole ${i + 1}: ${Math.round(Math.max(0, rest) / 1000)}s left is not enough for a search`);
+            break;
+          }
           progress({
             stage: "hole",
             detail: lt(
@@ -258,7 +354,7 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
             theoremType: args.theoremType,
             problemText: args.problemText,
             premises: args.premises,
-            config: { ...cfg.goalSearch, useMathlib: cfg.useMathlib, timeBudgetMs: budget },
+            config: { ...cfg.goalSearch, useMathlib: cfg.useMathlib, timeBudgetMs: rest },
           });
           llmCalls += r.llmCalls;
           if (!r.ok || !r.tactics) {

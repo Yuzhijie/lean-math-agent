@@ -192,6 +192,29 @@ describe("proveWholeTheorem", () => {
     expect(suggestMock).not.toHaveBeenCalled();
   });
 
+  it("early stop: gives up after round 0 when no sample got past its first tactic", async () => {
+    sampleMock.mockResolvedValue(["```lean\ntheorem amgm (x y : ℝ) : x * y ≤ (x ^ 2 + y ^ 2) / 2 := by\n  simp\n```"]);
+    verifyMock.mockResolvedValue(result({ messages: [{ severity: "error", line: 7, column: 2, message: "simp made no progress" }] }));
+    const r = await proveWholeTheorem({ sessionId: "s", theoremName: NAME, theoremType: TYPE, config: { samples: 1, rounds: 2, suggest: false, earlyStop: true } });
+    expect(r.gaveUpEarly).toBe(true);
+    expect(r.candidates[0].progress).toBe(0);
+    expect(sampleMock).toHaveBeenCalledTimes(1);
+    expect(r.log).toContain("giving up early");
+  });
+
+  it("early stop: keeps repairing when a sample got somewhere", async () => {
+    sampleMock
+      .mockResolvedValueOnce(["```lean\ntheorem amgm (x y : ℝ) : x * y ≤ (x ^ 2 + y ^ 2) / 2 := by\n  have h := sq_nonneg (x - y)\n  linarith\n```"])
+      .mockResolvedValueOnce(["```lean\ntheorem amgm (x y : ℝ) : x * y ≤ (x ^ 2 + y ^ 2) / 2 := by\n  nlinarith [sq_nonneg (x - y)]\n```"]);
+    verifyMock.mockImplementation(async (_id: string, source: string) =>
+      source.includes("nlinarith") ? OK : result({ messages: [{ severity: "error", line: 8, column: 2, message: "linarith failed" }] }),
+    );
+    const r = await proveWholeTheorem({ sessionId: "s", theoremName: NAME, theoremType: TYPE, config: { samples: 1, rounds: 1, suggest: false, earlyStop: true } });
+    expect(r.candidates[0].progress).toBe(1);
+    expect(r.gaveUpEarly).toBeUndefined();
+    expect(r.ok).toBe(true);
+  });
+
   it("reports Lean unavailable and skips repairs", async () => {
     sampleMock.mockResolvedValue(["```lean\ntheorem amgm (x y : ℝ) : x * y ≤ (x ^ 2 + y ^ 2) / 2 := by\n  nlinarith\n```"]);
     verifyMock.mockResolvedValue(result({ status: "unavailable", log: "no lake" }));

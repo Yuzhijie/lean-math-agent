@@ -23,6 +23,8 @@ export interface ResultRow {
   retried?: boolean;
   /** Replaced by a later re-run (bench:merge). */
   rerun?: boolean;
+  early_stop?: boolean;
+  cost_capped?: boolean;
 }
 
 export interface ResultFile {
@@ -37,6 +39,9 @@ export interface ResultFile {
   commit?: string;
   model?: string;
   prover_model?: string;
+  retrieval?: boolean;
+  theorem_cost_cap?: number;
+  early_stop?: boolean;
   pass: number;
   total: number;
   skipped?: string[];
@@ -101,7 +106,15 @@ export function renderReport(runs: NamedResult[], title = "Prover benchmark base
   for (const { name, result: r } of runs) {
     const s = stats(r);
     out.push(`## ${name}`, "");
-    const model = [r.model && `model ${r.model}`, r.prover_model && `prover ${r.prover_model}`, r.memory && `memory ${r.memory}`, r.max_cost !== undefined && `cost cap $${r.max_cost}`]
+    const model = [
+      r.model && `model ${r.model}`,
+      r.prover_model && `prover ${r.prover_model}`,
+      r.memory && `memory ${r.memory}`,
+      r.max_cost !== undefined && `cost cap $${r.max_cost}`,
+      r.theorem_cost_cap !== undefined && `$${r.theorem_cost_cap} per theorem`,
+      r.early_stop && "early stop",
+      r.retrieval === false && "no retrieval",
+    ]
       .filter(Boolean)
       .join(" · ");
     if (model) out.push(model, "");
@@ -113,6 +126,9 @@ export function renderReport(runs: NamedResult[], title = "Prover benchmark base
     );
     if (r.skipped?.length) out.push(`- Not run (cost cap): ${r.skipped.length} theorem(s).`);
     const retried = s.ran.filter((x) => x.retried).length;
+    const early = s.ran.filter((x) => x.early_stop).length;
+    const capped = s.ran.filter((x) => x.cost_capped).length;
+    if (early || capped) out.push(`- Stopped early (no sample past its first tactic): ${early}; stopped by the per-theorem cost cap: ${capped}.`);
     if (retried) out.push(`- Retried once after an environment failure (model unreachable or a hung Lean worker): ${retried} theorem(s).`);
     if (r.merged_reruns?.length) {
       const n = s.ran.filter((x) => x.rerun).length;
