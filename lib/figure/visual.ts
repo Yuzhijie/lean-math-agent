@@ -28,6 +28,7 @@ import { figureSpecSchema } from "./spec";
 import { describeSpeech, drawSpeech, speechSchema } from "./speech";
 import { describeStar, drawStar, starSchema } from "./star";
 import { describeTileRow, drawTileRow, tileRowSchema } from "./tiles";
+import { describeStreet, drawStreet, streetSchema } from "./street";
 import { describeReflection, drawReflection, reflectionSchema } from "./reflection";
 
 // ── Style ───────────────────────────────────────────────────────────
@@ -164,7 +165,7 @@ const groupsSchema = z.object({
 });
 const geometrySchema = z.object({ kind: z.literal("geometry"), spec: figureSpecSchema });
 
-const leafSchemas = [clockSchema, numberLineSchema, barChartSchema, pictographSchema, tableSchema, gridShapeSchema, fractionSchema, groupsSchema, geometrySchema, cubeStackSchema, solidSchema, starSchema, speechSchema, tileRowSchema, reflectionSchema] as const;
+const leafSchemas = [clockSchema, numberLineSchema, barChartSchema, pictographSchema, tableSchema, gridShapeSchema, fractionSchema, groupsSchema, geometrySchema, cubeStackSchema, solidSchema, starSchema, speechSchema, tileRowSchema, reflectionSchema, streetSchema] as const;
 export const visualLeafSchema = z.discriminatedUnion("kind", [...leafSchemas]);
 export type VisualLeaf = z.infer<typeof visualLeafSchema>;
 
@@ -203,7 +204,7 @@ const groupSchema = z.object({
 export const visualSpecSchema = z.discriminatedUnion("kind", [...leafSchemas, cardsSchema, groupSchema, svgSchema]);
 export type VisualSpec = z.infer<typeof visualSpecSchema>;
 
-export const VISUAL_KINDS = ["clock", "number_line", "bar_chart", "pictograph", "table", "grid_shape", "fraction", "groups", "geometry", "cube_stack", "solid", "star", "speech", "tile_row", "reflection", "cards", "group", "svg"] as const;
+export const VISUAL_KINDS = ["clock", "number_line", "bar_chart", "pictograph", "table", "grid_shape", "fraction", "groups", "geometry", "cube_stack", "solid", "star", "speech", "tile_row", "reflection", "street", "cards", "group", "svg"] as const;
 
 /** Every figure in a spec: itself, the parts of a group and the figures on cards. */
 export function specNodes(spec: unknown): Array<Record<string, unknown> & { kind: string }> {
@@ -616,6 +617,8 @@ function leaf(spec: VisualLeaf, t: Theme): Box & { verified?: boolean; issues?: 
       return drawTileRow(spec, { ...pen(t), accent: t.accent });
     case "reflection":
       return drawReflection(spec, { ...pen(t), accent: t.accent });
+    case "street":
+      return drawStreet(spec, pen(t));
   }
 }
 
@@ -809,6 +812,8 @@ function describeLeaf(s: VisualLeaf): string {
       return describeTileRow(s);
     case "reflection":
       return describeReflection(s);
+    case "street":
+      return describeStreet(s);
   }
 }
 
@@ -846,5 +851,6 @@ export const VISUAL_GUIDE = `FIGURES — when a question needs a figure, add "fi
 - {"kind":"reflection","mode"?:"two_lines"|"one_line","grid":n (2–6),"cells":[[row,col] or [row,col,shading],…] (the shape's squares, 0-based; shading "full" (default) | "empty" | "tl"|"tr"|"bl"|"br" = the square split by a diagonal with that corner's half shaded),"first_line"?:"vertical"|"horizontal","labels"?:{"first"?:"l","second"?:"m"},"targets"?:bool,"cards":["original"|"flip_h"|"flip_v"|"rotate_180"|"rotate_90"|"rotate_270"|"flip_h_squares"|"flip_v_squares",…] (2–6 cards, each the shape after that change; "…_squares" = squares moved as in that reflection but each square's shading not flipped, a common mistake),"choice_labels"?:bool,"show_grid"?:bool,"caption"?:s} — two kinds. mode "two_lines" (default), "reflected in line l, then in line m": the shape top-left, lines l and m (first_line = l; m is the other), empty target boxes (targets, default true), numbered cards underneath; after reflecting in a vertical l the shape is "flip_h" (top-right box), after both "rotate_180" (bottom-right box); exactly one card should show each; the answer names the cards and places. mode "one_line", "flip the shape across the dashed line — which picture shows the new shape?": the shape with ONE dashed mirror line (first_line "vertical" = to its right, "horizontal" = below), and the cards are the answer choices A, B, C, D (2 by 2 for four); the right choice is "flip_h" for a vertical line ("flip_v" for a horizontal one); good wrong choices: "flip_h_squares", "rotate_180", "flip_v", "original"; the question is multiple_choice with one option per card in order ("A", "B", … or "Picture A", …) and the answer is the letter. Use a shape (and shading) with no symmetry; the program checks the answer
 - {"kind":"cards","columns":1-4,"cards":[{"label"?:s,"figure"?:<one of the kinds above>,"icon"?:"circle"|"star"|"square"|"triangle"|"heart"|"apple"|"flower","caption"?:s,"answer_box"?:bool,"checkbox"?:bool}]} — a sheet of cards, e.g. sequence cards each with a clock and an activity, item cards with a name and a price ("label": "$1.50", "caption": "orange juice", a simple "icon" instead of a picture), or answer choices to tick ("columns": 1, "checkbox": true)
 - {"kind":"group","direction"?:"vertical"|"horizontal","parts":[<a kind above or cards>, …] (2–4),"caption"?:s} — several figure areas, e.g. the priced item cards and, under them, the answer choices with checkboxes
+- {"kind":"street","items":[{"thing":"house"|"tree"|"shop"|"school"|"flats"|"bush"|"lamp"|"car"|"pot","colour"?:"blue"|"yellow"|"pink"|"purple"|"green"|"orange"|"white"|"red"|"grey"|"brown"|"black","label"?:s},…] (1–10, from left to right),"ground"?:bool (grass and road, default true),"caption"?:s} — things standing in a row along a street (houses where friends live, a tree between them, shops, a school, cars, flower pots); simple drawings; a label goes under a thing only when the question names it there (e.g. pots "A"–"D"); in an ordering question ("who lives where, from left to right?") leave the houses unlabelled
 - {"kind":"svg","svg":"<svg …>…</svg>","description":"exact description of everything drawn"} — ONLY when no kind above fits; simple line drawing, viewBox about 400×300, no text that gives the answer away; nothing may cover anything else (no shape over a face, a figure or text), and everything stays inside the picture.
 Rules: labels, captions and titles are short texts drawn on the figure (at most 40 characters) — never put a description of the figure in them; the figure must show exactly the information the question gives (no more, no less) and never the answer or anything the student has to work out: in an ordering question do not label the positions with the names asked for, do not write the result, the asked value or the right choice on the picture; refer to it in the stem the way the examples do; prefer the same kind and layout of figure as the examples.`;

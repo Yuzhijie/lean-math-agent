@@ -357,7 +357,7 @@ function profileText(p: TemplateProfile, figures?: FigurePlan, hints: string[] =
     p.stem_structure ? `Stem structure: ${p.stem_structure}` : "",
     p.knowledge_points.length ? `Knowledge points: ${p.knowledge_points.join("; ")}` : "",
     figures?.on
-      ? `Figure: these questions come with a figure${figures.kinds.length ? ` (kinds: ${figures.kinds.join(", ")})` : ""}${figures.layout ? `; layout: ${figures.layout}` : ""}. Give each new question a figure of the same kind and layout in "figure"${figures.kinds.length && !figures.tables && !figures.kinds.includes("table") ? ` — keep the examples' kind (${figures.kinds.join(", ")}); do not turn it into a table or a sentence` : ""}.${
+      ? `Figure: these questions come with a figure${figures.kinds.length ? ` (kinds: ${figures.kinds.join(", ")})` : ""}${figures.layout ? `; layout: ${figures.layout}` : ""}. Give each new question a figure of the same kind and layout in "figure"${figures.kinds.length && !figures.tables && !figures.kinds.includes("table") ? ` — keep the examples' kind (${figures.kinds.join(", ")}); do not turn it into a table or a sentence${figures.kinds.includes("svg") ? '; where the examples\' figure is "svg", use a program kind from the guide when one fits (e.g. "street" for houses or trees in a row) — "svg" only when none does' : ""}` : ""}.${
           figures.tables
             ? ` TABLE: the example questions present their data in a table${figures.tableHint ? ` (e.g. ${figures.tableHint})` : ""}. Every new question MUST include a table of the same kind — new data, same layout — as "figure": {"kind":"table",…} (or a table on a card); do not write the table in the stem and do not replace it by a sentence.`
             : ""
@@ -474,7 +474,7 @@ async function repairFigures(drafts: Draft[], figures: FigurePlan, inLang: <T>(f
   const needs = (d: Draft, i: number): string | undefined => {
     if (d.figureIssue && !d.figure) return d.figureIssue;
     const svg = svgChecks.get(i);
-    if (svg && !svg.ok && !svg.skipped) return `${svg.detail} — draw it with a program kind from the guide if one fits (e.g. "star" for a star cut into pieces, "speech" for someone saying something), not "svg"; if "svg" is the only way, make sure nothing covers anything else`;
+    if (svg && !svg.ok && !svg.skipped) return `${svg.detail} — draw it with a program kind from the guide if one fits (e.g. "star" for a star cut into pieces, "speech" for someone saying something, "street" for houses or trees in a row), not "svg"; if "svg" is the only way, make sure nothing covers anything else`;
     const angles = d.figure?.source === "program" ? angleCheck(d) : null;
     if (angles && !angles.ok) return `${angles.detail} — change the figure's numbers so that they match the question`;
     const leak = answerLeak(d);
