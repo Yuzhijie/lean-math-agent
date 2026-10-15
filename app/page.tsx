@@ -1186,8 +1186,20 @@ export default function Home() {
                       )}
 
                       {leanProofAttempt.failure_reason && (
-                        <div className="rounded-md border border-warning/30 bg-warning/5 px-4 py-3 text-sm text-warning">
-                          {leanProofAttempt.failure_reason}
+                        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-warning/30 bg-warning/5 px-4 py-3 text-sm text-warning">
+                          <span>{leanProofAttempt.failure_reason}</span>
+                          {leanProofAttempt.attempted && !leanProofAttempt.success && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => void attemptLean()}
+                              disabled={!!busy || !state.sessionId}
+                              loading={busy === "lean-attempt"}
+                            >
+                              <Play className="h-3.5 w-3.5" />
+                              {busy === "lean-attempt" ? tr("形式化中…", "Formalizing…") : tr("再试一次", "Try again")}
+                            </Button>
+                          )}
                         </div>
                       )}
 

@@ -12,6 +12,7 @@ const TRIVIAL_TACTICS = [
   "omega",
   "trivial",
   "decide",
+  "decide +kernel",
   "aesop",
   "simp_all",
   "ring",

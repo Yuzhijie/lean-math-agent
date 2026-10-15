@@ -65,3 +65,10 @@ describe("hammerCandidates", () => {
     expect(core).toEqual(["rfl", "decide", "simp", "simp_all", "omega", "trivial", "simp_arith", "exact?"]);
   });
 });
+
+describe("hammerCandidates: closed facts", () => {
+  it("asks the kernel to decide a closed goal (big numbers), not one with hypotheses", () => {
+    expect(hammerCandidates("⊢ Nat.gcd (2 ^ 2024 + 1) (2 ^ 3036 - 1) = 1", true).slice(0, 3)).toEqual(["rfl", "decide", "decide +kernel"]);
+    expect(hammerCandidates("n : Nat\n⊢ n + 0 = n", false)).not.toContain("decide +kernel");
+  });
+});

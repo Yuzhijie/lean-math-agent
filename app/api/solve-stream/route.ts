@@ -1,6 +1,6 @@
 import { getSessionForRequest, createSessionForRequest } from "@/lib/session-access";
 import { NextResponse } from "next/server";
-import { updateSession, saveSessionToDisk } from "@/lib/session-store";
+import { getSession, updateSession, saveSessionToDisk } from "@/lib/session-store";
 import { LlmError } from "@/lib/llm/client";
 import { CancelledError, runJob, TooManyJobsError } from "@/lib/jobs";
 import { admitSolve, recordSpend, runCostCap } from "@/lib/quota";
@@ -291,7 +291,12 @@ async function handleComputational(
     updateSession(session.id, { pipeline_stage: "lean_attempting" });
     emit({ stage: "lean_attempting", type: "progress", detail: lt("尝试 Lean 4 形式化证明...", "Attempting a Lean 4 formal proof...") });
 
-    leanProofAttempt = await attemptLeanFormalization(session.problem_text);
+    const solved = getSession(session.id) ?? session;
+    leanProofAttempt = await attemptLeanFormalization(session.problem_text, {
+      answer: solved.computation_result?.answer || solved.nl_solution?.final_answer,
+      solution: solved.nl_solution,
+      sessionId: session.id,
+    });
     updateSession(session.id, { lean_proof_attempt: leanProofAttempt });
 
     emit({

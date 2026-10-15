@@ -2,7 +2,7 @@ import { getSessionForRequest } from "@/lib/session-access";
 import { NextResponse } from "next/server";
 import { updateSession } from "@/lib/session-store";
 import { withUsageScope } from "@/lib/llm/usage-tracker";
-import { attemptLeanFormalization } from "@/lib/pipeline/lean-attempt";
+import { attemptLeanFormalization, leanAttemptRetryable } from "@/lib/pipeline/lean-attempt";
 import { lt, withRequestLocale } from "@/lib/llm/output-locale";
 
 /**
@@ -19,12 +19,17 @@ async function handlePOST(req: Request) {
   if (!session) {
     return NextResponse.json({ error: lt("会话不存在", "session not found") }, { status: 404 });
   }
-  if (session.lean_proof_attempt?.attempted) {
+  // A proof that succeeded is kept; a failed attempt may be run again.
+  if (!leanAttemptRetryable(session.lean_proof_attempt)) {
     return NextResponse.json({ lean_proof_attempt: session.lean_proof_attempt });
   }
   return withUsageScope(async (metrics) => {
     updateSession(session.id, { pipeline_stage: "lean_attempting" });
-    const attempt = await attemptLeanFormalization(session.problem_text);
+    const attempt = await attemptLeanFormalization(session.problem_text, {
+      answer: session.computation_result?.answer || session.nl_solution?.final_answer,
+      solution: session.nl_solution,
+      sessionId: session.id,
+    });
     updateSession(session.id, { lean_proof_attempt: attempt, pipeline_stage: "complete" });
     return NextResponse.json({ lean_proof_attempt: attempt, metrics: metrics() });
   });

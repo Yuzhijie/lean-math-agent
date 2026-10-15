@@ -92,9 +92,12 @@ describe("Lean formalization is started by hand", () => {
     expect(autoformalize).toHaveBeenCalledTimes(1);
     expect(getSession(sessionId)?.lean_proof_attempt?.attempted).toBe(true);
 
-    // Already attempted: returned as stored, not run again.
+    // The known answer goes to the formalizer.
+    expect(autoformalize.mock.calls[0][0].problemText).toContain("The answer found by solving is: 4");
+
+    // A failed attempt may be run again ("Try again").
     await leanAttempt(post({ session_id: sessionId }));
-    expect(autoformalize).toHaveBeenCalledTimes(1);
+    expect(autoformalize).toHaveBeenCalledTimes(2);
   });
 
   it("still runs automatically when the caller asks for it", async () => {

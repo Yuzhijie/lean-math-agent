@@ -130,6 +130,9 @@ export function hammerCandidates(goal: string, useMathlib: boolean): string[] {
 
   push("rfl");
   push("decide");
+  // Closed arithmetic facts with big numbers (gcd of 2^2024+1 and 2^3036-1): the kernel computes
+  // them with GMP, where the elaborator's `decide` / `rfl` give up on exponents above 256.
+  if (!shape.binders && /^⊢/.test(goal.trim())) push("decide +kernel");
   push(wrap("simp"));
   push(wrap("simp_all"));
   push(wrap("omega"));

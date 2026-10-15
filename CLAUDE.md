@@ -19,7 +19,7 @@ AI-powered Lean 4 math theorem prover + problem solver. Single-page Next.js app.
 | Lean | Lean 4 + Mathlib v4.33.1 + Batteries + Aesop; verification via persistent `leanprover-community/repl` workers (env reuse, sorry goals, tactic mode, axiom + statement checks), `lake env lean` fallback |
 | Compute | Python SymPy HTTP microservice (9 endpoints) |
 | State | Sessions in SQLite (`.data/sessions.db`, each owned by a user; JSON files with SESSION_BACKEND=json), in-memory cache |
-| Tests | Vitest 5 (95 test files) |
+| Tests | Vitest 5 (112 test files) |
 
 ## Project Structure
 
@@ -158,7 +158,7 @@ lib/
     problem-figures.ts              # Figures sent with a problem (bank images, `figures: [{bank_id, asset}]` on /api/solve-stream, /api/solve, /api/enumerate): read once by the vision model into a description appended to problem_text (session.figure_description); failures fall back to text-only with a note
   pipeline/
     theorem-pipeline.ts             # Theorem pipeline shared by /api/solve and /api/solve-stream
-    lean-attempt.ts                 # Lean formalization attempt for non-theorem problems; solves skip it unless `options.lean_attempt: true` (the UI starts it from the Lean tab)
+    lean-attempt.ts                 # Lean formalization attempt for non-theorem problems; solves skip it unless `options.lean_attempt: true` (the UI starts it from the Lean tab). The known answer goes into the formalization; an accepted statement is proved (hammer → single tactics → whole-proof loop with the NL solution as sketch, PROOF_BUDGET default low); a failure lists what was tried and where the closest proof failed; a failed attempt can be run again ("再试一次")
   prover/
     whole-proof.ts                  # Whole-proof loop: sample k proofs → verify → repair with feedback + suggestions; each candidate records `progress` (tactic lines before the first error); earlyStop (PROOF_EARLY_STOP) gives up after round 0 when no candidate got past its first tactic (gaveUpEarly); stops when the run's cost cap is reached (costCapped); a native prover (proverPromptStyle) gets nativeProverPrompt (no system message, plan first, LLM_PROVER_MAX_TOKENS/TIMEOUT_MS) and a self-correction turn (its proof as the assistant turn + Lean's errors); extractTactics(text, theoremName) takes the target declaration when the answer also defines helper lemmas (logged, not carried over)
     sketch.ts                       # Sketch-and-fill: numbered informal proof first (planner role, high effort; SKETCH_INFORMAL, skipped when the caller gives a hint) → skeleton with one `have … := by sorry` per step → each hole: hammer, then the whole-proof prover on the hole as a lemma of its own (goal-statement.ts; checked to elaborate first; SKETCH_HOLE_PROVER auto = when LLM_PROVER_MODEL is set), then goal search → splice → strict verify
@@ -193,7 +193,7 @@ lib/
     sandbox.ts                      # verifyLeanSource: sanitize → REPL/spawn → verdict (sorry, axioms, statement lock); autoImplicit off prelude
     repl.ts                         # leanprover-community/repl client: worker pool, header env reuse, tactic mode, timeouts
     proof-state.ts                  # ProofSession: pinned REPL worker, goal states as handles, apply tactic, replay on worker loss
-    hammer.ts                       # Automation cascade (rfl/decide/simp/omega/norm_num/linarith/nlinarith hints/positivity/aesop/exact?)
+    hammer.ts                       # Automation cascade (rfl/decide/`decide +kernel` on closed goals — big-number facts such as gcd(2^2024+1, 2^3036-1) = 1, which the elaborator refuses above exponent 256/simp/omega/norm_num/linarith/nlinarith hints/positivity/aesop/exact?)
     premises.ts                     # Premise retrieval: BM25 over Mathlib names/statements (built index + curated seed), similar-name hints
     premise-seed.ts                 # ~700 curated Mathlib lemmas used when no index is built
     proof-memory.ts                 # Verified proofs stored in .data/proof-memory.json; similar proofs recalled as worked examples
@@ -267,7 +267,7 @@ docker-compose.yml                  # Service orchestration (web + compute + neo
 nginx.conf                          # Reverse proxy with rate limiting
 .dockerignore                       # Docker build exclusions
 
-tests/                              # 95 Vitest test files (unit + fake REPL + real-Lean integration)
+tests/                              # 112 Vitest test files (unit + fake REPL + real-Lean integration)
 components/ui/                      # 16 shadcn/ui primitives (+avatar, dropdown-menu, label)
 ```
 

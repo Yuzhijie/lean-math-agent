@@ -1,6 +1,5 @@
 import { getSessionForRequest, createSessionForRequest } from "@/lib/session-access";
 import { NextResponse } from "next/server";
-import { autoformalize } from "@/lib/llm/autoformalize";
 import { updateSession, saveSessionToDisk } from "@/lib/session-store";
 import { LlmError } from "@/lib/llm/client";
 import { CancelledError, runJob, TooManyJobsError } from "@/lib/jobs";
@@ -19,7 +18,7 @@ import type {
   NaturalLanguageSolution,
   Session,
 } from "@/lib/types";
-import { manualLeanAttempt, shouldAutoAttemptLean } from "@/lib/pipeline/lean-attempt";
+import { attemptLeanFormalization, manualLeanAttempt, shouldAutoAttemptLean } from "@/lib/pipeline/lean-attempt";
 import { lt, withRequestLocale } from "@/lib/llm/output-locale";
 import { requestOwner } from "@/lib/bank/http";
 import { describeProblemFigures, figureRefsSchema, figureTextOf, problemWithFigure, type FigureRef } from "@/lib/bank/problem-figures";
@@ -213,10 +212,11 @@ async function handleComputationalProblem(
     updateSession(session.id, { pipeline_stage: "lean_attempting" });
     events.push({ stage: "lean_attempting", detail: lt("尝试 Lean 4 形式化证明...", "Attempting a Lean 4 formal proof...") });
 
-    leanProofAttempt = await attemptLeanFormalization(
-      session.problem_text,
-      computeResult,
-    );
+    leanProofAttempt = await attemptLeanFormalization(session.problem_text, {
+      answer: computeResult.answer,
+      solution: nlSolution,
+      sessionId: session.id,
+    });
 
     updateSession(session.id, { lean_proof_attempt: leanProofAttempt });
 
@@ -507,98 +507,6 @@ async function handleTheoremProblem(
     { ...outcome.body, pipeline_events: events, metrics: metrics() },
     { status: outcome.status },
   );
-}
-
-// ── Lean Formalization Attempt for Computational Problems ─────────────
-
-/**
- * Attempt to formalize a computational problem in Lean 4.
- * This is best-effort: it tries autoformalize + simple proof,
- * and returns a structured explanation if it fails.
- */
-async function attemptLeanFormalization(
-  problemText: string,
-  computeResult: {
-    answer: string;
-    answer_exact: string;
-  },
-): Promise<LeanProofAttempt> {
-  try {
-    // Try to autoformalize the problem
-    const formalResult = await autoformalize({
-      problemText,
-    });
-
-    if (!formalResult.accepted) {
-      const failedLayers = formalResult.validation_results
-        .filter((v) => !v.pass)
-        .map((v) => `L${v.layer}: ${v.detail}`);
-
-      return {
-        attempted: true,
-        success: false,
-        formal_statement: formalResult.formal_statement,
-        failure_reason: lt("自动形式化验证未通过", "Autoformalization did not pass validation"),
-        limitations: [
-          lt("该计算问题涉及复杂代数运算，Lean 4 形式化存在以下困难：", "This computational problem involves complex algebra; formalizing it in Lean 4 ran into these difficulties:"),
-          ...failedLayers,
-          lt("建议使用自然语言解答作为主要参考。", "Use the natural-language solution as the primary reference."),
-        ],
-      };
-    }
-
-    // If autoformalize succeeded, try a simple proof
-    const simpleProof = await trySimpleProof(
-      formalResult.theorem_name,
-      formalResult.theorem_type,
-      formalResult.formal_statement,
-      computeResult.answer_exact,
-    );
-
-    return simpleProof;
-  } catch (e) {
-    return {
-      attempted: true,
-      success: false,
-      failure_reason: lt(`形式化过程出错: ${e instanceof Error ? e.message : "未知错误"}`, `Formalization error: ${e instanceof Error ? e.message : "unknown error"}`),
-      limitations: [
-        lt("该问题涉及复杂的数值计算或根号运算", "The problem involves complex numerical computation or radicals"),
-        lt("Lean 4 的 Mathlib 对这类问题的自动化支持有限", "Mathlib (Lean 4) has limited automation for problems of this kind"),
-        lt("自然语言解答已提供完整的推导和验证过程", "The natural-language solution gives the full derivation and verification"),
-      ],
-    };
-  }
-}
-
-/**
- * Try a simple proof for a formalized computational problem.
- * Uses `norm_num` and basic arithmetic tactics.
- */
-async function trySimpleProof(
-  theoremName: string,
-  theoremType: string,
-  formalStatement: string,
-  answer: string,
-): Promise<LeanProofAttempt> {
-  // Build a simple Lean source with norm_num attempt
-  const leanSource = `-- Auto-generated proof attempt for computational problem
--- Answer: ${answer}
-${formalStatement ? formalStatement : `theorem ${theoremName} : ${theoremType} := by`}
-  sorry
-`;
-
-  return {
-    attempted: true,
-    success: false,
-    formal_statement: leanSource,
-    failure_reason: lt("计算问题的形式化证明需要复杂的数值推导，当前自动证明能力有限", "A formal proof of this computational problem requires involved numerical derivation, beyond current automated proving"),
-    limitations: [
-      lt(`问题的数值答案 (${answer}) 需要多步代数推导才能在 Lean 中验证`, `Verifying the numerical answer (${answer}) in Lean requires a multi-step algebraic derivation`),
-      lt("涉及平方、根号化简、验根等步骤，Lean 的 `norm_num` / `ring` 策略无法直接处理", "It involves squaring, simplifying radicals and checking roots, which Lean's `norm_num` / `ring` tactics cannot handle directly"),
-      lt("如需完整的形式化证明，建议手动编写 Lean proof term 并使用 `calc` 块逐步推导", "For a complete formal proof, write the Lean proof term by hand and derive the result step by step in a `calc` block"),
-      lt("自然语言解答中已包含完整的推导和验证过程", "The natural-language solution includes the full derivation and verification"),
-    ],
-  };
 }
 
 // Server messages and model output follow the UI language (lib/llm/output-locale.ts).
