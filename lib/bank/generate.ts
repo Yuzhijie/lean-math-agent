@@ -249,7 +249,7 @@ Return JSON only: {"answers": [{"n": number, "answer": string}]} with one entry 
 
 const JUDGE_SYSTEM = `You review generated math questions against the profile of the question type they should belong to.
 Score each question 1–5 for fit: 5 = clearly the same type (same skill, knowledge points, grade, difficulty, answer form, stem style, figure layout); 3 = acceptable; 1 = a different kind of question, wrong difficulty or grade, or badly posed.
-Judge the type and layout only: the answer key is checked separately (an independent solver and the program), so do not lower the score because you think the answer is wrong.
+Judge the type and layout only: the answer key is checked separately (an independent solver and the program), so do not lower the score because you think the answer is wrong. But a figure that shows the answer (e.g. the people already placed in the asked order, the result written on the picture) makes the question pointless: score it 1.
 Give a short reason (one sentence, Chinese).
 Return JSON only: {"scores": [{"n": number, "score": 1-5, "reason": string}]} with one entry per question number.`;
 
@@ -465,8 +465,8 @@ function toDraft(q: z.infer<typeof generatedSchema>["questions"][number], p: Tem
   };
 }
 
-const FIGURE_FIX_SYSTEM = `You fix the figure specs of generated maths questions. Each question below either has a figure spec the program could not use (the error is given) or is missing a figure that questions of this type must have.
-For each question return a corrected "figure" that follows the FIGURES guide exactly (only the kinds and fields listed there), shows exactly what the question and its answer need, and keeps the same intent as the original spec. Do not change the question.
+const FIGURE_FIX_SYSTEM = `You fix the figure specs of generated maths questions. Each question below has a figure spec the program could not use (the error is given), is missing a figure that questions of this type must have, or has a figure that gives the answer away.
+For each question return a corrected "figure" that follows the FIGURES guide exactly (only the kinds and fields listed there), shows exactly the information the question gives — never the answer or anything the student has to work out (no names, labels or positions that show the result) — and keeps the same intent as the original spec. Do not change the question.
 Return JSON only: {"fixes":[{"n":1,"figure":{…}}]}`;
 
 /** One repair round for figures the program could not draw, or that a required kind is missing from. */
@@ -477,6 +477,8 @@ async function repairFigures(drafts: Draft[], figures: FigurePlan, inLang: <T>(f
     if (svg && !svg.ok && !svg.skipped) return `${svg.detail} — draw it with a program kind from the guide if one fits (e.g. "star" for a star cut into pieces, "speech" for someone saying something), not "svg"; if "svg" is the only way, make sure nothing covers anything else`;
     const angles = d.figure?.source === "program" ? angleCheck(d) : null;
     if (angles && !angles.ok) return `${angles.detail} — change the figure's numbers so that they match the question`;
+    const leak = answerLeak(d);
+    if (leak) return `${leak} — draw only what the question gives (e.g. the houses without names, or the points without the names that are asked for)`;
     if (figures.solids.length && !figureKinds(d.figure?.spec).some((k) => SOLID_KIND_SET.has(k))) return `a 3D figure (${figures.solids.join(" or ")}) is required`;
     if (figures.tables && !hasTableFigure(d.figure?.spec) && !tablesIn(d.stem).length) return "a table figure is required";
     return undefined;
@@ -898,6 +900,60 @@ export function angleCheck(d: Pick<Draft, "stem" | "answer" | "type" | "figure">
     : { ok: true, detail: lt(`题目中的角与图一致（${said.map(fmtA).join("、")}）`, `the angles in the question match the figure (${said.map(fmtA).join(", ")})`) };
 }
 
+/** The items of an ordered answer ("Eva, Nora, Omar, Liam"; "A → C → B"); null for anything else. */
+function orderedItems(text: string): string[] | null {
+  const items = text
+    .normalize("NFKC")
+    .split(/\s*(?:,|，|、|;|；|→|->|⇒|\bthen\b|然后)\s*/i)
+    .map((x) => x.replace(/^(?:and|和)\s+/i, "").trim())
+    .filter(Boolean);
+  return items.length >= 3 && items.every((x) => x.length <= 30) ? items : null;
+}
+
+/** Whether the items appear in `text` in this order, each as a whole word (later items after earlier ones). */
+function shownInOrder(text: string, items: string[]): boolean {
+  const t = text.normalize("NFKC").toLowerCase();
+  let from = 0;
+  for (const it of items) {
+    const esc = it.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`(?<![\\p{L}\\p{N}])${esc}(?![\\p{L}\\p{N}])`, "gu");
+    re.lastIndex = from;
+    const m = re.exec(t);
+    if (!m) return false;
+    from = m.index + m[0].length;
+  }
+  return true;
+}
+
+/**
+ * A figure must not show the answer. Caught by the program: an ordered answer ("from left to right:
+ * Eva, Nora, Omar, Liam") whose items the figure already shows in that order — points on a number line
+ * by value, or the figure's description read in order — while the other options' orders are not shown.
+ * Returns why, or null.
+ */
+export function answerLeak(d: Pick<Draft, "type" | "options" | "answer" | "figure">): string | null {
+  if (!d.figure) return null;
+  const opts = d.type === "multiple_choice" && d.options?.length ? d.options : null;
+  const letter = opts ? answerLetter(d.answer, opts.length) : null;
+  const right = opts ? (letter ? opts[LETTERS.indexOf(letter)] : null) : d.answer;
+  const items = right ? orderedItems(right) : null;
+  if (!items) return null;
+  // Texts the figure shows in order: number-line labels left to right, then the whole description.
+  const reads: string[] = [];
+  for (const node of specNodes(d.figure.spec)) {
+    const n = node as { kind: string; points?: Array<{ value: number; label?: string }> };
+    if (n.kind === "number_line" && n.points?.length) reads.push([...n.points].sort((a, b) => a.value - b.value).map((p) => p.label ?? "").join(" ; "));
+  }
+  reads.push(d.figure.description ?? "");
+  const others = (opts ?? []).filter((o) => o !== right).map(orderedItems).filter((x): x is string[] => !!x);
+  for (const r of reads) {
+    if (!shownInOrder(r, items)) continue;
+    if (others.some((o) => shownInOrder(r, o))) continue; // the figure lists things in several orders: not a give-away
+    return lt(`图形已经把答案呈现出来了：图中按顺序显示了 ${items.join("、")}`, `the figure gives the answer away: it already shows ${items.join(", ")} in that order`);
+  }
+  return null;
+}
+
 function figureCheck(d: Draft, svgCheck: Check | undefined, needTable = false, needSolid: string[] = []): Check {
   if (d.figureIssue && !d.figure) return check(false, d.figureIssue);
   if (needTable && !hasTableFigure(d.figure?.spec) && !tablesIn(d.stem).length) {
@@ -911,6 +967,8 @@ function figureCheck(d: Draft, svgCheck: Check | undefined, needTable = false, n
       ? check(false, lt("题干引用了图形，但没有给出图形", "the stem refers to a figure but none was given"))
       : check(true, lt("此题不需要图形", "this question has no figure"), true);
   }
+  const leak = answerLeak(d);
+  if (leak) return check(false, leak);
   if (d.figure.source === "program") {
     const angles = angleCheck(d);
     if (angles && !angles.ok) return check(false, angles.detail);
@@ -1066,7 +1124,7 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
     if (figures.on) step("checking_figures", "正在检查图形…", "checking figures…");
     const svgChecks = figures.on ? await checkModelFigures(drafts) : new Map<number, Check>();
     // A model-drawn figure that does not match, or a figure whose angles contradict the question: one more repair round.
-    if (figures.on && drafts.some((d, i) => (svgChecks.get(i) && !svgChecks.get(i)!.ok && !svgChecks.get(i)!.skipped) || (d.figure?.source === "program" && angleCheck(d)?.ok === false))) {
+    if (figures.on && drafts.some((d, i) => (svgChecks.get(i) && !svgChecks.get(i)!.ok && !svgChecks.get(i)!.skipped) || (d.figure?.source === "program" && angleCheck(d)?.ok === false) || answerLeak(d))) {
       step("repairing", "正在重画有问题的图形…", "redrawing figures that failed…");
       const fixed = await repairFigures(drafts, figures, inLang, svgChecks);
       for (const i of fixed) svgChecks.delete(i);
