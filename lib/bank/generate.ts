@@ -39,7 +39,7 @@ import { tablesIn, withoutTables, type ParsedTable } from "../markdown-table";
 import { allStarAngles, type StarSpec } from "../figure/star";
 import { svgOverlaps } from "../figure/svg-overlap";
 import { outsideSides, rowShape, type TileRowSpec } from "../figure/tiles";
-import { reflectionAnswer, type ReflectionSpec } from "../figure/reflection";
+import { isOneLine, mirrorChoiceAnswer, reflectionAnswer, type ReflectionSpec } from "../figure/reflection";
 
 const MAX_COUNT = 10;
 /** Writing rounds per generation: the first, plus extra ones while fewer than the requested number pass. */
@@ -662,6 +662,7 @@ function placedCards(answer: string, firstAt: "top-right" | "bottom-left"): { fi
 export function reflectionCheck(c: Pick<Draft, "type" | "options" | "answer" | "figure">): { mismatch: boolean; detail: string } | null {
   const spec = specNodes(c.figure?.spec).find((n) => n.kind === "reflection") as unknown as ReflectionSpec | undefined;
   if (!spec) return null;
+  if (isOneLine(spec)) return mirrorChoiceCheck(c, spec);
   const a = reflectionAnswer(spec);
   const place = (p: string) => lt({ "top-right": "右上", "bottom-left": "左下", "bottom-right": "右下" }[p] ?? p, p);
   if (a.symmetric) return { mismatch: true, detail: lt("图形是对称的，翻折前后看不出区别，换一个不对称的图形", "the shape is symmetric, so the reflections cannot be told apart; use a shape with no line of symmetry") };
@@ -678,6 +679,42 @@ export function reflectionCheck(c: Pick<Draft, "type" | "options" | "answer" | "
   if (got.first === undefined || got.both === undefined) return { mismatch: true, detail: lt(`答案没有说清哪张卡放哪里；正确的是：卡片 ${a.firstCards[0]} 放${place(a.afterFirst)}，卡片 ${a.bothCards[0]} 放右下`, `the answer does not say which card goes where; correct: ${want}`) };
   if (got.first !== a.firstCards[0] || got.both !== a.bothCards[0]) return { mismatch: true, detail: lt(`正确的是：卡片 ${a.firstCards[0]} 放${place(a.afterFirst)}，卡片 ${a.bothCards[0]} 放右下（答案是卡片 ${got.first} 和 ${got.both}）`, `correct: ${want} (the answer has cards ${got.first} and ${got.both})`) };
   return { mismatch: false, detail: lt(`程序核对：卡片 ${a.firstCards[0]} 放${place(a.afterFirst)}，卡片 ${a.bothCards[0]} 放右下`, `checked by the program: ${want}`) };
+}
+
+/** The choice an answer names: the option letter, or "card 3" / "picture C" / "diagram 2" in free text (1-based). */
+function chosenCard(c: Pick<Draft, "type" | "options" | "answer">, cards: number): number | null {
+  if (c.type === "multiple_choice" && c.options?.length) {
+    const l = answerLetter(c.answer, c.options.length);
+    return l ? LETTERS.indexOf(l) + 1 : null;
+  }
+  const t = c.answer.normalize("NFKC");
+  const m = /(?:card|picture|diagram|choice|option|shape|卡片?|图|选项)\s*([1-9A-Fa-f])\b/i.exec(t) ?? /^\s*\(?([A-Fa-f1-9])\)?\s*$/.exec(t);
+  if (!m) return null;
+  const n = /\d/.test(m[1]) ? Number(m[1]) : LETTERS.indexOf(m[1].toUpperCase()) + 1;
+  return n >= 1 && n <= cards ? n : null;
+}
+
+/**
+ * "Flip the shape across the dashed line — which picture shows the new shape?": the program knows which
+ * choice is the flipped shape (squares moved and each half-shading flipped). Exactly one choice must
+ * be it, no two choices may look the same, the flip must change the shape, and the options must be the
+ * pictures in order.
+ */
+function mirrorChoiceCheck(c: Pick<Draft, "type" | "options" | "answer">, spec: ReflectionSpec): { mismatch: boolean; detail: string } {
+  const a = mirrorChoiceAnswer(spec);
+  const name = (n: number) => LETTERS[n - 1];
+  if (a.symmetric) return { mismatch: true, detail: lt("图形关于这条线翻折后不变，换一个不对称的图形或阴影", "the shape looks the same after the flip; use a shape or shading with no symmetry across the line") };
+  if (a.duplicateCards.length)
+    return { mismatch: true, detail: lt(`有的选项图看起来一样（${a.duplicateCards.map(name).join("、")} 与前面的相同），换别的变换`, `some choices look the same (${a.duplicateCards.map(name).join(", ")} repeats an earlier one); use other changes`) };
+  if (a.rightCards.length !== 1)
+    return { mismatch: true, detail: lt(`应恰有一个选项是翻折后的图形（现有 ${a.rightCards.length} 个）`, `exactly one choice should be the flipped shape (found ${a.rightCards.length})`) };
+  const right = a.rightCards[0];
+  if (c.type === "multiple_choice" && c.options && c.options.length !== spec.cards.length)
+    return { mismatch: true, detail: lt(`选项数（${c.options.length}）与图中的选项图数（${spec.cards.length}）不一致`, `${c.options.length} options for ${spec.cards.length} pictures; the options must be the pictures in order`) };
+  const got = chosenCard(c, spec.cards.length);
+  if (got === null) return { mismatch: true, detail: lt(`答案没有指明选哪一个图；正确的是 ${name(right)}`, `the answer does not name a picture; correct: ${name(right)}`) };
+  if (got !== right) return { mismatch: true, detail: lt(`翻折后的图形是 ${name(right)}，不是 ${name(got)}`, `the flipped shape is ${name(right)}, not ${name(got)}`) };
+  return { mismatch: false, detail: lt(`程序核对：翻折后的图形是 ${name(right)}`, `checked by the program: the flipped shape is ${name(right)}`) };
 }
 
 /** Money in cents ("$1.50", "50c", "2元", "¥3.5", "1.20"), or null. */
