@@ -39,6 +39,7 @@ import { tablesIn, withoutTables, type ParsedTable } from "../markdown-table";
 import { allStarAngles, type StarSpec } from "../figure/star";
 import { svgOverlaps } from "../figure/svg-overlap";
 import { outsideSides, rowShape, type TileRowSpec } from "../figure/tiles";
+import { orderingCheck } from "./ordering-check";
 import { isOneLine, mirrorChoiceAnswer, reflectionAnswer, type ReflectionSpec } from "../figure/reflection";
 
 const MAX_COUNT = 10;
@@ -782,7 +783,7 @@ export function selectionCheck(c: Pick<Draft, "stem" | "type" | "options" | "ans
 }
 
 function answerCheck(c: Draft, independent: string | undefined, resolveError: string | undefined): Check {
-  const sel = selectionCheck(c) ?? tileRowCheck(c) ?? reflectionCheck(c);
+  const sel = selectionCheck(c) ?? tileRowCheck(c) ?? reflectionCheck(c) ?? orderingCheck(c);
   if (sel?.mismatch) return check(false, sel.detail);
   const arith = sel ?? arithmeticCheck(c);
   if (arith?.mismatch) return check(false, arith.detail);
