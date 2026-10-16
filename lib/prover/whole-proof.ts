@@ -20,7 +20,7 @@ import { loogleHintsForUnknownIdentifiers, unknownIdentifiers } from "../lean/lo
 import { modernizeLeanSyntax } from "../lean/modernize";
 import { localHintsForUnknownIdentifiers } from "../lean/premises";
 import { verifyLeanSource, type LeanVerifyResult } from "../lean/sandbox";
-import { sanitizeLeanBody } from "../lean/sanitize";
+import { mainAssignmentIndex, sanitizeLeanBody } from "../lean/sanitize";
 import { formatSuggestions, librarySearchSuggestions } from "../lean/suggest";
 import { CostCapError, LlmError, sampleText, type ChatMessage } from "../llm/client";
 import { WHOLE_PROOF_SYSTEM, nativeProverPrompt, nativeProverRepairPrompt, wholeProofRepairMessage, wholeProofUserMessage } from "../llm/prompts";
@@ -519,13 +519,17 @@ export function extractTactics(text: string, theoremName?: string): string | und
   body = selectMainDeclaration(kept.join("\n"), theoremName);
 
   let tactics: string;
-  const byIdx = body.search(/:=\s*by\b/);
-  if (/^\s*(theorem|lemma|example)\b/m.test(body) && byIdx >= 0) {
+  // The `:=` that starts the proof — not one of a `let` in the statement
+  // (`theorem t : let f := fun n => n + 1; … := by …`).
+  const isDecl = /^\s*(theorem|lemma|example)\b/m.test(body);
+  const mainIdx = isDecl ? mainAssignmentIndex(body) : -1;
+  const byIdx = mainIdx >= 0 && /^:=\s*by\b/.test(body.slice(mainIdx)) ? mainIdx : -1;
+  if (isDecl && byIdx >= 0) {
     tactics = body.slice(byIdx).replace(/^:=\s*by[ \t]*/, "");
     // `:= by tac` on the same line → keep the tactic; otherwise drop the newline.
     tactics = tactics.startsWith("\n") ? tactics.slice(1) : tactics;
-  } else if (/^\s*(theorem|lemma|example)\b/m.test(body) && /:=/.test(body)) {
-    const term = body.slice(body.indexOf(":=") + 2).trim();
+  } else if (isDecl && mainIdx >= 0) {
+    const term = body.slice(mainIdx + 2).trim();
     if (!term) return undefined;
     tactics = term.includes("\n") ? `exact (\n${term}\n)` : `exact ${term}`;
   } else {

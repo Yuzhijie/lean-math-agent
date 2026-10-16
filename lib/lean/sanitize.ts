@@ -219,6 +219,41 @@ const LEAN_IDENT_RE = /^[A-Za-z_À-￿][A-Za-z0-9_'À-￿]*(\.[A-Za-z_À-￿][A-
 const MAX_STATEMENT_LENGTH = 4_000;
 
 /**
+ * True when `t` has a `:=` that is not the value of a `let` / `have` binding
+ * (`let f : ℕ → ℕ := fun n => n + 1; …`) or a field of a structure instance
+ * (`{ x := 1 }`) — e.g. a statement that ends in `:= proof`.
+ */
+export function strayAssignment(t: string): boolean {
+  return mainAssignmentIndex(t) >= 0;
+}
+
+/**
+ * Index of the first `:=` in `t` that is not a `let` / `have` value or a structure-instance
+ * field — in `theorem n : <type> := <proof>` the one that starts the proof; -1 when none.
+ * Comments and strings are skipped (stripCommentsAndStrings keeps offsets).
+ */
+export function mainAssignmentIndex(t: string): number {
+  const code = stripCommentsAndStrings(t);
+  let pending = 0;
+  let braces = 0;
+  for (let i = 0; i < code.length; i++) {
+    const c = code[i];
+    if (c === "{") braces++;
+    else if (c === "}") braces = Math.max(0, braces - 1);
+    else if (c === ":" && code[i + 1] === "=") {
+      if (pending > 0) pending--;
+      else if (braces === 0) return i;
+      i++;
+    } else if (/[A-Za-z_]/.test(c) && (i === 0 || !/[\w.'!?]/.test(code[i - 1]))) {
+      const word = /^[A-Za-z_][\w'!?]*/.exec(code.slice(i))![0];
+      if (word === "let" || word === "have" || word === "letI" || word === "haveI") pending++;
+      i += word.length - 1;
+    }
+  }
+  return -1;
+}
+
+/**
  * Validate the `theorem_type` string that the formalizer / planner produce.
  * The final file is `theorem <name> <type> := by <tactics>`, so the type must
  * not be able to close the declaration early (`:=`), start another one
@@ -249,7 +284,15 @@ export function validateTheoremStatement(
     };
   }
   if (/[\r\n]/.test(t)) return { ok: false, reason: lt("定理陈述必须是单行", "Theorem statement must be a single line") };
-  if (t.includes(":=")) return { ok: false, reason: lt("定理陈述不能包含 `:=`", "Theorem statement must not contain `:=`") };
+  if (strayAssignment(t)) {
+    return {
+      ok: false,
+      reason: lt(
+        "定理陈述里只能在 `let` / `have` 绑定或结构体 `{ x := … }` 中使用 `:=`（不能在陈述里带上证明）",
+        "`:=` may appear in a theorem statement only in a `let` / `have` binding or a structure instance `{ x := … }` (the statement must not carry a proof)",
+      ),
+    };
+  }
   if (t.includes("--") || t.includes("/-")) {
     return { ok: false, reason: lt("定理陈述不能包含注释", "Theorem statement must not contain comments") };
   }

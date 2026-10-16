@@ -29,3 +29,12 @@ describe("modernizeLeanSyntax", () => {
     expect(extractTactic("cases h with x hx")).toBe("cases' h with x hx");
   });
 });
+
+describe("extractTactics with let in the statement", () => {
+  it("takes the proof after the statement's own `:=`, not a let's", () => {
+    const t = extractTactics("```lean\ntheorem t : let f : ℕ → ℕ := fun n => n + 1; f 1 = 2 := by\n  intro f\n  rfl\n```", "t");
+    expect(t).toBe("intro f\nrfl");
+    const term = extractTactics("theorem t : let a := 2; a = 2 := rfl", "t");
+    expect(term).toBe("exact rfl");
+  });
+});

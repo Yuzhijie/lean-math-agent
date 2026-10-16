@@ -103,6 +103,16 @@ describe("validateTheoremStatement", () => {
     expect(validateTheoremStatement("t", ": sorry").ok).toBe(false);
     expect(validateTheoremStatement("bad name", ": True").ok).toBe(false);
     expect(validateTheoremStatement("t", "").ok).toBe(false);
+    expect(validateTheoremStatement("t", ": let a := 1; a = 1 := rfl").ok).toBe(false);
+    expect(validateTheoremStatement("t", ": True := { }").ok).toBe(false);
+  });
+
+  it("allows `:=` in let / have bindings and structure instances", () => {
+    const dodecagon =
+      ": let rot : Fin 12 → Fin 12 → Fin 12 := fun k i => ⟨(i.val + k.val) % 12, Nat.mod_lt _ (by decide)⟩; let Valid : Finset (Fin 12) → Prop := fun s => s.card = 4 ∧ ∀ i : Fin 12, i ∈ s → ¬(rot 1 i ∈ s); ∃ s : Finset (Fin 12), Valid s";
+    expect(validateTheoremStatement("dodecagon", dodecagon)).toEqual({ ok: true });
+    expect(validateTheoremStatement("t", ": (have h : 1 = 1 := rfl; True)")).toEqual({ ok: true });
+    expect(validateTheoremStatement("t", ": ({ fst := 1, snd := 2 } : ℕ × ℕ).fst = 1")).toEqual({ ok: true });
   });
 });
 
