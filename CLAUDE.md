@@ -319,7 +319,7 @@ See `.env.example`:
 
 ```bash
 npm run dev                    # Start Next.js dev server (Turbopack)
-python scripts/compute-server.py  # Start SymPy compute server (port 8765)
+npm run compute                # Start SymPy compute server (python3 scripts/compute-server.py, port 5001; needs `pip3 install sympy`)
 npx vitest run                 # Run all test files
 npm run build                  # Production build
 npm run bench -- --samples 4   # Prover benchmark over bench/theorems.json (LLM key + Lean sandbox required)
