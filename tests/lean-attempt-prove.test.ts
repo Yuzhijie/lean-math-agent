@@ -92,3 +92,26 @@ describe("attemptLeanFormalization", () => {
     expect(leanAttemptRetryable({ attempted: true, success: true })).toBe(false);
   });
 });
+
+describe("statements too big to compute", () => {
+  const STMT =
+    "theorem count_pow_eq_one_residue_classes : (Finset.filter (fun x : ℕ => x ^ (2 ^ 8 * 3 ^ 4 * 5 ^ 2) % (2 ^ 8 * 3 ^ 6 * 5 ^ 3 * 7 ^ 2 * 13 * 19) = 1 % (2 ^ 8 * 3 ^ 6 * 5 ^ 3 * 7 ^ 2 * 13 * 19)) (Finset.range (2 ^ 8 * 3 ^ 6 * 5 ^ 3 * 7 ^ 2 * 13 * 19))).card = 2687385600 := by sorry";
+
+  it("measures the range a statement enumerates", async () => {
+    const { enumerationSize, evalNatExpr } = await import("@/lib/pipeline/lean-attempt");
+    expect(evalNatExpr("2 ^ 8 * 3 ^ 6 * 5 ^ 3 * 7 ^ 2 * 13 * 19")).toBe(282338784000n);
+    expect(evalNatExpr("(10 : ℕ) - 3")).toBe(7n);
+    expect(evalNatExpr("n + 1")).toBeUndefined();
+    expect(enumerationSize(STMT)).toBe(282338784000n);
+    expect(enumerationSize("theorem t : (Finset.filter (fun n => 3 ∣ n) (Finset.Icc 1 100)).card = 33 := by sorry")).toBe(100n);
+    expect(enumerationSize("theorem t : Nat.gcd 4 6 = 2 := by sorry")).toBeUndefined();
+  });
+
+  it("explains why, and tells the prover not to compute", async () => {
+    m.autoformalize.mockResolvedValue({ ...GCD, theorem_name: "count_pow_eq_one_residue_classes", formal_statement: STMT });
+    m.proveWholeTheorem.mockResolvedValue({ ok: false, samples: 2, rounds: 1, candidates: [{ round: 0, tactics: "decide", ok: false, errors: 1, summary: "maximum recursion depth has been reached", progress: 0 }] });
+    const a = await attemptLeanFormalization("p");
+    expect(a.limitations?.join("\n")).toMatch(/2\.8×10\^11/);
+    expect(m.proveWholeTheorem.mock.calls[0][0].sketch).toMatch(/Do NOT try decide/);
+  });
+});

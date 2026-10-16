@@ -62,6 +62,104 @@ function sketchOf(solution: LeanAttemptContext["solution"]): string | undefined 
   return text || undefined;
 }
 
+/** Value of a closed natural-number expression (digits, + - * ^ and parentheses, optional `: ℕ` ascriptions); undefined otherwise. */
+export function evalNatExpr(src: string): bigint | undefined {
+  const text = src.replace(/\(\s*(\d+)\s*:\s*(?:ℕ|Nat|ℤ|Int)\s*\)/g, "$1").replace(/\s+/g, "");
+  if (!/^[\d+\-*^()]+$/.test(text)) return undefined;
+  let i = 0;
+  const LIMIT = 10n ** 60n;
+  const atom = (): bigint | undefined => {
+    if (text[i] === "(") {
+      i++;
+      const v = sum();
+      if (text[i] !== ")") return undefined;
+      i++;
+      return v;
+    }
+    const m = /^\d+/.exec(text.slice(i));
+    if (!m) return undefined;
+    i += m[0].length;
+    return BigInt(m[0]);
+  };
+  const power = (): bigint | undefined => {
+    const b = atom();
+    if (b === undefined) return undefined;
+    if (text[i] !== "^") return b;
+    i++;
+    const e = power();
+    if (e === undefined || e > 400n) return undefined;
+    const v = b ** e;
+    return v > LIMIT ? undefined : v;
+  };
+  const product = (): bigint | undefined => {
+    let v = power();
+    while (v !== undefined && text[i] === "*") {
+      i++;
+      const r = power();
+      v = r === undefined ? undefined : v * r;
+    }
+    return v;
+  };
+  const sum = (): bigint | undefined => {
+    let v = product();
+    while (v !== undefined && (text[i] === "+" || text[i] === "-")) {
+      const op = text[i++];
+      const r = product();
+      v = r === undefined ? undefined : op === "+" ? v + r : v > r ? v - r : 0n;
+    }
+    return v;
+  };
+  const v = sum();
+  return i === text.length ? v : undefined;
+}
+
+/** The argument of `name (...)` starting at `from` (balanced parentheses), or undefined. */
+function parenArg(s: string, from: number): { arg: string; end: number } | undefined {
+  if (s[from] !== "(") return undefined;
+  let depth = 0;
+  for (let j = from; j < s.length; j++) {
+    if (s[j] === "(") depth++;
+    else if (s[j] === ")" && --depth === 0) return { arg: s.slice(from + 1, j), end: j + 1 };
+  }
+  return undefined;
+}
+
+/**
+ * How many cases a statement asks Lean to go through one by one: the size of the largest
+ * `Finset.range n` / `Finset.Icc a b` / `Finset.Ico a b` with constant bounds (undefined when none).
+ */
+export function enumerationSize(statement: string): bigint | undefined {
+  let best: bigint | undefined;
+  const keep = (n: bigint | undefined) => {
+    if (n !== undefined && (best === undefined || n > best)) best = n;
+  };
+  for (const m of statement.matchAll(/Finset\.(range|Icc|Ico|Ioc|Ioo)\s*/g)) {
+    const first = parenArg(statement, m.index! + m[0].length);
+    const a = first ? evalNatExpr(first.arg) : evalNatExpr(/^\d+/.exec(statement.slice(m.index! + m[0].length))?.[0] ?? "");
+    if (m[1] === "range") {
+      keep(a);
+      continue;
+    }
+    const afterFirst = first ? first.end : m.index! + m[0].length + (/^\d+/.exec(statement.slice(m.index! + m[0].length))?.[0].length ?? 0);
+    const rest = statement.slice(afterFirst).replace(/^\s+/, "");
+    const offset = statement.length - rest.length;
+    const second = parenArg(statement, offset);
+    const b = second ? evalNatExpr(second.arg) : evalNatExpr(/^\d+/.exec(rest)?.[0] ?? "");
+    if (a !== undefined && b !== undefined && b >= a) keep(b - a + 1n);
+  }
+  return best;
+}
+
+/** Above this many cases, checking them one by one in Lean is out of reach. */
+const ENUMERATION_LIMIT = 1_000_000n;
+
+/** "2.8×10^11" style. */
+function sizeText(n: bigint): string {
+  const s = n.toString();
+  if (s.length <= 7) return Number(n).toLocaleString("en-US");
+  return `${s[0]}.${s[1]}×10^${s.length - 1}`;
+}
+
 /** The candidate that got furthest, for the failure report. */
 function bestCandidate(w: WholeProofResult) {
   return [...w.candidates].sort((a, b) => (b.progress ?? 0) - (a.progress ?? 0) || a.errors - b.errors)[0];
@@ -128,8 +226,21 @@ export async function attemptLeanFormalization(problemText: string, ctx: LeanAtt
     if (trivial) return done(trivial.verification, trivial.source, { strategy: "trivial", attempts: 1 });
     if (!tried.length) tried.push(lt("单条策略（rfl、simp、norm_num、omega、decide、decide +kernel、ring、linarith 等）", "single tactics (rfl, simp, norm_num, omega, decide, decide +kernel, ring, linarith, …)"));
 
-    // 2. The whole-proof prover loop, with the solution as sketch.
+    // A statement over a huge finite range cannot be settled by computation: say so to the
+    // prover (no `decide` over the range) and to the user.
+    const cases = enumerationSize(formal.formal_statement ?? theoremType);
+    const tooMany = cases !== undefined && cases > ENUMERATION_LIMIT;
     const limitations: string[] = [];
+    if (tooMany) {
+      limitations.push(
+        lt(
+          `这条陈述要在约 ${sizeText(cases!)} 个数里逐个检查，Lean 无法逐个算完（自动化策略和逐个计算都会超出递归深度或时间）；要证明它，需要用数学结构推出结果，例如把模数分解成互素的部分分别计数，这需要较长的结构化证明`,
+          `The statement asks Lean to check about ${sizeText(cases!)} cases one by one, which it cannot do (automation and direct computation run out of recursion depth or time); a proof has to derive the count from the structure, e.g. split the modulus into coprime parts and count each — a long structured proof`,
+        ),
+      );
+    }
+
+    // 2. The whole-proof prover loop, with the solution as sketch.
     if (wholeProofEnabled() && !costCapReached()) {
       const { preset } = budgetPreset(ctx.budget ?? process.env.PROOF_BUDGET ?? "low");
       const whole = await proveWholeTheorem({
@@ -138,7 +249,12 @@ export async function attemptLeanFormalization(problemText: string, ctx: LeanAtt
         theoremType,
         expectedSignature,
         problemText,
-        sketch: sketchOf(ctx.solution),
+        sketch: [
+          sketchOf(ctx.solution),
+          tooMany ? `Note: the statement ranges over about ${sizeText(cases!)} cases. Do NOT try decide / rfl / norm_num [Finset.filter] over the range: it cannot finish. Prove it structurally (e.g. Chinese remainder theorem, counting in cyclic groups, bijections).` : undefined,
+        ]
+          .filter(Boolean)
+          .join("\n\n") || undefined,
         config: { ...preset.wholeProof, useMathlib },
       });
       if (whole.ok && whole.verification && whole.source) {

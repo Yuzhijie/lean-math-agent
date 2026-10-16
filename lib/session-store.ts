@@ -386,8 +386,10 @@ export async function initSqliteStore(): Promise<boolean> {
       },
     };
     return true;
-  } catch {
+  } catch (e) {
     sqliteStore = null;
+    // Not silent: sessions then go to JSON files, which is easy to miss.
+    console.warn(`[session-store] SQLite unavailable, sessions are stored as JSON files: ${e instanceof Error ? e.message : String(e)}`);
     return false;
   }
 }
