@@ -115,3 +115,26 @@ describe("statements too big to compute", () => {
     expect(m.proveWholeTheorem.mock.calls[0][0].sketch).toMatch(/Do NOT try decide/);
   });
 });
+
+describe("hints for the prover and the sorry report", () => {
+  const DODECAGON =
+    ": let rot : Fin 12 → Fin 12 → Fin 12 := fun k i => ⟨(i.val + k.val) % 12, Nat.mod_lt _ (by decide)⟩; let Valid : Finset (Fin 12) → Prop := fun s => s.card = 4; ∃ reps : Fin 8 → Finset (Fin 12), ∀ j, Valid (reps j)";
+
+  it("says to introduce the lets and to use witnesses + decide +kernel on finite statements", async () => {
+    const { proofHints } = await import("@/lib/pipeline/lean-attempt");
+    const h = proofHints(DODECAGON).join("\n");
+    expect(h).toContain("intro rot Valid");
+    expect(h).toContain("decide +kernel");
+    expect(proofHints(": ∀ x : ℝ, x ^ 2 ≥ 0").join("\n")).not.toContain("finite types");
+    expect(proofHints(": ∀ n : ℕ, n + 0 = n").join("\n")).not.toContain("finite types");
+  });
+
+  it("reports a proof left with sorry in words, and passes the hints on", async () => {
+    m.autoformalize.mockResolvedValue({ ...GCD, theorem_type: DODECAGON });
+    m.proveWholeTheorem.mockResolvedValue({ ok: false, samples: 2, rounds: 1, candidates: [{ round: 0, tactics: "sorry", ok: false, errors: 0, summary: "source contains `sorry`; final verify requires a complete proof" }] });
+    const a = await attemptLeanFormalization("p");
+    expect(a.limitations?.join("\n")).toMatch(/sorry/);
+    expect(a.limitations?.join("\n")).not.toContain("final verify requires");
+    expect(m.proveWholeTheorem.mock.calls[0][0].sketch).toContain("intro rot Valid");
+  });
+});

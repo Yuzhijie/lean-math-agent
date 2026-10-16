@@ -160,6 +160,29 @@ function sizeText(n: bigint): string {
   return `${s[0]}.${s[1]}×10^${s.length - 1}`;
 }
 
+/**
+ * Advice for the prover from the shape of the statement: `let` definitions to introduce first,
+ * and finite statements that can be settled by explicit witnesses + kernel computation.
+ */
+export function proofHints(theoremType: string, opts: { tooMany?: boolean } = {}): string[] {
+  const hints: string[] = [];
+  const t = theoremType.replace(/^\s*:\s*/, "");
+  if (/^let\b/.test(t)) {
+    const names = [...t.matchAll(/(?:^|;\s*)let\s+([A-Za-z_][\w']*)/g)].map((m) => m[1]);
+    hints.push(
+      `The statement begins with \`let\` definitions. Start the proof with \`intro ${names.join(" ")}\` (one name per let), then work with them; unfold a definition with \`simp only [${names[0] ?? "name"}]\` or \`show\` when needed.`,
+    );
+  }
+  const finite = /\b(Fin\s+\d+|ZMod\s+\d+|Finset\s*\(\s*Fin\b)/.test(t) && !/[ℝℚℂ]|\bReal\b|\bComplex\b/.test(t) && !/[∀∃]\s*\(?\s*\w+\s*:\s*(ℕ|ℤ|Nat|Int)\b/.test(t);
+  if (finite && !opts.tooMany) {
+    hints.push(
+      "Everything in the statement ranges over finite types (Fin n, Finset (Fin n), ZMod n). Give explicit witnesses (e.g. `refine ⟨![{0, 2, 4, 6}, …], ?_, ?_, ?_⟩`, taking them from the solution) and close each remaining finite check with `decide +kernel` (the kernel evaluates it; plain `decide` hits recursion limits), or `fin_cases` + `simp` / `decide`.",
+    );
+  }
+  hints.push("Never write `sorry` or `admit`: a proof that contains them is rejected.");
+  return hints;
+}
+
 /** The candidate that got furthest, for the failure report. */
 function bestCandidate(w: WholeProofResult) {
   return [...w.candidates].sort((a, b) => (b.progress ?? 0) - (a.progress ?? 0) || a.errors - b.errors)[0];
@@ -252,6 +275,7 @@ export async function attemptLeanFormalization(problemText: string, ctx: LeanAtt
         sketch: [
           sketchOf(ctx.solution),
           tooMany ? `Note: the statement ranges over about ${sizeText(cases!)} cases. Do NOT try decide / rfl / norm_num [Finset.filter] over the range: it cannot finish. Prove it structurally (e.g. Chinese remainder theorem, counting in cyclic groups, bijections).` : undefined,
+          proofHints(theoremType, { tooMany }).join("\n"),
         ]
           .filter(Boolean)
           .join("\n\n") || undefined,
@@ -262,7 +286,11 @@ export async function attemptLeanFormalization(problemText: string, ctx: LeanAtt
       }
       tried.push(lt(`模型写的完整证明 ${whole.samples} 个（${whole.rounds} 轮，含按 Lean 报错修改）`, `${whole.samples} complete proofs written by the model (${whole.rounds} round(s), including repairs from Lean's errors)`));
       const best = whole.candidates.length ? bestCandidate(whole) : undefined;
-      if (best?.summary) limitations.push(lt(`最接近的一个证明卡在：${best.summary}`, `The closest proof failed at: ${best.summary}`));
+      if (best?.summary && /sorry/.test(best.summary)) {
+        limitations.push(lt("模型写出了证明的框架，但其中有步骤没能补完（留下了 sorry），所以不算证明", "The model wrote the outline of a proof but left steps unfinished (`sorry`), so it does not count as a proof"));
+      } else if (best?.summary) {
+        limitations.push(lt(`最接近的一个证明卡在：${best.summary}`, `The closest proof failed at: ${best.summary}`));
+      }
       if (whole.gaveUpEarly) limitations.push(lt("所有证明在第一步就出错，提前停止", "Every proof failed at its first step, so the loop stopped early"));
       if (whole.costCapped) limitations.push(lt("达到本次费用上限后停止", "Stopped at this run's cost cap"));
     } else if (costCapReached()) {

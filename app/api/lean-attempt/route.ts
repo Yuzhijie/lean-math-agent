@@ -29,6 +29,8 @@ async function handlePOST(req: Request) {
       answer: session.computation_result?.answer || session.nl_solution?.final_answer,
       solution: session.nl_solution,
       sessionId: session.id,
+      // "Try again" after a failure searches harder than the first attempt.
+      ...(session.lean_proof_attempt?.attempted ? { budget: "normal" } : {}),
     });
     updateSession(session.id, { lean_proof_attempt: attempt, pipeline_stage: "complete" });
     return NextResponse.json({ lean_proof_attempt: attempt, metrics: metrics() });
