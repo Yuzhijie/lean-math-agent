@@ -44,6 +44,8 @@ lean-sandbox/Scratch/Verify_*.lean
 
 # runtime data (sessions, caches, local SQLite DBs) — never commit
 /.data/
+# npm run proofs:export output
+/data/proof-dataset/
 /prisma/.data/
 *.db
 *.db-journal

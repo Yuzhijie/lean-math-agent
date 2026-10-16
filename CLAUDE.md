@@ -5,7 +5,7 @@
 AI-powered Lean 4 math theorem prover + problem solver. Single-page Next.js app.
 - User inputs a math problem in natural language (Chinese or English; UI and generated content follow the UI language)
 - System classifies problem type → dispatches to appropriate solver pipeline
-- Theorem problems: autoformalize (candidate voting + counterexample search) → premise retrieval + proof memory → hammer → whole-proof prover loop (sample → verify → repair with Lean feedback) → sketch-and-fill (holes closed by hammer / goal-level tactic search) → enumerate methods → plan steps → best-first proof search → Lean 4 verify
+- Theorem problems: autoformalize (candidate voting + counterexample search) → premise retrieval + proof memory → hammer → memory replay (a similar theorem's verified proof, verbatim) → whole-proof prover loop (sample → verify → repair with Lean feedback) → sketch-and-fill (holes closed by hammer / goal-level tactic search) → enumerate methods → plan steps → best-first proof search → Lean 4 verify
 - Computational problems: equation setup → SymPy solve → cross-validate → NL explanation; the Lean formalization step is started by hand from the Lean tab (`/api/lean-attempt`)
 - Also handles: optimization (deterministic search), find-all-values (systematic enumeration)
 
@@ -19,7 +19,7 @@ AI-powered Lean 4 math theorem prover + problem solver. Single-page Next.js app.
 | Lean | Lean 4 + Mathlib v4.33.1 + Batteries + Aesop; verification via persistent `leanprover-community/repl` workers (env reuse, sorry goals, tactic mode, axiom + statement checks), `lake env lean` fallback |
 | Compute | Python SymPy HTTP microservice (9 endpoints) |
 | State | Sessions in SQLite (`.data/sessions.db`, each owned by a user; JSON files with SESSION_BACKEND=json), in-memory cache |
-| Tests | Vitest 5 (113 test files) |
+| Tests | Vitest 5 (114 test files) |
 
 ## Project Structure
 
@@ -163,7 +163,9 @@ lib/
     whole-proof.ts                  # Whole-proof loop: sample k proofs → verify → repair with feedback + suggestions; each candidate records `progress` (tactic lines before the first error); earlyStop (PROOF_EARLY_STOP) gives up after round 0 when no candidate got past its first tactic (gaveUpEarly); stops when the run's cost cap is reached (costCapped); a native prover (proverPromptStyle) gets nativeProverPrompt (no system message, plan first, LLM_PROVER_MAX_TOKENS/TIMEOUT_MS) and a self-correction turn (its proof as the assistant turn + Lean's errors); extractTactics(text, theoremName) takes the target declaration when the answer also defines helper lemmas (logged, not carried over)
     sketch.ts                       # Sketch-and-fill: numbered informal proof first (planner role, high effort; SKETCH_INFORMAL, skipped when the caller gives a hint) → skeleton with one `have … := by sorry` per step → each hole: hammer, then the whole-proof prover on the hole as a lemma of its own (goal-statement.ts; checked to elaborate first; SKETCH_HOLE_PROVER auto = when LLM_PROVER_MODEL is set), then goal search → splice → strict verify
     budget.ts                       # PROOF_BUDGET presets (low/normal/high) for whole-proof, sketch and goal search; `sketchStage` false on low (sketch-and-fill proved nothing on the miniF2F baselines); SKETCH_ENABLED=true forces it on
-    context.ts                      # Prover context: retrieved premises + recalled proofs as one prompt block; rememberVerifiedProof
+    context.ts                      # Prover context: retrieved premises + recalled proofs as one prompt block; rememberVerifiedProof (source, opens)
+    replay.ts                       # Memory replay (plan 7b P3): recalled proofs of similar theorems tried verbatim before any model call (≤ 3 Lean checks, scripts ≤ 40 lines, full verification incl. statement lock); PROOF_MEMORY_REPLAY=false turns it off; theorem pipeline stage "memory" (strategy "memory"), bench cascade proved_by "memory"
+    dataset.ts                      # Expert iteration data: harvestRows (bench result rows → proofs to remember), sftRecords / repairRecords (native prover chat format, stable hash train/eval split, benchmark test sets left out unless includeTest), tacticNames / jaccard, memoryHitStats (leave-one-out similar-theorem hit rate)
   llm/
     client.ts                       # Core LLM client (roles, sampling, retry, fallback, cache, Zod)
     output-locale.ts                # Output language per request (ui_locale cookie): prompt switch for English, lt(zh, en), withRequestLocale
@@ -196,7 +198,7 @@ lib/
     hammer.ts                       # Automation cascade (rfl/decide/`decide +kernel` on closed goals — big-number facts such as gcd(2^2024+1, 2^3036-1) = 1, which the elaborator refuses above exponent 256/simp/omega/norm_num/linarith/nlinarith hints/positivity/aesop/exact?)
     premises.ts                     # Premise retrieval: BM25 over Mathlib names/statements (built index + curated seed), similar-name hints
     premise-seed.ts                 # ~700 curated Mathlib lemmas used when no index is built
-    proof-memory.ts                 # Verified proofs stored in .data/proof-memory.json; similar proofs recalled as worked examples
+    proof-memory.ts                 # Verified proofs stored in .data/proof-memory.json (PROOF_MEMORY_MAX default 10000; each with source "solve" / "bench:<file>" and opens); similar proofs recalled as worked examples (recallScored: with BM25 scores, `touch: false` / `among` for evaluation); rememberProofs (bulk, one write); replay hits counted per entry; repair pairs (failed proof + Lean feedback → fixed proof) appended to .data/proof-repairs.jsonl (PROOF_REPAIRS_PATH)
     refute.ts                       # Counterexample search for statements: `decide` on the negation, Mathlib `plausible`
     sanitize.ts                     # Forbidden-command filter (#eval, elab, unsafe, axiom, …) + statement validation
     axioms.ts                       # `#print axioms` / `#check` parsing, standard-axiom allowlist
@@ -231,11 +233,14 @@ bench/
   minif2f-*.json                    # Downloaded by `npm run bench:fetch` (git-ignored)
 
 scripts/
-  bench.ts                          # Prover benchmark: cascade/whole_proof/sketch/stepwise, budgets, proved-by + failure taxonomy; --cost-cap usd per theorem (default PROOF_COST_CAP_USD; failure budget_exhausted, row cost_capped), --early-stop (row early_stop; later stages skipped), --no-retrieval; in the cascade sketch-and-fill runs on hard theorems only (SKETCH_HARD_ONLY=false: all); --concurrency n (runPool; LEAN_REPL_WORKERS defaults to n), --max-cost usd (no new theorems once spent; the rest listed as skipped), --memory readonly (default: recall but do not store, so runs do not feed later runs) | write | off; environment failures (`infra_error`: model call failed, a Lean worker hung on the statement check) are retried once at the end (--no-retry); statements are repaired on load (fixStatement); result JSON records concurrency, memory, commit, models, elapsed time
+  bench.ts                          # Prover benchmark: cascade/whole_proof/sketch/stepwise, budgets, proved-by + failure taxonomy; --cost-cap usd per theorem (default PROOF_COST_CAP_USD; failure budget_exhausted, row cost_capped), --early-stop (row early_stop; later stages skipped), --no-retrieval; in the cascade sketch-and-fill runs on hard theorems only (SKETCH_HARD_ONLY=false: all); --concurrency n (runPool; LEAN_REPL_WORKERS defaults to n), --max-cost usd (no new theorems once spent; the rest listed as skipped), --memory readonly (default: recall but do not store, so runs do not feed later runs) | write (also repair pairs) | off (no recall, no replay — compare with runs made before the memory was filled; the result JSON records memory_size); the cascade replays recalled proofs after the hammer (proved_by "memory"); environment failures (`infra_error`: model call failed, a Lean worker hung on the statement check) are retried once at the end (--no-retry); statements are repaired on load (fixStatement); result JSON records concurrency, memory, commit, models, elapsed time
   bench-ablation.ts                  # `npm run bench:ablation`: the benchmark once per variant (base, no_retrieval, seed_premises, whole_proof, early_stop, sketch, normal, cost_cap) on the same deterministic sample of miniF2F theorems (every k-th per difficulty, --sample 60) → bench/ABLATION.md: proved, cost, cost per proof, gained/lost vs base, marginal theorems per dollar
   bench-formalize.ts                # `npm run bench:formalize`: miniF2F informal statements → autoformalize → compared with the official Lean statement (same signature / hammer proves official ↔ ours / not shown / refuted) → bench/FORMALIZATION.md: faithful share, acceptance, layers too strict or too loose, failed layers, cost
   bench-report.ts                   # Result JSON files → Markdown (bench/BASELINE.md): one row per run, proved-by / failures / cost of failures per run, gained and lost theorems between consecutive runs
   bench-baseline.ts                 # `npm run bench:baseline`: retest the first 20 miniF2F theorems (normal budget), then all 244 (low budget, --max-cost 12), 3 at a time, then BASELINE.md from every miniF2F result; `--rerun <full.json>` re-runs only the theorems a fix touched and merges them; `--prover <merged.json>` tries the configured prover on that run's failures (bench --only-failed) and merges into "<full>-prover.json"; runs under `caffeinate -i` on macOS
+  proofs-harvest.ts                 # `npm run proofs:harvest -- bench/results/*.json`: every proof a bench run verified into the proof memory (statements from the bench file, repaired as on load; source bench:<file>; --dry-run)
+  proofs-export.ts                  # `npm run proofs:export`: data/proof-dataset/ — proofs.jsonl, sft-train/eval.jsonl, repair-train/eval.jsonl, README.md (counts; miniF2F-test proofs left out of training unless --include-test)
+  proofs-eval.ts                    # `npm run proofs:eval [--replay]`: memory size and leave-one-out hit rate (top-k recalled proofs use the same tactics), optionally verbatim replay in Lean → bench/MEMORY.md
   prover-check.ts                   # `npm run prover:check`: one call to the prover endpoint (model/host, prompt style, latency, tokens/s, cost, proof read back, verified when Lean is available)
   bench-merge.ts                    # Re-run rows replace the full run's rows by id, totals recomputed, Lean-message failure buckets re-classified; rerunIds (statements fixStatement changes + environment failures)
   fetch-benchmark.ts                # miniF2F (Lean 4) → bench file (`npm run bench:fetch`); fixStatement: big-operator bodies with a top-level +/- are parenthesised (the body is now parsed at precedence 67, so `∑ k ∈ s, a + k * d` lost k), Complex.abs z → ‖z‖
@@ -269,7 +274,7 @@ docker-compose.yml                  # Service orchestration (web + compute + neo
 nginx.conf                          # Reverse proxy with rate limiting
 .dockerignore                       # Docker build exclusions
 
-tests/                              # 113 Vitest test files (unit + fake REPL + real-Lean integration)
+tests/                              # 114 Vitest test files (unit + fake REPL + real-Lean integration)
 components/ui/                      # 16 shadcn/ui primitives (+avatar, dropdown-menu, label)
 ```
 
@@ -329,6 +334,9 @@ npm run bench:report -- bench/results/*.json --out bench/BASELINE.md
 npm run bench:ablation -- --variants base,no_retrieval,early_stop,sketch   # ablations on 60 theorems → bench/ABLATION.md
 npm run bench:formalize -- --sample 40   # autoformalization vs official miniF2F statements → bench/FORMALIZATION.md
 npm run premises:build         # Index the sandbox's Mathlib for premise retrieval (minutes; needs the built sandbox)
+npm run proofs:harvest -- bench/results/*.json   # verified bench proofs → proof memory
+npm run proofs:eval -- --replay                   # memory size + similar-theorem hit rate → bench/MEMORY.md
+npm run proofs:export                             # fine-tuning files → data/proof-dataset/
 ```
 
 ## Current Status & TODO

@@ -326,7 +326,7 @@ export interface LeanProofAttempt {
   /** Which backend produced the verdict. */
   verifier?: "repl" | "spawn" | "none";
   /** How the proof was found: a one-tactic probe, the whole-proof loop, or stepwise search. */
-  strategy?: "trivial" | "hammer" | "whole_proof" | "sketch" | "stepwise";
+  strategy?: "trivial" | "hammer" | "memory" | "whole_proof" | "sketch" | "stepwise";
   /** Proof candidates generated (samples or step attempts). */
   attempts?: number;
   /** Whole-proof rounds run (sampling + repairs). */

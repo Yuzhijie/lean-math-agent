@@ -23,6 +23,10 @@
     "bench:baseline": "tsx scripts/bench-baseline.ts",
     "bench:merge": "tsx scripts/bench-merge.ts",
     "bench:ablation": "tsx scripts/bench-ablation.ts",
+    "proofs:harvest": "tsx scripts/proofs-harvest.ts",
+    "proofs:import": "tsx scripts/proofs-import.ts",
+    "proofs:export": "tsx scripts/proofs-export.ts",
+    "proofs:eval": "tsx scripts/proofs-eval.ts",
     "bench:formalize": "tsx scripts/bench-formalize.ts",
     "prover:check": "tsx scripts/prover-check.ts"
   },

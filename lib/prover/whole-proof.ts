@@ -112,6 +112,8 @@ export interface WholeProofResult {
   gaveUpEarly?: boolean;
   /** Stopped because the run's cost cap (PROOF_COST_CAP_USD) was reached. */
   costCapped?: boolean;
+  /** When the proof was found in a repair round: the failed proof that was fed back and Lean's feedback on it (a repair pair). */
+  repairedFrom?: { tactics: string; feedback: string };
   log: string;
   durationMs: number;
 }
@@ -197,6 +199,7 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
 
   let gaveUpEarly = false;
   let costCapped = false;
+  let lastRepair: { tactics: string; feedback: string } | undefined;
   for (let round = 0; round <= cfg.rounds; round++) {
     if (costCapReached()) {
       log.push(`round ${round}: cost cap reached ($${scopeCostCap()} for this run); stopping`);
@@ -283,6 +286,7 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
         verification: winner.verification,
         rounds: roundsRun,
         samples: totalSamples,
+        ...(round > 0 && lastRepair ? { repairedFrom: lastRepair } : {}),
       });
     }
     if (verified.every((v) => v.verification.status === "unavailable")) {
@@ -346,6 +350,7 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
         }
       }
     }
+    lastRepair = { tactics: best.tactics, feedback };
     const errorTexts = best.verification.messages.map((m) => m.message);
     let nameHints = await loogleHintsForUnknownIdentifiers(errorTexts);
     if (!nameHints) nameHints = await localHintsForUnknownIdentifiers(unknownIdentifiers(errorTexts));

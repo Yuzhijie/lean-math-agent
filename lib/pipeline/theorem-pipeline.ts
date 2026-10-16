@@ -28,6 +28,8 @@ import { buildProverContext, rememberVerifiedProof } from "../prover/context";
 import { proveBySketch, sketchEnabled } from "../prover/sketch";
 import { proveWholeTheorem, wholeProofEnabled } from "../prover/whole-proof";
 import { hammerTheorem } from "../lean/hammer";
+import { rememberRepair } from "../lean/proof-memory";
+import { replayRecalled } from "../prover/replay";
 import { lt } from "../llm/output-locale";
 import { proofSearch } from "../search/proof-search";
 import { updateSession } from "../session-store";
@@ -254,6 +256,58 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
   }
 
   throwIfCancelled();
+  // ── 3b. Memory replay: a recalled proof of a similar theorem, verbatim (no model calls) ──
+  if (proverContext.recalled.length && preflight.status !== "unavailable") {
+    try {
+      const replay = await replayRecalled({
+        sessionId: session.id,
+        theoremName,
+        theoremType,
+        recalled: proverContext.recalled,
+        expectedSignature: frozenSignature,
+        useMathlib,
+      });
+      if (replay) {
+        emit("memory", lt(`✅ 相似定理的已验证证明直接适用（${replay.entry.theorem_name}）`, `✅ A verified proof of a similar theorem works as is (${replay.entry.theorem_name})`));
+        void rememberVerifiedProof({ theoremName, theoremType, tactics: replay.tactics, strategy: "memory", problemText: session.problem_text });
+        const leanProofAttempt: LeanProofAttempt = {
+          attempted: true,
+          success: true,
+          formal_statement: replay.source,
+          proof_code: replay.source,
+          axioms: replay.verification.axioms?.axioms,
+          statement_locked: frozenSignature !== undefined && replay.verification.signatureMatch === true,
+          verifier: replay.verification.backend,
+          strategy: "memory",
+          attempts: replay.tried,
+        };
+        updateSession(session.id, { assembled_lean: replay.source, build_status: "ok", pipeline_stage: "complete", lean_proof_attempt: leanProofAttempt });
+        emit("complete", lt("✅ 完全形式化验证通过（证明记忆）", "✅ Fully formally verified (proof memory)"));
+        return {
+          status: 200,
+          body: {
+            ...baseBody,
+            nl_solution: nlSolution,
+            lean_proof_attempt: leanProofAttempt,
+            method: { id: "memory", title: lt(`证明记忆（${replay.entry.theorem_name}）`, `Proof memory (${replay.entry.theorem_name})`), category: "other" },
+            steps: [],
+            sorry_labels: [],
+            fully_verified: true,
+            build_status: "ok",
+            total_attempts: replay.tried,
+            sorry_report: { fully_verified: true, summary: lt("✅ 完全形式化验证通过", "✅ Fully formally verified"), details: [] },
+            assembled_lean: replay.source,
+            build_log: replay.verification.log,
+          },
+        };
+      }
+    } catch (e) {
+      if (e instanceof CancelledError) throw e;
+      // Replay is best effort.
+    }
+  }
+
+  throwIfCancelled();
   // ── 4. Whole-proof prover loop ───────────────────────────────────────
   const wholeProofOn = opts.whole_proof ?? wholeProofEnabled();
   let wholeProofSummary: string | undefined;
@@ -281,6 +335,7 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
       wholeProofSummary = lt(`${whole.samples} 个候选 / ${whole.rounds} 轮`, `${whole.samples} candidates / ${whole.rounds} rounds`);
       if (whole.ok && whole.verification && whole.source) {
         void rememberVerifiedProof({ theoremName, theoremType, tactics: whole.tactics ?? "", strategy: "whole_proof", problemText: session.problem_text });
+        if (whole.repairedFrom) void rememberRepair({ theorem_name: theoremName, theorem_type: theoremType, failed_tactics: whole.repairedFrom.tactics, feedback: whole.repairedFrom.feedback, fixed_tactics: whole.tactics ?? "", source: "solve" }).catch(() => false);
         const leanProofAttempt: LeanProofAttempt = {
           attempted: true,
           success: true,

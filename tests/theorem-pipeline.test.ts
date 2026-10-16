@@ -242,3 +242,26 @@ describe("theorem pipeline: multi-agent methods and metrics", () => {
     expect((data.pipeline_events as unknown[]).length).toBeGreaterThan(3);
   });
 });
+
+describe("theorem pipeline: memory replay", () => {
+  it("proves the theorem with a remembered proof of a similar one before asking any model", async () => {
+    const { rememberProof, resetProofMemoryCache } = await import("@/lib/lean/proof-memory");
+    resetProofMemoryCache();
+    await rememberProof({ theoremName: "add_zero_m", theoremType: ": ∀ (m : Nat), m + 0 = m", tactics: "intro m\nsimp", source: "solve" });
+    try {
+      const { status, body } = await solve();
+      expect(status).toBe(200);
+      expect(body.fully_verified).toBe(true);
+      expect(body.method).toMatchObject({ id: "memory" });
+      expect(body.lean_proof_attempt).toMatchObject({ success: true, strategy: "memory", statement_locked: true });
+      expect(wholeMock).not.toHaveBeenCalled();
+      const events = body.pipeline_events as Array<{ stage: string; detail: string }>;
+      expect(events.some((e) => e.stage === "memory" && /add_zero_m/.test(e.detail))).toBe(true);
+    } finally {
+      const fs = await import("node:fs");
+      const { proofMemoryPath } = await import("@/lib/lean/proof-memory");
+      fs.rmSync(proofMemoryPath(), { force: true });
+      resetProofMemoryCache();
+    }
+  });
+});

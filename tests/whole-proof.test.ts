@@ -164,6 +164,9 @@ describe("proveWholeTheorem", () => {
     expect(r.samples).toBe(2);
     expect(r.suggestions).toEqual(["nlinarith [h]"]);
     expect(progress).toEqual(["0:sampling", "0:verifying", "0:fail", "0:searching", "1:sampling", "1:verifying", "1:ok"]);
+    // The repair pair (expert iteration data): the failed proof that was fed back and Lean's feedback on it.
+    expect(r.repairedFrom?.tactics).toContain("rw [foo] at h");
+    expect(r.repairedFrom?.feedback).toContain("unknown identifier 'foo'");
 
     // The suggestion probe ran after the compiling prefix (before the failing line).
     expect(suggestMock).toHaveBeenCalledTimes(1);

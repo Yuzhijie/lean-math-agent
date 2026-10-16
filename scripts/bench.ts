@@ -22,7 +22,9 @@
  *                     tactic, and skip sketch-and-fill for it (PROOF_EARLY_STOP=true)
  *   --memory          proof memory: "readonly" (default) recalls stored proofs but does not add
  *                     the run's own, so results do not depend on order or earlier runs of the same
- *                     file; "write" also stores them; "off" disables recall
+ *                     file; "write" also stores them (and repair pairs); "off" disables recall and
+ *                     the memory replay stage (use it to compare with runs made before the memory
+ *                     was filled — the result JSON records memory_size)
  *
  *   npm run bench:fetch && npm run bench -- --file bench/minif2f-test.json --limit 20
  *
@@ -43,6 +45,8 @@ import { proveWholeTheorem, type WholeProofResult } from "../lib/prover/whole-pr
 import { proveBySketch, type SketchResult } from "../lib/prover/sketch";
 import { budgetPreset, parseBudget } from "../lib/prover/budget";
 import { buildProverContext, rememberVerifiedProof } from "../lib/prover/context";
+import { proofMemorySize, recallProofs, rememberRepair } from "../lib/lean/proof-memory";
+import { replayRecalled } from "../lib/prover/replay";
 import { hammerTheorem } from "../lib/lean/hammer";
 import { classifyLeanErrors } from "../lib/lean/parse-log";
 import { enumerateMethods } from "../lib/llm/enumerate";
@@ -66,7 +70,7 @@ interface BenchFile {
 }
 
 type Strategy = "cascade" | "whole_proof" | "sketch" | "stepwise";
-type Stage = "hammer" | "whole_proof" | "sketch" | "stepwise" | "none";
+type Stage = "hammer" | "memory" | "whole_proof" | "sketch" | "stepwise" | "none";
 
 /** Why a theorem was not proved — one bucket per theorem, coarsest signal first. */
 export type FailureKind =
@@ -238,7 +242,10 @@ async function main(): Promise<void> {
     process.exit(2);
   }
   if (memory === "off") process.env.PROOF_MEMORY_ENABLED = "false";
-  const remember = memory === "write" ? rememberVerifiedProof : async () => false;
+  const remember =
+    memory === "write"
+      ? (a: Parameters<typeof rememberVerifiedProof>[0]) => rememberVerifiedProof({ ...a, source: `bench:${path.basename(file)}`, opens })
+      : async (_a: Parameters<typeof rememberVerifiedProof>[0]) => false;
   // One REPL worker per theorem in flight (the pool reads this when it is first used).
   if (concurrency > 1 && !process.env.LEAN_REPL_WORKERS) process.env.LEAN_REPL_WORKERS = String(Math.min(concurrency, 8));
 
@@ -313,6 +320,17 @@ async function main(): Promise<void> {
             }
           }
         }
+        // 1b. Memory replay (cascade only): a remembered proof of a similar theorem, verbatim.
+        if (strategy === "cascade" && memory !== "off") {
+          const recalled = await recallProofs({ theoremType: t.type, problemText: t.informal, excludeType: t.type, k: 3 }).catch(() => []);
+          const replay = recalled.length
+            ? await replayRecalled({ sessionId: `bench-${t.id}`, theoremName: t.name, theoremType: t.type, recalled, expectedSignature, useMathlib, opens })
+            : undefined;
+          if (replay) {
+            void remember({ theoremName: t.name, theoremType: t.type, tactics: replay.tactics, strategy: "memory", problemText: t.informal });
+            return { ...base, ok: true, proved_by: "memory", tactics: replay.tactics, ...fromMetrics(metrics(), started) };
+          }
+        }
         // 2. Whole proof.
         let wholeRounds: number | undefined;
         let wholeSamples: number | undefined;
@@ -332,6 +350,8 @@ async function main(): Promise<void> {
           wholeSamples = r.samples;
           if (r.ok) {
             void remember({ theoremName: t.name, theoremType: t.type, tactics: r.tactics ?? "", strategy: "whole_proof", problemText: t.informal });
+            if (memory === "write" && r.repairedFrom)
+              void rememberRepair({ theorem_name: t.name, theorem_type: t.type, failed_tactics: r.repairedFrom.tactics, feedback: r.repairedFrom.feedback, fixed_tactics: r.tactics ?? "", source: `bench:${path.basename(file)}` });
             return { ...base, ok: true, proved_by: "whole_proof", rounds: r.rounds, samples: r.samples, tactics: r.tactics, ...fromMetrics(metrics(), started) };
           }
           failure = wholeProofFailure(r);
@@ -439,6 +459,7 @@ async function main(): Promise<void> {
         concurrency,
         repl_workers: Number(process.env.LEAN_REPL_WORKERS ?? 1),
         memory,
+        memory_size: memory === "off" ? 0 : await proofMemorySize().catch(() => 0),
         retrieval,
         max_cost: maxCost,
         ...(costCap !== undefined ? { theorem_cost_cap: costCap } : {}),

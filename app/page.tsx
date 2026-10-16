@@ -1176,7 +1176,9 @@ export default function Home() {
                                     )
                                   : leanProofAttempt.strategy === "trivial" || leanProofAttempt.strategy === "hammer"
                                     ? tr("自动化策略", "Automated tactics")
-                                    : tr(
+                                    : leanProofAttempt.strategy === "memory"
+                                      ? tr("证明记忆（相似定理的已验证证明直接适用）", "Proof memory (a verified proof of a similar theorem, as is)")
+                                      : tr(
                                         `分步搜索（${leanProofAttempt.attempts ?? "?"} 次尝试）`,
                                         `Stepwise search (${leanProofAttempt.attempts ?? "?"} attempts)`,
                                       )}
@@ -1302,6 +1304,7 @@ function strategyLabel(strategy: string, tr: (zh: string, en: string) => string)
   const labels: Record<string, string> = {
     trivial: tr("单条策略", "a single tactic"),
     hammer: tr("自动化策略（锤子）", "automation (hammer)"),
+    memory: tr("证明记忆（相似定理的证明直接适用）", "proof memory (a similar theorem's proof, as is)"),
     whole_proof: tr("整体证明（模型写完整证明，Lean 验证）", "whole proof (the model writes it, Lean checks it)"),
     sketch: tr("骨架分解（子目标逐个证明）", "sketch and fill (subgoals proved one by one)"),
     stepwise: tr("分步搜索", "step-by-step search"),

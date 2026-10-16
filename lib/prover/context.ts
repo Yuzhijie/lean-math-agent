@@ -67,9 +67,12 @@ export async function rememberVerifiedProof(args: {
   tactics: string;
   strategy?: string;
   problemText?: string;
+  /** Where the proof came from (default "solve"). */
+  source?: string;
+  opens?: string[];
 }): Promise<boolean> {
   try {
-    return (await rememberProof(args)) !== undefined;
+    return (await rememberProof({ ...args, source: args.source ?? "solve" })) !== undefined;
   } catch {
     return false;
   }
