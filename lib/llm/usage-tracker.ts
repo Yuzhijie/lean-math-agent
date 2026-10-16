@@ -68,6 +68,45 @@ export function recordUsage(record: UsageRecord): void {
   if (record.latencyMs > 0) recordLatency(record.role, record.latencyMs);
   const scope = scopeStorage.getStore();
   if (scope) scope.llm.push(record);
+  const bill = billingStorage.getStore();
+  if (bill) {
+    const cost = estimateCost([record]);
+    if (cost) {
+      bill.spent += cost;
+      bill.onCost(cost);
+    }
+  }
+}
+
+// ── Billing: who pays for the calls made inside a request ─────────────
+//
+// Independent of usage scopes (which do not nest): every call recorded inside withBilling is
+// charged to its owner as it happens — also calls made after a streaming route has returned its
+// Response — and the owner's remaining daily budget stops new calls (billingCapReached).
+
+interface Billing {
+  owner: string;
+  spent: number;
+  /** What is left of the owner's budget when the request started (undefined = no limit). */
+  remainingUsd?: number;
+  onCost: (usd: number) => void;
+}
+
+const billingStorage = new AsyncLocalStorage<Billing>();
+
+export function withBilling<T>(owner: string, opts: { remainingUsd?: number; onCost: (usd: number) => void }, fn: () => Promise<T>): Promise<T> {
+  return billingStorage.run({ owner, spent: 0, remainingUsd: opts.remainingUsd, onCost: opts.onCost }, fn);
+}
+
+/** The request's owner has spent what was left of their budget. */
+export function billingCapReached(): boolean {
+  const b = billingStorage.getStore();
+  return !!b && b.remainingUsd !== undefined && b.spent >= b.remainingUsd;
+}
+
+/** Who pays for calls made here (undefined outside withBilling). */
+export function billingOwner(): string | undefined {
+  return billingStorage.getStore()?.owner;
 }
 
 // ── Latency estimate per role ─────────────────────────────────────────

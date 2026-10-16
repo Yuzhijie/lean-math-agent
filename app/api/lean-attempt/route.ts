@@ -3,7 +3,8 @@ import { NextResponse } from "next/server";
 import { updateSession } from "@/lib/session-store";
 import { withUsageScope } from "@/lib/llm/usage-tracker";
 import { answerCandidates, attemptLeanFormalization, leanAttemptRetryable } from "@/lib/pipeline/lean-attempt";
-import { lt, withRequestLocale } from "@/lib/llm/output-locale";
+import { lt } from "@/lib/llm/output-locale";
+import { modelRoute } from "@/lib/model-route";
 
 /**
  * The last solving step, started by hand: Lean 4 formalization of a solved
@@ -37,4 +38,5 @@ async function handlePOST(req: Request) {
   });
 }
 
-export const POST = withRequestLocale(handlePOST);
+// Signed-in caller, spend limit and rate limit checked; model calls charged to the caller (lib/model-route.ts).
+export const POST = modelRoute(handlePOST);

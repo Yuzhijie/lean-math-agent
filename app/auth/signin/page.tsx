@@ -20,15 +20,20 @@ export default function SignInPage() {
           <CardTitle className="text-2xl font-bold text-white">{tr('登录', 'Sign in')}</CardTitle>
           <CardDescription className="text-slate-400">
             {tr(
-              '使用 GitHub 或 Google 账号登录以保存证明历史',
-              'Sign in with GitHub or Google to save your proof history',
+              '邀请制内测：用受邀邮箱对应的 GitHub 或 Google 账号登录',
+              'Invite-only beta: sign in with the GitHub or Google account of your invited email',
             )}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {error && (
             <div className="bg-red-500/10 border border-red-500/50 text-red-400 px-4 py-2 rounded-md text-sm">
-              {error === 'OAuthSignin' || error === 'OAuthCallback'
+              {error === 'AccessDenied'
+                ? tr(
+                    '目前是邀请制内测，这个账号的邮箱还不在邀请名单里。请联系管理员把邮箱加入名单。',
+                    'This is an invite-only beta and this account’s email is not on the invite list yet. Ask the administrator to add it.',
+                  )
+                : error === 'OAuthSignin' || error === 'OAuthCallback'
                 ? tr(
                     '第三方登录失败，请检查 OAuth 配置后重试',
                     'Third-party sign-in failed. Check the OAuth configuration and try again.',

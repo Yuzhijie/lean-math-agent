@@ -90,6 +90,15 @@ export function isEnglish(): boolean {
 export function withRequestLocale<A extends unknown[], R>(handler: (...args: A) => Promise<R>): (...args: A) => Promise<R> {
   return async (...args: A) => {
     const locale = await outputLocale();
-    return forced.run(locale, () => handler(...args));
+    try {
+      return await forced.run(locale, () => handler(...args));
+    } catch (e) {
+      // Auth required and nobody signed in (lib/access.ts requestOwner) → 401 for every API route.
+      if (e instanceof Error && e.name === "UnauthorizedError") {
+        const message = locale === "en-US" ? "Please sign in" : "请先登录";
+        return new Response(JSON.stringify({ error: message }), { status: 401, headers: { "Content-Type": "application/json" } }) as R;
+      }
+      throw e;
+    }
   };
 }

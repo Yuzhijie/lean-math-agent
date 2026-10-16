@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { solveComputational } from "@/lib/compute/solver";
 import { LlmError } from "@/lib/llm/client";
-import { withRequestLocale } from "@/lib/llm/output-locale";
+import { modelRoute } from "@/lib/model-route";
 
 interface SolveComputeRequest {
   problem_text: string;
@@ -45,4 +45,5 @@ async function handlePOST(req: Request) {
 }
 
 // Server messages and model output follow the UI language (lib/llm/output-locale.ts).
-export const POST = withRequestLocale(handlePOST);
+// Signed-in caller, spend limit and rate limit checked; model calls charged to the caller (lib/model-route.ts).
+export const POST = modelRoute(handlePOST);

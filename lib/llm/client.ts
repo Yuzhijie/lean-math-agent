@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { isOpenAiReasoningModel, loadConfig, LlmConfigError, type LlmConfig, type ModelEndpoint, type ModelRole, type ReasoningEffort } from "./config";
 import { buildCacheKey, getGlobalCache } from "./cache";
-import { costCapReached, parseAndRecordUsage, recordLatency, scopeCostCap, setPriceTable, type RawUsage } from "./usage-tracker";
+import { billingCapReached, costCapReached, parseAndRecordUsage, recordLatency, scopeCostCap, setPriceTable, type RawUsage } from "./usage-tracker";
 import { CancelledError, currentSignal, throwIfCancelled } from "../jobs";
 import { logLlm, logDebug, type LlmLogEntry } from "./logger";
 import { localizeMessages, outputLocale } from "./output-locale";
@@ -317,6 +317,7 @@ async function rawChatMessages(
   // A cancelled job makes no new calls (lib/jobs.ts).
   throwIfCancelled();
   if (costCapReached()) throw new CostCapError(`cost cap reached ($${scopeCostCap()} for this run)`);
+  if (billingCapReached()) throw new CostCapError("today's spend limit for this account is used up");
   const role: ModelRole = options.role ?? "general";
   const temp = options.temperature ?? 0.2;
   const requestTimeout = options.timeoutMs ?? config.timeoutMs;

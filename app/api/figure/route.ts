@@ -4,7 +4,7 @@ import { z } from "zod";
 import { generateFigure } from "@/lib/figure/generate";
 import { LlmError } from "@/lib/llm/client";
 import { updateSession } from "@/lib/session-store";
-import { withRequestLocale } from "@/lib/llm/output-locale";
+import { modelRoute } from "@/lib/model-route";
 
 const bodySchema = z.object({
   session_id: z.string().min(1).optional(),
@@ -48,4 +48,5 @@ async function handlePOST(req: Request) {
 }
 
 // Server messages and model output follow the UI language (lib/llm/output-locale.ts).
-export const POST = withRequestLocale(handlePOST);
+// Signed-in caller, spend limit and rate limit checked; model calls charged to the caller (lib/model-route.ts).
+export const POST = modelRoute(handlePOST);

@@ -16,4 +16,4 @@ const bodySchema = z.object({
 export const POST = bankRoute<P>(async ({ req, owner, params }) => {
   const body = bodySchema.parse(await jsonBody(req));
   return reclassifyItems(owner, params.id, { itemIds: body.item_ids, overwrite: body.overwrite });
-});
+}, { model: true });

@@ -6,7 +6,10 @@
  *   active subscription; signed-in users without one are on "free".
  * - Daily spend (optional): QUOTA_DAILY_USD_FREE / _PRO / _ENTERPRISE, in the LLM_PRICES currency.
  *   What is left today also caps the cost of the run (with PROOF_COST_CAP_USD).
- * - Rate limit: at most RATE_LIMIT_PER_MIN solve starts per minute per user (default 6).
+ * - Rate limit: at most RATE_LIMIT_PER_MIN solve starts per minute per user (default 6), and
+ *   RATE_LIMIT_CALLS_PER_MIN calls of the other model routes (default 30; admitCall).
+ * - Spend: every model call made for a user is charged to them as it happens (withOwnerBilling →
+ *   usage-tracker billing), streaming routes included; what is left of today's limit stops new calls.
  *
  * The local single user (no sign-in, owner "local") is not limited unless QUOTA_LOCAL_PLAN names a
  * plan for it. Usage is counted in SQLite (QUOTA_DB_PATH, default .data/usage.db), in memory when
@@ -15,6 +18,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { PLANS } from "./payments/stripe";
+import { withBilling } from "./llm/usage-tracker";
 
 export interface QuotaStatus {
   plan: string;
@@ -127,8 +131,8 @@ export async function quotaStatus(owner: string): Promise<QuotaStatus> {
 
 const buckets = new Map<string, { tokens: number; at: number }>();
 
-function rateLimited(owner: string): boolean {
-  const perMin = Number(process.env.RATE_LIMIT_PER_MIN ?? 6);
+function rateLimited(owner: string, perMinRaw: string | undefined = process.env.RATE_LIMIT_PER_MIN, dflt = 6): boolean {
+  const perMin = Number(perMinRaw ?? dflt);
   if (!(perMin > 0)) return false;
   const now = Date.now();
   const b = buckets.get(owner) ?? { tokens: perMin, at: now };
@@ -157,6 +161,26 @@ export async function admitSolve(owner: string, lt: (zh: string, en: string) => 
   if (rateLimited(owner)) return { ...st, ok: false, reason: lt("求解太频繁，请一分钟后再试", "Too many solves; try again in a minute") };
   (await store()).add(owner, month(), 1, 0);
   return { ...st, monthSolves: st.monthSolves + 1, ok: true, ...(st.dayLimit !== undefined ? { remainingUsd: Math.max(0, st.dayLimit - st.dayCost) } : {}) };
+}
+
+/**
+ * May `owner` call a model route other than a solve now (formalize, plan, figure, read an image,
+ * bank import/generation, …)? Checks today's spend limit and RATE_LIMIT_CALLS_PER_MIN (default 30);
+ * does not count as a solve.
+ */
+export async function admitCall(owner: string, lt: (zh: string, en: string) => string = (_zh, en) => en): Promise<QuotaCheck> {
+  const st = await quotaStatus(owner);
+  if (st.unlimited) return { ...st, ok: true };
+  if (st.dayLimit !== undefined && st.dayCost >= st.dayLimit)
+    return { ...st, ok: false, reason: lt(`今天的费用额度 $${st.dayLimit} 已用完`, `Today's spend limit of $${st.dayLimit} is used up`) };
+  if (rateLimited(`${owner}\u0000call`, process.env.RATE_LIMIT_CALLS_PER_MIN, 30))
+    return { ...st, ok: false, reason: lt("操作太频繁，请稍后再试", "Too many requests; try again shortly") };
+  return { ...st, ok: true, ...(st.dayLimit !== undefined ? { remainingUsd: Math.max(0, st.dayLimit - st.dayCost) } : {}) };
+}
+
+/** Run `fn` with every model call in it charged to `owner` as it happens; stops new calls past today's remaining budget. */
+export function withOwnerBilling<T>(owner: string, check: Pick<QuotaCheck, "remainingUsd">, fn: () => Promise<T>): Promise<T> {
+  return withBilling(owner, { remainingUsd: check.remainingUsd, onCost: (usd) => void recordSpend(owner, usd).catch(() => undefined) }, fn);
 }
 
 /** Add a finished run's cost to today's and this month's spend. */

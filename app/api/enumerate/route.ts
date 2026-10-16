@@ -3,9 +3,9 @@ import { NextResponse } from "next/server";
 import { enumerateMethods } from "@/lib/llm/enumerate";
 import { updateSession } from "@/lib/session-store";
 import { LlmError } from "@/lib/llm/client";
-import { withRequestLocale } from "@/lib/llm/output-locale";
 import { requestOwner } from "@/lib/bank/http";
 import { describeProblemFigures, figureRefsSchema, figureTextOf, problemWithFigure } from "@/lib/bank/problem-figures";
+import { modelRoute } from "@/lib/model-route";
 
 async function handlePOST(req: Request) {
   const body = (await req.json()) as { problem_text?: string; figures?: unknown; figure_text?: unknown };
@@ -41,4 +41,5 @@ async function handlePOST(req: Request) {
 }
 
 // Server messages and model output follow the UI language (lib/llm/output-locale.ts).
-export const POST = withRequestLocale(handlePOST);
+// Signed-in caller, spend limit and rate limit checked; model calls charged to the caller (lib/model-route.ts).
+export const POST = modelRoute(handlePOST);

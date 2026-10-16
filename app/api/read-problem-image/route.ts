@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { BankError } from "@/lib/bank/store";
-import { withRequestLocale, lt } from "@/lib/llm/output-locale";
+import { lt } from "@/lib/llm/output-locale";
 import { MAX_PROBLEM_IMAGE_BYTES, ProblemImageError, readProblemImage } from "@/lib/problem-image";
+import { modelRoute } from "@/lib/model-route";
 
 export const maxDuration = 120;
 
@@ -28,4 +29,5 @@ async function handlePOST(req: Request) {
   }
 }
 
-export const POST = withRequestLocale(handlePOST);
+// Signed-in caller, spend limit and rate limit checked; model calls charged to the caller (lib/model-route.ts).
+export const POST = modelRoute(handlePOST);

@@ -30,4 +30,4 @@ export const POST = bankRoute<P>(async ({ req, owner, params }) => {
   const batch = getBatch(owner, params.id, params.batchId);
   if (batch.status !== "draft") throw new BankError(lt("该批次已处理", "This batch has already been processed"), 409);
   return { batch: putBatch(owner, params.id, { ...batch, status: "discarded" }) };
-});
+}, { model: true });

@@ -3,7 +3,8 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { solveGeometry, parseGeometryNL, GeometryProblem } from '@/lib/geometry/clingo-solver';
-import { lt, withRequestLocale } from "@/lib/llm/output-locale";
+import { lt } from "@/lib/llm/output-locale";
+import { modelRoute } from "@/lib/model-route";
 
 async function handlePOST(request: NextRequest) {
   try {
@@ -53,4 +54,5 @@ async function handlePOST(request: NextRequest) {
 }
 
 // Server messages and model output follow the UI language (lib/llm/output-locale.ts).
-export const POST = withRequestLocale(handlePOST);
+// Signed-in caller, spend limit and rate limit checked; model calls charged to the caller (lib/model-route.ts).
+export const POST = modelRoute(handlePOST);

@@ -11,7 +11,7 @@ import {
   DIFFICULTY_LEVELS,
   COMPETITION_DOMAINS,
 } from "@/lib/types";
-import { withRequestLocale } from "@/lib/llm/output-locale";
+import { modelRoute } from "@/lib/model-route";
 
 // Problem generation can take a long time with slow LLM endpoints.
 // Deadline = GENERATE_TIMEOUT_MS (180s) × 2.5 = 450s; give a 30s buffer.
@@ -156,4 +156,5 @@ async function handlePOST(req: Request) {
 }
 
 // Server messages and model output follow the UI language (lib/llm/output-locale.ts).
-export const POST = withRequestLocale(handlePOST);
+// Signed-in caller, spend limit and rate limit checked; model calls charged to the caller (lib/model-route.ts).
+export const POST = modelRoute(handlePOST);

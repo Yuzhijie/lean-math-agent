@@ -12,4 +12,4 @@ export const GET = bankRoute<P>(async ({ req, owner, params }) => {
   const category = u.searchParams.get("category");
   if (!category) throw new BankError(lt("缺少 category 参数", "Missing category parameter"), 400);
   return { profile: await getProfile(owner, params.id, category, { refresh: u.searchParams.get("refresh") === "1" }) };
-});
+}, { model: true });

@@ -13,4 +13,4 @@ const bodySchema = z.object({ template: templateRefSchema, count: z.number().int
 export const POST = bankRoute<P>(async ({ req, owner, params }) => {
   const body = bodySchema.parse(await jsonBody(req));
   return { generation: await generateFromTemplate({ owner, bankId: params.id, template: body.template, count: body.count }) };
-});
+}, { model: true });

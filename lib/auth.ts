@@ -13,6 +13,7 @@ import GithubProvider from 'next-auth/providers/github';
 import GoogleProvider from 'next-auth/providers/google';
 import { PrismaAdapter } from '@next-auth/prisma-adapter';
 import { prisma } from '@/lib/db';
+import { isInvited } from '@/lib/access';
 
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma),
@@ -31,6 +32,11 @@ export const authOptions: NextAuthOptions = {
     maxAge: 30 * 24 * 60 * 60, // 30 days
   },
   callbacks: {
+    // Invite-only beta: only listed addresses may sign in (lib/access.ts; closed when auth is
+    // required and no list is set). A refused sign-in lands on /auth/signin?error=AccessDenied.
+    async signIn({ user }) {
+      return isInvited(user?.email);
+    },
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
@@ -49,7 +55,7 @@ export const authOptions: NextAuthOptions = {
   pages: {
     signIn: '/auth/signin',
     signOut: '/auth/signout',
-    error: '/auth/error',
+    error: '/auth/signin',
     verifyRequest: '/auth/verify-request',
   },
   secret: process.env.NEXTAUTH_SECRET,

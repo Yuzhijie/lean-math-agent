@@ -73,4 +73,4 @@ export const POST = bankRoute<P>(async ({ req, owner, params }) => {
     moreImages,
   });
   return { batch };
-});
+}, { model: true });

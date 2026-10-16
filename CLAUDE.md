@@ -19,7 +19,7 @@ AI-powered Lean 4 math theorem prover + problem solver. Single-page Next.js app.
 | Lean | Lean 4 + Mathlib v4.33.1 + Batteries + Aesop; verification via persistent `leanprover-community/repl` workers (env reuse, sorry goals, tactic mode, axiom + statement checks), `lake env lean` fallback |
 | Compute | Python SymPy HTTP microservice (9 endpoints) |
 | State | Sessions in SQLite (`.data/sessions.db`, each owned by a user; JSON files with SESSION_BACKEND=json), in-memory cache |
-| Tests | Vitest 5 (114 test files) |
+| Tests | Vitest 5 (116 test files) |
 
 ## Project Structure
 
@@ -84,6 +84,7 @@ app/
     jobs/route.ts                   # GET the caller's solve jobs (running, queued with place, recently ended)
     jobs/[id]/cancel/route.ts       # POST cancel one of the caller's jobs
     quota/route.ts                  # GET the caller's plan and usage (solves this month, spend today)
+    health/route.ts                 # GET public health check (Lean available, config sound, compute reachable) → 200 / 503; docker HEALTHCHECK
     solve/route.ts                  # One-click pipeline (classifies + dispatches; theorem path in lib/pipeline); admitted by lib/quota (429 with the reason), run as a job (queue, cancel on disconnect → 499)
     solve-stream/route.ts           # Same as SSE: first frame {type:"job", job_id, session_id}, progress frames (stage "queued" carries `position`), then result / error / {type:"cancelled"}
     solve-compute/route.ts          # Standalone computational solver
@@ -93,13 +94,16 @@ app/
 lib/
   types.ts                          # All domain types + constants (TAXONOMY, MATH_DOMAINS, etc.)
   schemas.ts                        # Zod schemas for all LLM outputs
-  auth.ts                           # NextAuth configuration (JWT, providers, callbacks)
+  auth.ts                           # NextAuth configuration (JWT, providers, callbacks); signIn callback = invite list (lib/access.ts), refused → /auth/signin?error=AccessDenied
+  access.ts                         # Invite-only beta: authRequired() (AUTH_REQUIRED, default on in production), invite list (INVITE_EMAILS / INVITE_DOMAINS / INVITE_FILE, default .data/invites.txt, re-read on every sign-in; closed when required and empty), requestOwner() (signed-in user id; "local" only when auth is not required; else UnauthorizedError → 401 via withRequestLocale / bankRoute)
+  model-route.ts                    # modelRoute(handler): every API route that calls a model — caller known (401), admitCall (today's spend limit, RATE_LIMIT_CALLS_PER_MIN) → 429, calls charged to the caller as they happen (withOwnerBilling); bank routes use bankRoute(…, { model: true })
+  startup-checks.ts                 # When auth is required: fatal (server refuses to start, instrumentation.ts; STARTUP_CHECKS=warn overrides) = no NEXTAUTH_SECRET / sign-in provider / LLM key / a model without an LLM_PRICES price; warnings = no invite list, no QUOTA_DAILY_USD_FREE, Stripe key without webhook secret
   db.ts                             # Prisma client singleton: client generated into lib/generated/prisma (git-ignored; `npx prisma generate`, also run by postinstall) + better-sqlite3 driver adapter
   db-url.ts                         # SQLite URL for prisma.config.ts and the adapter: relative file: paths resolve against prisma/ (Prisma 5 behaviour) → prisma/.data/prod.db
   session-store.ts                  # Sessions: in-memory cache + SQLite (default, SQLITE_DB_PATH; the JSON files are imported the first time the table is empty) or JSON files (SESSION_BACKEND=json); `owner` column, list/search per owner
   session-access.ts                 # getSessionForRequest / createSessionForRequest: API routes see only the caller's sessions (someone else's = not found; sessions without owner = "local")
   jobs.ts                           # Solve jobs: SOLVE_CONCURRENCY running (default 2), the rest queued in order with their place; per-user limit (plan's concurrentSolvers, else JOBS_PER_USER); cancel by owner (POST /api/jobs/:id/cancel) or when the client goes away; the cancel signal travels in AsyncLocalStorage — the LLM client refuses new calls and aborts the one in flight (no retry/fallback), verifyLeanSource refuses to start, the theorem pipeline stops at stage boundaries (CancelledError)
-  quota.ts                          # Per-user limits: plan from the active subscription (else free) — proofsPerMonth solves a month, concurrentSolvers at once; optional daily spend QUOTA_DAILY_USD_<PLAN> (what is left caps the run's cost with PROOF_COST_CAP_USD); RATE_LIMIT_PER_MIN starts a minute (default 6); usage in QUOTA_DB_PATH (default .data/usage.db); the local single user is unlimited unless QUOTA_LOCAL_PLAN
+  quota.ts                          # admitCall (other model routes: daily spend + RATE_LIMIT_CALLS_PER_MIN) and withOwnerBilling (usage-tracker billing: every call charged as it happens, streaming included; billingCapReached stops new calls past today's remaining budget). Per-user limits: plan from the active subscription (else free) — proofsPerMonth solves a month, concurrentSolvers at once; optional daily spend QUOTA_DAILY_USD_<PLAN> (what is left caps the run's cost with PROOF_COST_CAP_USD); RATE_LIMIT_PER_MIN starts a minute (default 6); usage in QUOTA_DB_PATH (default .data/usage.db); the local single user is unlimited unless QUOTA_LOCAL_PLAN
   utils.ts                          # cn() utility (clsx + tailwind-merge)
   math-segments.ts                  # Math text segmenter ($, $$, \(, \[)
   markdown-table.ts                 # Markdown tables in question text (scans keep tables that way): split/parse/remove; MathText renders them as tables (span-based, valid inside <p>)
@@ -244,6 +248,8 @@ scripts/
   prover-check.ts                   # `npm run prover:check`: one call to the prover endpoint (model/host, prompt style, latency, tokens/s, cost, proof read back, verified when Lean is available)
   bench-merge.ts                    # Re-run rows replace the full run's rows by id, totals recomputed, Lean-message failure buckets re-classified; rerunIds (statements fixStatement changes + environment failures)
   fetch-benchmark.ts                # miniF2F (Lean 4) → bench file (`npm run bench:fetch`); fixStatement: big-operator bodies with a top-level +/- are parenthesised (the body is now parsed at precedence 67, so `∑ k ∈ s, a + k * d` lost k), Complex.abs z → ‖z‖
+  migrate.mjs                       # prisma/migrations/*/migration.sql → SQLite (DATABASE_URL), recorded in _app_migrations; adopts a db-push database; runs at container start (no Prisma CLI in the image)
+  backup.sh                         # Consistent snapshot of the app-data volume (SQLite online backup + files) → backups/app-data-<time>.tar.gz
   build-premise-index.ts            # Mathlib declaration dump → premise index (`npm run premises:build`)
   lean/DumpDecls.lean               # `lake env lean --run` script exporting theorem statements as JSON lines
   compute-server.py                 # Python SymPy HTTP server (9 POST endpoints)
@@ -259,6 +265,7 @@ scripts/
 
 prisma/
   schema.prisma                     # Database schema (User, Subscription, ProofSession); generator `prisma-client`, no datasource url (Prisma 7)
+  migrations/0001_init/             # Initial SQL (what `prisma migrate diff --from-empty` writes); add a numbered folder per schema change
 prisma.config.ts                    # Prisma 7 CLI config: schema path, datasource URL (loads .env.local / .env itself)
 
 docs/
@@ -268,13 +275,16 @@ lean-sandbox/
   LeanSandbox.lean                  # Library root (imports Mathlib + Batteries + Aesop)
   lakefile.toml                     # Lake build config (mathlib v4.33.1 + repl v4.33.0 dependency)
 
-Dockerfile                          # Multi-stage Next.js build
+proxy.ts                            # Next 16 proxy (ex-middleware): when auth is required, pages redirect to /auth/signin and API calls get 401 without a session token (public: /auth, /api/auth, /api/payments/webhook, /api/health)
+instrumentation.ts                  # Server start: lib/startup-checks.ts
+Dockerfile                          # Debian images: Lean stage (elan + Mathlib cache + `lake build repl`), Next standalone runner with /opt/elan + built lean-sandbox; CMD = scripts/migrate.mjs then server.js; HEALTHCHECK /api/health
 Dockerfile.compute                  # Python compute server
-docker-compose.yml                  # Service orchestration (web + compute + neo4j + nginx)
-nginx.conf                          # Reverse proxy with rate limiting
+docker-compose.yml                  # Invite-only beta: env_file .env.production (template .env.production.example), AUTH_REQUIRED=true, state on the app-data volume; only nginx publishes ports; neo4j optional (--profile knowledge)
+nginx.conf                          # 80 → https redirect (+ ACME), 443 TLS (certs/), /api/ unbuffered with 30-min timeouts (SSE/NDJSON progress, cancel on close), rate limits
+docs/BETA-DEPLOY.md                 # Invite-only beta deployment guide (Chinese)
 .dockerignore                       # Docker build exclusions
 
-tests/                              # 114 Vitest test files (unit + fake REPL + real-Lean integration)
+tests/                              # 116 Vitest test files (unit + fake REPL + real-Lean integration)
 components/ui/                      # 16 shadcn/ui primitives (+avatar, dropdown-menu, label)
 ```
 
@@ -318,6 +328,7 @@ See `.env.example`:
 - `LLM_RETRY_*`, `LLM_CACHE_*` — Retry and cache settings
 - `COMPUTE_ENGINE_URL` — Python SymPy server URL
 - `SESSION_BACKEND` (sqlite | json), `SQLITE_DB_PATH`, `SESSION_STORE_PATH` — session storage
+- `AUTH_REQUIRED`, `INVITE_EMAILS`, `INVITE_DOMAINS`, `INVITE_FILE`, `RATE_LIMIT_CALLS_PER_MIN`, `STARTUP_CHECKS` — invite-only beta access and limits (lib/access.ts, lib/model-route.ts, lib/startup-checks.ts)
 - `SOLVE_CONCURRENCY`, `JOBS_PER_USER` — solve queue; `RATE_LIMIT_PER_MIN`, `QUOTA_DAILY_USD_FREE|PRO|ENTERPRISE`, `QUOTA_LOCAL_PLAN`, `QUOTA_DB_PATH` — per-user limits
 
 ## Running

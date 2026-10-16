@@ -7,7 +7,7 @@ import { LlmError } from "@/lib/llm/client";
 import { resetStepsForMethod, updateSession } from "@/lib/session-store";
 import type { ProofStep } from "@/lib/types";
 import { generateNLSolution } from "@/lib/llm/nl-solution";
-import { withRequestLocale } from "@/lib/llm/output-locale";
+import { modelRoute } from "@/lib/model-route";
 
 async function handlePOST(req: Request) {
   const body = (await req.json()) as {
@@ -94,4 +94,5 @@ async function handlePOST(req: Request) {
 }
 
 // Server messages and model output follow the UI language (lib/llm/output-locale.ts).
-export const POST = withRequestLocale(handlePOST);
+// Signed-in caller, spend limit and rate limit checked; model calls charged to the caller (lib/model-route.ts).
+export const POST = modelRoute(handlePOST);

@@ -5,6 +5,11 @@ node_modules
 *.md
 .env
 .env.local
+.env.production
+.env*.local
+certs
+backups
+bench/results
 .data
 *.log
 .DS_Store
