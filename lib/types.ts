@@ -292,6 +292,8 @@ export interface ComputationResult {
   cross_validated: boolean;
   methods_used: string[];
   solution_steps: string[];
+  /** Program checks: an answer corrected by exact computation, answers that disagreed. */
+  checks?: string[];
 }
 
 // ── Natural Language Solution ──────────────────────────────────────────

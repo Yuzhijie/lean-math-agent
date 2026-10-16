@@ -242,6 +242,7 @@ async function handleComputational(
       cross_validated: computeResult.cross_validated,
       methods_used: computeResult.methods_used,
       solution_steps: computeResult.solution_steps,
+      ...(computeResult.checks?.length ? { checks: computeResult.checks } : {}),
     },
   });
 
@@ -250,6 +251,7 @@ async function handleComputational(
     type: "progress",
     detail: lt(`答案: ${computeResult.answer} (≈${computeResult.answer_decimal}) [${computeResult.cross_validated ? "交叉验证通过" : "单一方法"}]`, `Answer: ${computeResult.answer} (≈${computeResult.answer_decimal}) [${computeResult.cross_validated ? "cross-validated" : "single method"}]`),
   });
+  for (const check of computeResult.checks ?? []) emit({ stage: "computing", type: "progress", detail: `⚠️ ${check}` });
 
   // NL Solution
   let nlSolution: NaturalLanguageSolution | undefined;
@@ -324,6 +326,7 @@ async function handleComputational(
     confidence: computeResult.confidence,
     methods_used: computeResult.methods_used,
     solution_steps: computeResult.solution_steps,
+    checks: computeResult.checks,
     method_results: computeResult.method_results,
     validation: computeResult.validation,
     equation_setup: computeResult.equation_setup,

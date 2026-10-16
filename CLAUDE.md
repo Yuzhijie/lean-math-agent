@@ -19,7 +19,7 @@ AI-powered Lean 4 math theorem prover + problem solver. Single-page Next.js app.
 | Lean | Lean 4 + Mathlib v4.33.1 + Batteries + Aesop; verification via persistent `leanprover-community/repl` workers (env reuse, sorry goals, tactic mode, axiom + statement checks), `lake env lean` fallback |
 | Compute | Python SymPy HTTP microservice (9 endpoints) |
 | State | Sessions in SQLite (`.data/sessions.db`, each owned by a user; JSON files with SESSION_BACKEND=json), in-memory cache |
-| Tests | Vitest 5 (112 test files) |
+| Tests | Vitest 5 (113 test files) |
 
 ## Project Structure
 
@@ -213,7 +213,9 @@ lib/
     strategist.ts                   # Domain-specialist strategist agents
   compute/
     engine.ts                       # Compute engine facade (SymPy bridge + fallback)
-    solver.ts                       # Computational solver pipeline
+    solver.ts                       # Computational solver pipeline: SymPy methods or the model fallback, then exact program checks (order-check: the program's answer wins and a corrected model answer is reported in `checks`), then the explanation; when the explanation ends with a different \boxed answer and nothing settled it, a high-effort re-check decides (also reported in `checks`, shown as progress lines)
+    order-check.ts                  # "Smallest positive n with a^n ≡ 1 (mod m), …": congruences read from LaTeX/plain text, multiplicative orders via Carmichael λ, answer = lcm (a model once answered 1814400 for 907200)
+    nat-expr.ts                     # Closed natural-number expressions (+ − × ^, parentheses) → BigInt; used by order-check and the Lean attempt's range-size estimate
     cross-validate.ts               # Result cross-validation (tolerance clustering)
     optimization-solver.ts          # Deterministic optimization search
     find-all-solver.ts              # Systematic find-all-values + completeness proof
@@ -267,7 +269,7 @@ docker-compose.yml                  # Service orchestration (web + compute + neo
 nginx.conf                          # Reverse proxy with rate limiting
 .dockerignore                       # Docker build exclusions
 
-tests/                              # 112 Vitest test files (unit + fake REPL + real-Lean integration)
+tests/                              # 113 Vitest test files (unit + fake REPL + real-Lean integration)
 components/ui/                      # 16 shadcn/ui primitives (+avatar, dropdown-menu, label)
 ```
 

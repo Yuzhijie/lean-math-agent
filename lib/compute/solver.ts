@@ -8,6 +8,7 @@ import { setupEquations, type EquationSetup } from "../llm/equation-setup";
 import { chatJson } from "../llm/client";
 import { lt } from "../llm/output-locale";
 import { z } from "zod";
+import { orderCheck } from "./order-check";
 import {
   CROSS_VALIDATION_SYSTEM,
   SOLUTION_EXPLAINER_SYSTEM,
@@ -27,6 +28,8 @@ export interface ComputeSolution {
   validation: CrossValidationResult;
   equation_setup: EquationSetup;
   sympy_available: boolean;
+  /** What the program checks found (an answer corrected by exact computation, answers that disagreed). */
+  checks: string[];
 }
 
 export interface SolverOptions {
@@ -111,8 +114,59 @@ export async function solveComputational(args: {
     };
   }
 
+  // Step 3b: exact program checks. A question the program can settle (smallest n with
+  // a^n ≡ 1 mod m, …) gets the program's answer, whatever the methods above said.
+  const checks: string[] = [];
+  let programNote: string | undefined;
+  const order = orderCheck(args.problemText);
+  if (order?.answer !== undefined) {
+    const exact = order.answer.toString();
+    const agreed = sameAnswer(validation.final_answer, exact);
+    const detail = order.congruences.map((c, i) => `ord_${c.modulus}(${c.base}) = ${order.orders[i]}`).join(", ");
+    programNote = `Exact computation by the program: ${detail}; the smallest n is their lcm = ${exact}.`;
+    const result: MethodResult = { method_name: "order_lcm", target_value: exact, target_decimal: Number(exact), details: { orders: detail } };
+    methodResults.push(result);
+    if (!agreed && validation.final_answer) {
+      checks.push(
+        lt(
+          `程序按乘法阶精确计算（${detail}，最小公倍数 ${exact}），更正了先前得到的答案 ${validation.final_answer}`,
+          `The program computed the orders exactly (${detail}, lcm ${exact}) and corrected the earlier answer ${validation.final_answer}`,
+        ),
+      );
+    }
+    validation = {
+      ...validation,
+      methods_agree: true,
+      final_answer: exact,
+      final_answer_decimal: Number(exact),
+      confidence: 1,
+      method_results: [...validation.method_results, result],
+    };
+  }
+
   // Step 4: Generate explanation
-  const steps = await generateExplanation(args.problemText, setup, validation);
+  let steps = await generateExplanation(args.problemText, setup, validation, programNote);
+
+  // Step 5: the explanation re-derives the answer; when it ends with a different one and no
+  // program check settled it, an independent careful check decides between the two.
+  const explained = boxedAnswer(steps);
+  const crossChecked = validation.methods_agree && methodResults.length >= 2;
+  if (!programNote && !crossChecked && explained && validation.final_answer && !sameAnswer(explained, validation.final_answer)) {
+    const decided = await resolveConflict(args.problemText, validation.final_answer, explained);
+    checks.push(
+      lt(
+        `求解得到 ${validation.final_answer}，讲解推导出 ${explained}，两者不一致；复核后采用 ${decided ?? validation.final_answer}`,
+        `Solving gave ${validation.final_answer} but the explanation derived ${explained}; after a re-check the answer is ${decided ?? validation.final_answer}`,
+      ),
+    );
+    if (decided && !sameAnswer(decided, validation.final_answer)) {
+      const d = parseFloat(decided);
+      validation = { ...validation, methods_agree: false, final_answer: decided, final_answer_decimal: isNaN(d) ? NaN : d, confidence: Math.min(validation.confidence, 0.5) };
+      steps = await generateExplanation(args.problemText, setup, validation);
+    } else {
+      validation = { ...validation, methods_agree: false, confidence: Math.min(validation.confidence, 0.5) };
+    }
+  }
 
   return {
     answer: validation.final_answer,
@@ -123,7 +177,8 @@ export async function solveComputational(args: {
           args.options?.decimal_precision ?? 6,
         )
       : "N/A",
-    cross_validated: validation.methods_agree && methodResults.length >= 2,
+    // An exact program check counts as verified on its own.
+    cross_validated: programNote !== undefined || (validation.methods_agree && methodResults.length >= 2),
     confidence: validation.confidence,
     methods_used: methodResults.map((r) => r.method_name),
     solution_steps: steps,
@@ -131,7 +186,60 @@ export async function solveComputational(args: {
     validation,
     equation_setup: setup,
     sympy_available: sympyAvailable,
+    checks,
   };
+}
+
+/** The last `\\boxed{…}` in the steps (the explanation's own final answer). */
+export function boxedAnswer(steps: string[]): string | undefined {
+  const text = steps.join("\n");
+  let last: string | undefined;
+  for (let i = text.indexOf("\\boxed{"); i >= 0; i = text.indexOf("\\boxed{", i + 1)) {
+    let depth = 0;
+    const start = i + "\\boxed{".length;
+    for (let j = start - 1; j < text.length; j++) {
+      if (text[j] === "{") depth++;
+      else if (text[j] === "}" && --depth === 0) {
+        last = text.slice(start, j).trim();
+        break;
+      }
+    }
+  }
+  return last;
+}
+
+/** Same answer up to spacing, `$`, thousands separators and trailing punctuation. */
+export function sameAnswer(a: string, b: string): boolean {
+  const n = (x: string) =>
+    x
+      .replace(/\$|\s|,|，|\\,|\\[;!]|\.$|。$/g, "")
+      .replace(/\\boxed\{(.*)\}/, "$1")
+      .replace(/\\[dt]?frac\{([^{}]+)\}\{([^{}]+)\}/g, "($1)/($2)")
+      .replace(/\((-?\d+(?:\.\d+)?)\)/g, "$1");
+  const x = n(a);
+  const y = n(b);
+  if (x === y) return true;
+  const num = (t: string) => (/^-?\d+(?:\.\d+)?(?:\/-?\d+(?:\.\d+)?)?$/.test(t) ? t.split("/").map(Number).reduce((p, q) => p / q) : NaN);
+  const u = num(x);
+  const v = num(y);
+  return Number.isFinite(u) && Number.isFinite(v) && Math.abs(u - v) <= 1e-9 * Math.max(1, Math.abs(u));
+}
+
+/** Two candidate answers: a careful independent check says which one is right (undefined when it cannot). */
+async function resolveConflict(problemText: string, a: string, b: string): Promise<string | undefined> {
+  try {
+    const r = await chatJson({
+      system:
+        "You are a careful mathematician. Two candidate answers to a problem disagree. Solve the problem yourself, check each candidate concretely against every condition (and minimality / completeness when asked), and say which is correct. If neither is, give the correct answer.",
+      user: `Problem: ${problemText}\n\nCandidate A: ${a}\nCandidate B: ${b}`,
+      schema: z.object({ answer: z.string().min(1), reason: z.string() }),
+      schemaName: "answerConflict",
+      reasoningEffort: "high",
+    });
+    return r.answer.trim();
+  } catch {
+    return undefined;
+  }
 }
 
 // ── Method 1: Explicit Solve ──────────────────────────────────────────
@@ -361,6 +469,7 @@ async function generateExplanation(
   problemText: string,
   setup: EquationSetup,
   validation: CrossValidationResult,
+  programNote?: string,
 ): Promise<string[]> {
   const explainerSchema = z.object({
     steps: z.array(z.string().min(1)).min(1),
@@ -378,7 +487,7 @@ Solution: ${validation.final_answer} (≈${validation.final_answer_decimal})
 
 Method results:
 ${validation.method_results.map((r) => `- ${r.method_name}: ${r.target_value}`).join("\n")}
-
+${programNote ? `\n${programNote} This answer is exact; explain how to obtain it.\n` : ""}
 Provide a step-by-step explanation of the solution.`,
       schema: explainerSchema,
       schemaName: "solutionExplanation",
