@@ -40,12 +40,42 @@ export function shouldAutoAttemptLean(opts: { lean_attempt?: boolean; skip_lean_
 export interface LeanAttemptContext {
   /** The answer found by solving; the statement should assert it. */
   answer?: string;
+  /**
+   * Answers to try in order when solving produced more than one (the computation and the written
+   * solution disagree): a statement the numeric or counterexample check refutes is formalized
+   * again with the next one.
+   */
+  answers?: string[];
   /** The natural-language solution, given to the prover as a sketch. */
   solution?: Pick<NaturalLanguageSolution, "summary" | "steps">;
   /** Session id for verification bookkeeping. */
   sessionId?: string;
   /** Proof budget preset (default PROOF_BUDGET, else "low" for this optional step). */
   budget?: string;
+}
+
+/** An answer as plain text: no `$`, `\\boxed{}`, `\\displaystyle` or surrounding spaces. */
+export function plainAnswer(a: string | undefined): string {
+  let t = (a ?? "").trim().replace(/^\$+|\$+$/g, "").trim();
+  for (let k = 0; k < 3; k++) t = t.replace(/^\\(?:boxed|displaystyle)\s*\{([\s\S]*)\}$/, "$1").trim();
+  return t.replace(/^\$+|\$+$/g, "").trim();
+}
+
+/**
+ * The answers to formalize, most trusted first: a cross-validated computation, else the written
+ * solution's final answer (it re-checks the result), then the other one when it differs.
+ */
+export function answerCandidates(s: {
+  computation_result?: { answer?: string; cross_validated?: boolean };
+  nl_solution?: { final_answer?: string };
+}): string[] {
+  const computed = plainAnswer(s.computation_result?.answer);
+  const written = plainAnswer(s.nl_solution?.final_answer);
+  const order = s.computation_result?.cross_validated ? [computed, written] : [written, computed];
+  const key = (x: string) => x.replace(/\s+/g, "");
+  const out: string[] = [];
+  for (const a of order) if (a && !out.some((b) => key(b) === key(a))) out.push(a);
+  return out;
 }
 
 /** The problem text with the known answer, for the formalizer. */
@@ -192,17 +222,40 @@ export async function attemptLeanFormalization(problemText: string, ctx: LeanAtt
   const sessionId = ctx.sessionId ?? "lean-attempt";
   let formal_statement: string | undefined;
   try {
-    const formal = await autoformalize({ problemText: problemWithAnswer(problemText, ctx.answer) });
-    formal_statement = formal.formal_statement;
+    // Formalize with the most trusted answer; when the numeric (L4) or counterexample (L6) check
+    // refutes the statement and solving produced another answer, try that one.
+    const answers = ctx.answers?.length ? ctx.answers : ctx.answer ? [ctx.answer] : [undefined];
+    const notes: string[] = [];
+    let formal!: Awaited<ReturnType<typeof autoformalize>>;
+    for (let k = 0; k < answers.length; k++) {
+      formal = await autoformalize({ problemText: problemWithAnswer(problemText, answers[k]) });
+      formal_statement = formal.formal_statement;
+      if (formal.accepted) break;
+      const refuted = formal.validation_results.some((v) => !v.pass && (v.layer === 4 || v.layer === 6));
+      if (!refuted || k === answers.length - 1) break;
+      notes.push(
+        lt(
+          `按答案 ${answers[k]} 写出的陈述被数值检查推翻，改用解答中的另一个答案 ${answers[k + 1]}`,
+          `The statement with the answer ${answers[k]} was refuted by the numeric check; trying the solution's other answer ${answers[k + 1]}`,
+        ),
+      );
+    }
 
     if (!formal.accepted) {
       const failed = formal.validation_results.filter((v) => !v.pass).map((v) => `L${v.layer}: ${v.detail}`);
+      const refuted = formal.validation_results.some((v) => !v.pass && (v.layer === 4 || v.layer === 6));
+      const last = answers[answers.length - 1];
       return {
         attempted: true,
         success: false,
         formal_statement,
-        failure_reason: lt("没能写出一条通过检查的 Lean 陈述，所以没有开始证明", "No Lean statement passed the checks, so no proof was attempted"),
-        limitations: failed.length ? failed : [lt("形式化未通过检查（没有给出原因）", "The formalization did not pass the checks (no reason given)")],
+        failure_reason: refuted && last
+          ? lt(
+              `按答案 ${last} 写出的陈述没有通过数值检查——这个答案可能有误，请先核对答案`,
+              `The statement with the answer ${last} failed the numeric check — the answer may be wrong; check it first`,
+            )
+          : lt("没能写出一条通过检查的 Lean 陈述，所以没有开始证明", "No Lean statement passed the checks, so no proof was attempted"),
+        limitations: [...notes, ...(failed.length ? failed : [lt("形式化未通过检查（没有给出原因）", "The formalization did not pass the checks (no reason given)")])],
       };
     }
 
@@ -218,6 +271,7 @@ export async function attemptLeanFormalization(problemText: string, ctx: LeanAtt
       axioms: v.axioms?.axioms,
       statement_locked: expectedSignature !== undefined && v.signatureMatch === true,
       verifier: v.backend,
+      ...(notes.length ? { limitations: notes } : {}),
       ...extra,
     });
 
@@ -302,7 +356,7 @@ export async function attemptLeanFormalization(problemText: string, ctx: LeanAtt
       success: false,
       formal_statement,
       failure_reason: lt("陈述通过了检查，但这次没有找到能通过 Lean 检查的证明", "The statement passed the checks, but no proof that Lean accepts was found this time"),
-      limitations: [lt(`已尝试：${tried.join("；")}`, `Tried: ${tried.join("; ")}`), ...limitations],
+      limitations: [...notes, lt(`已尝试：${tried.join("；")}`, `Tried: ${tried.join("; ")}`), ...limitations],
     };
   } catch (e) {
     if (e instanceof CancelledError) throw e;

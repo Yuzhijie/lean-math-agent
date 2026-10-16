@@ -138,3 +138,33 @@ describe("hints for the prover and the sorry report", () => {
     expect(m.proveWholeTheorem.mock.calls[0][0].sketch).toContain("intro rot Valid");
   });
 });
+
+describe("when solving produced two answers", () => {
+  it("prefers the written solution's answer unless the computation was cross-validated", async () => {
+    const { answerCandidates, plainAnswer } = await import("@/lib/pipeline/lean-attempt");
+    expect(plainAnswer("$$\\boxed{907200}$$")).toBe("907200");
+    const s = { computation_result: { answer: "1814400", cross_validated: false }, nl_solution: { final_answer: "$$\\boxed{907200}$$" } };
+    expect(answerCandidates(s)).toEqual(["907200", "1814400"]);
+    expect(answerCandidates({ ...s, computation_result: { answer: "1814400", cross_validated: true } })).toEqual(["1814400", "907200"]);
+    expect(answerCandidates({ computation_result: { answer: "8" }, nl_solution: { final_answer: "$8$" } })).toEqual(["8"]);
+  });
+
+  it("formalizes again with the other answer when the numeric check refutes the first", async () => {
+    m.autoformalize
+      .mockResolvedValueOnce({ ...GCD, accepted: false, validation_results: [{ layer: 4, pass: false, detail: "Inconsistent instances: n = 907200" }] })
+      .mockResolvedValueOnce(GCD);
+    m.hammerTheorem.mockResolvedValue({ tactic: "decide +kernel", attempts: [], durationMs: 5 });
+    const a = await attemptLeanFormalization("p", { answers: ["1814400", "907200"] });
+    expect(m.autoformalize).toHaveBeenCalledTimes(2);
+    expect(m.autoformalize.mock.calls[1][0].problemText).toContain("is: 907200");
+    expect(a.success).toBe(true);
+    expect(a.limitations?.[0]).toMatch(/1814400.*907200/);
+  });
+
+  it("says the answer may be wrong when its statement is refuted and nothing else is left", async () => {
+    m.autoformalize.mockResolvedValue({ ...GCD, accepted: false, validation_results: [{ layer: 4, pass: false, detail: "Inconsistent instances" }] });
+    const a = await attemptLeanFormalization("p", { answers: ["1814400"] });
+    expect(a.failure_reason).toMatch(/1814400/);
+    expect(m.autoformalize).toHaveBeenCalledTimes(1);
+  });
+});

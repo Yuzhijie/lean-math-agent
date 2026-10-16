@@ -18,7 +18,7 @@ import type {
   NaturalLanguageSolution,
   Session,
 } from "@/lib/types";
-import { attemptLeanFormalization, manualLeanAttempt, shouldAutoAttemptLean } from "@/lib/pipeline/lean-attempt";
+import { answerCandidates, attemptLeanFormalization, manualLeanAttempt, shouldAutoAttemptLean } from "@/lib/pipeline/lean-attempt";
 import { lt, withRequestLocale } from "@/lib/llm/output-locale";
 import { requestOwner } from "@/lib/bank/http";
 import { describeProblemFigures, figureRefsSchema, figureTextOf, problemWithFigure, type FigureRef } from "@/lib/bank/problem-figures";
@@ -213,7 +213,7 @@ async function handleComputationalProblem(
     events.push({ stage: "lean_attempting", detail: lt("尝试 Lean 4 形式化证明...", "Attempting a Lean 4 formal proof...") });
 
     leanProofAttempt = await attemptLeanFormalization(session.problem_text, {
-      answer: computeResult.answer,
+      answers: answerCandidates({ computation_result: computeResult, nl_solution: nlSolution }),
       solution: nlSolution,
       sessionId: session.id,
     });

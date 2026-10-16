@@ -2,7 +2,7 @@ import { getSessionForRequest } from "@/lib/session-access";
 import { NextResponse } from "next/server";
 import { updateSession } from "@/lib/session-store";
 import { withUsageScope } from "@/lib/llm/usage-tracker";
-import { attemptLeanFormalization, leanAttemptRetryable } from "@/lib/pipeline/lean-attempt";
+import { answerCandidates, attemptLeanFormalization, leanAttemptRetryable } from "@/lib/pipeline/lean-attempt";
 import { lt, withRequestLocale } from "@/lib/llm/output-locale";
 
 /**
@@ -26,7 +26,7 @@ async function handlePOST(req: Request) {
   return withUsageScope(async (metrics) => {
     updateSession(session.id, { pipeline_stage: "lean_attempting" });
     const attempt = await attemptLeanFormalization(session.problem_text, {
-      answer: session.computation_result?.answer || session.nl_solution?.final_answer,
+      answers: answerCandidates(session),
       solution: session.nl_solution,
       sessionId: session.id,
       // "Try again" after a failure searches harder than the first attempt.

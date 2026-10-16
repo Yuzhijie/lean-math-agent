@@ -12,7 +12,7 @@ import { solveFindAll } from "@/lib/compute/find-all-solver";
 import { extractOptimizationStructure } from "@/lib/llm/optimization-extract";
 import { generateNLSolution } from "@/lib/llm/nl-solution";
 import { runTheoremPipeline, type TheoremPipelineOptions } from "@/lib/pipeline/theorem-pipeline";
-import { attemptLeanFormalization, manualLeanAttempt, shouldAutoAttemptLean } from "@/lib/pipeline/lean-attempt";
+import { answerCandidates, attemptLeanFormalization, manualLeanAttempt, shouldAutoAttemptLean } from "@/lib/pipeline/lean-attempt";
 import type {
   LeanProofAttempt,
   MathDomain,
@@ -293,7 +293,7 @@ async function handleComputational(
 
     const solved = getSession(session.id) ?? session;
     leanProofAttempt = await attemptLeanFormalization(session.problem_text, {
-      answer: solved.computation_result?.answer || solved.nl_solution?.final_answer,
+      answers: answerCandidates(solved),
       solution: solved.nl_solution,
       sessionId: session.id,
     });
