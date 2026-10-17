@@ -11,7 +11,7 @@ import { GRADE_LEVELS, DIFFICULTY_LEVELS, COMPETITION_DOMAINS } from "@/lib/type
 import { MathText } from "./MathText";
 import { QuestionFigure } from "./QuestionFigure";
 import { FigurePanel } from "./FigurePanel";
-import { BankTemplateControls, MatchHint, useBanks, type BankTemplateValue } from "./BankTemplateControls";
+import { BankTemplateControls, MatchHint, perQuestion, useBanks, type BankTemplateValue } from "./BankTemplateControls";
 import type { SolvedFigure } from "@/lib/figure/spec";
 import { cardStatus, checkIssues, readNdjson, type CheckKey, type ProgressLine } from "@/lib/bank/generation-view";
 import { Button } from "@/components/ui/button";
@@ -173,13 +173,14 @@ export function ProblemGenerator({ mode: modeProp, onUseProblem, onFormalize, on
   /** Printable worksheet (saved as PDF from the print dialog): a bank generation by its id, built-in questions handed over. */
   function exportPdf() {
     const gen = problems.find((p) => p.bank)?.bank;
-    if (gen) {
+    // One generation: print it from the bank. Several (one per template): hand all the questions over.
+    if (gen && new Set(problems.map((p) => p.bank?.generation_id)).size === 1) {
       window.open(generationPrintHref(gen.bank_id, gen.generation_id), "_blank");
       return;
     }
     const href = stashWorksheet({
       title: tr("练习题", "Practice questions"),
-      questions: problems.map((p) => ({ id: p.id, stem: p.statement, answer: p.answer, solution: p.hints.length ? p.hints.map((h, i) => `${i + 1}. ${h}`).join("\n") : undefined, figureSvg: p.diagram_svg })),
+      questions: problems.map((p) => ({ id: p.id, stem: p.statement, answer: p.answer, solution: p.hints.length ? p.hints.map((h, i) => `${i + 1}. ${h}`).join("\n") : undefined, figureSvg: p.bank?.figure?.svg ?? p.diagram_svg, passed: p.bank?.passed })),
     });
     window.open(href, "_blank");
   }
@@ -200,8 +201,10 @@ export function ProblemGenerator({ mode: modeProp, onUseProblem, onFormalize, on
       // Client-side timeout: generous enough for server maxDuration (330s)
       // plus network overhead. The server's deadline-aware retry loop will
       // return a proper error well before this fires in most cases.
+      // Bank mode streams: the timer restarts with every line, so generating from several
+      // templates in turn (minutes) is not cut off while progress keeps coming.
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 350_000);
+      let timeoutId = setTimeout(() => controller.abort(), 350_000);
 
       const res = await fetch("/api/generate-problem", {
         method: "POST",
@@ -240,6 +243,8 @@ export function ProblemGenerator({ mode: modeProp, onUseProblem, onFormalize, on
       if (res.ok && res.body && (res.headers.get("content-type") ?? "").includes("ndjson")) {
         // Bank mode streams progress lines, then the result (or an error).
         await readNdjson(res.body, (line) => {
+          clearTimeout(timeoutId);
+          timeoutId = setTimeout(() => controller.abort(), 350_000);
           if (line.type === "progress") {
             const p = line as unknown as ProgressLine;
             setProgress(p);
@@ -412,7 +417,7 @@ export function ProblemGenerator({ mode: modeProp, onUseProblem, onFormalize, on
           <div className="space-y-1.5">
             <label className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
               <Hash className="h-3 w-3" />
-              {tr("数量", "Count")}
+              {activeMode === "bank" && perQuestion(match?.exact) ? tr("每个模板", "Per template") : tr("数量", "Count")}
             </label>
             <Input
               type="number"

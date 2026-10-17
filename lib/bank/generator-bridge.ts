@@ -9,9 +9,11 @@
 import type { BankProblemMeta, DifficultyLevel, GeneratedProblem, GradeLevel } from "../types";
 import { answerLetters, generateFromTemplate, type GenerationProgress } from "./generate";
 import { LETTERS } from "./profile";
-import { isEnglish } from "../llm/output-locale";
-import type { TemplateSelection } from "./select";
-import type { Candidate } from "./types";
+import { isEnglish, lt } from "../llm/output-locale";
+import { selectTemplateItems, type TemplateSelection } from "./select";
+import { listCategories, listItems } from "./store";
+import { MAX_TEMPLATE_RUNS } from "./template-runs";
+import type { Candidate, Generation, Item } from "./types";
 
 /** Built-in level for a bank grade string ("Year 4", "四年级", "初二", "Grade 10" …). */
 export function gradeLevelOf(grade: string | undefined): GradeLevel {
@@ -49,22 +51,26 @@ function answerOf(c: Candidate): string {
 
 const SHORT_NOTE = /^要求 \d+ 道，通过全部检查|^\d+ requested, \d+ passed every check/;
 
-export async function generateProblemsFromBank(args: {
-  owner: string;
-  bankId: string;
-  selection: TemplateSelection;
-  count: number;
-  onProgress?: (p: GenerationProgress) => void;
-}): Promise<{ problems: GeneratedProblem[]; generation_id: string; template_label: string; note?: string; matched?: number; requested: number }> {
-  const g = await generateFromTemplate({ owner: args.owner, bankId: args.bankId, template: { selection: args.selection }, count: args.count, onProgress: args.onProgress });
-  const problems = g.candidates.map((c): GeneratedProblem => {
+/**
+ * The bank questions that match the selection, when each is to be a template of its own:
+ * 2 … MAX_TEMPLATE_RUNS matches. One match is one template anyway; more than that many
+ * are treated as one class (one generation from exemplars of the whole set).
+ */
+export function perQuestionTemplates(owner: string, bankId: string, selection: TemplateSelection): Item[] | null {
+  const { items } = selectTemplateItems(listItems(owner, bankId), listCategories(owner, bankId), selection);
+  return items.length > 1 && items.length <= MAX_TEMPLATE_RUNS ? items : null;
+}
+
+function toProblems(g: Generation, args: { bankId: string; selection: TemplateSelection }, templateNo?: number): GeneratedProblem[] {
+  const source = templateNo ? lt(`${g.template_label}（模板 ${templateNo}）`, `${g.template_label} (template ${templateNo})`) : g.template_label;
+  return g.candidates.map((c): GeneratedProblem => {
     const bank: BankProblemMeta = {
       bank_id: args.bankId,
       generation_id: g.id,
       candidate_id: c.id,
       passed: c.passed,
       checks: c.checks,
-      template_label: g.template_label,
+      template_label: source,
       note: g.note,
       matched: g.matched,
       question_type: c.type,
@@ -84,12 +90,65 @@ export async function generateProblemsFromBank(args: {
       difficulty: difficultyLevelOf(bank.difficulty),
       domain: "computation",
       suggested_techniques: [],
-      source_inspiration: g.template_label,
+      source_inspiration: source,
       estimated_solve_time: "",
       bank,
     };
   });
-  // The generator shows "N requested, M passed" itself: that part of the note is left out here.
-  const note = g.note?.split(/；|; /).filter((part) => !SHORT_NOTE.test(part)).join(isEnglish() ? "; " : "；") || undefined;
-  return { problems, generation_id: g.id, template_label: g.template_label, note, matched: g.matched, requested: g.requested };
+}
+
+/** The generation note without the "N requested, M passed" part (the generator shows that itself). */
+function shortNote(note: string | undefined): string | undefined {
+  return note?.split(/；|; /).filter((part) => !SHORT_NOTE.test(part)).join(isEnglish() ? "; " : "；") || undefined;
+}
+
+export async function generateProblemsFromBank(args: {
+  owner: string;
+  bankId: string;
+  selection: TemplateSelection;
+  count: number;
+  onProgress?: (p: GenerationProgress) => void;
+}): Promise<{ problems: GeneratedProblem[]; generation_id: string; generation_ids: string[]; template_label: string; note?: string; matched?: number; templates: number; requested: number }> {
+  const templates = perQuestionTemplates(args.owner, args.bankId, args.selection);
+  if (!templates) {
+    const g = await generateFromTemplate({ owner: args.owner, bankId: args.bankId, template: { selection: args.selection }, count: args.count, onProgress: args.onProgress });
+    return { problems: toProblems(g, args), generation_id: g.id, generation_ids: [g.id], template_label: g.template_label, note: shortNote(g.note), matched: g.matched, templates: 1, requested: g.requested };
+  }
+  // Several matching questions: each is a template of its own, generated from in turn.
+  const n = templates.length;
+  const problems: GeneratedProblem[] = [];
+  const generations: Generation[] = [];
+  const notes: string[] = [];
+  let firstError: unknown;
+  for (let i = 0; i < n; i++) {
+    const tag = lt(`模板 ${i + 1}/${n}`, `Template ${i + 1}/${n}`);
+    try {
+      const g = await generateFromTemplate({
+        owner: args.owner,
+        bankId: args.bankId,
+        template: { selection: args.selection, item_ids: [templates[i].id] },
+        count: args.count,
+        onProgress: args.onProgress ? (p) => args.onProgress!({ ...p, detail: `${tag} · ${p.detail}`, requested: args.count * n }) : undefined,
+      });
+      generations.push(g);
+      problems.push(...toProblems(g, args, i + 1));
+      const note = shortNote(g.note);
+      if (note) notes.push(lt(`${tag}：${note}`, `${tag}: ${note}`));
+    } catch (e) {
+      firstError ??= e;
+      notes.push(lt(`${tag} 出题失败：${e instanceof Error ? e.message : String(e)}`, `${tag} failed: ${e instanceof Error ? e.message : String(e)}`));
+    }
+  }
+  if (!generations.length) throw firstError;
+  const label = generations[0].template_label;
+  return {
+    problems,
+    generation_id: generations[0].id,
+    generation_ids: generations.map((g) => g.id),
+    template_label: label,
+    note: [lt(`${n} 道匹配的题各作为一个模板，每个出 ${args.count} 道`, `each of the ${n} matching questions was a template of its own, ${args.count} per template`), ...notes].join(isEnglish() ? "; " : "；"),
+    matched: n,
+    templates: n,
+    requested: args.count * n,
+  };
 }

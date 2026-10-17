@@ -15,7 +15,8 @@ import { modelRoute } from "@/lib/model-route";
 
 // Problem generation can take a long time with slow LLM endpoints.
 // Deadline = GENERATE_TIMEOUT_MS (180s) × 2.5 = 450s; give a 30s buffer.
-export const maxDuration = 480;
+// Several matching templates are generated from in turn (lib/bank/generator-bridge.ts).
+export const maxDuration = 800;
 
 interface GenerateRequest {
   grade_level?: GradeLevel;

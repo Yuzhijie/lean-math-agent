@@ -138,6 +138,47 @@ describe("POST /api/generate-problem with source bank", () => {
     expect(gen).toMatch(/Difficulty \(1–5\): 2/);
   });
 
+  it("several matching questions: each is a template of its own, with its own generation", async () => {
+    const { bankId } = seed();
+    process.env.LLM_API_KEY = "k";
+    process.env.LLM_BASE_URL = "https://llm.test/v1";
+    process.env.LLM_MODEL = "m";
+    process.env.LLM_LOG_LEVEL = "silent";
+    process.env.LLM_CACHE_ENABLED = "false";
+    resetGlobalCache();
+    const writerPrompts: string[] = [];
+    const reply = (content: unknown) => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }), { status: 200 });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_u: string, init: RequestInit) => {
+        const msgs = JSON.parse(String(init.body)).messages as Array<{ content: string }>;
+        const sys = msgs[0].content;
+        if (sys.startsWith("You analyse a class")) return reply({ summary: "Fraction of a quantity, Year 4.", knowledge_points: ["Fractions"] });
+        if (sys.startsWith("You review generated")) return reply({ scores: [{ n: 1, score: 5, reason: "fits" }] });
+        if (sys.startsWith("You solve math questions")) return reply({ answers: [{ n: 1, answer: "C" }] });
+        writerPrompts.push(msgs[msgs.length - 1].content);
+        const k = Math.random().toString(36).slice(2, 7);
+        return reply({ questions: [{ stem: `Sam had 30 stickers in box ${k} and gave away 2/5. How many did he give?`, type: "multiple_choice", options: ["6", "10", "12", "15"], answer: "C", difficulty: 1 }] });
+      }),
+    );
+    // Year 4 + Fractions: two bank questions match.
+    const res = await generatePOST(json({ source: "bank", bank_id: bankId, grade: "Year 4", knowledge_point: "Fractions", count: 1 }));
+    const body = (await res.json()) as { problems: Array<{ bank: { generation_id: string; template_label: string } }>; matched: number; requested: number; generation_ids: string[]; templates: number; note?: string };
+    expect(res.status).toBe(200);
+    expect(body.templates).toBe(2);
+    expect(body.requested).toBe(2);
+    expect(body.problems).toHaveLength(2);
+    expect(new Set(body.problems.map((p) => p.bank.generation_id)).size).toBe(2);
+    expect(body.generation_ids).toHaveLength(2);
+    expect(body.problems[1].bank.template_label).toMatch(/template 2|模板 2/);
+    // Each writer call saw one template question, not both.
+    const first = writerPrompts.filter((x) => x.includes("What is 1/2 of 10?"));
+    const second = writerPrompts.filter((x) => x.includes("What is 3/4 of 20?"));
+    expect(first.length).toBeGreaterThan(0);
+    expect(second.length).toBeGreaterThan(0);
+    expect(writerPrompts.some((x) => x.includes("What is 1/2 of 10?") && x.includes("What is 3/4 of 20?"))).toBe(false);
+  });
+
   it("streams progress lines, then the result; errors come as a line too", async () => {
     const { bankId, fractions } = seed();
     process.env.LLM_API_KEY = "k";

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { BarChart3, FolderOpen, GraduationCap, Library } from "lucide-react";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useI18n } from "@/lib/i18n";
+import { MAX_TEMPLATE_RUNS } from "@/lib/bank/template-runs";
 
 /** What the user picked: bank, Level, Difficulty, Topic ("" / 0 = any). */
 export interface BankTemplateValue {
@@ -30,6 +31,9 @@ interface Options {
 }
 
 const ANY = "__any__";
+
+/** Whether this many matching questions are generated from one by one (see lib/bank/generator-bridge.ts). */
+export const perQuestion = (matched: number | undefined) => !!matched && matched > 1 && matched <= MAX_TEMPLATE_RUNS;
 const norm = (s: string) => s.normalize("NFKC").trim().toLowerCase();
 
 /** Banks of this account that have questions (for the generator's mode switch). */
@@ -237,7 +241,9 @@ export function MatchHint({ match, value }: { match: { exact: number; topic: num
     );
   return (
     <p className="text-xs text-muted-foreground">
-      {tr(`将以题库中 ${match.exact} 道匹配的题为模板。`, `${match.exact} matching bank question${match.exact === 1 ? "" : "s"} will be the template.`)}{" "}
+      {perQuestion(match.exact)
+        ? tr(`题库中有 ${match.exact} 道匹配的题，每道各作为一个模板分别出题（数量按每个模板计）。`, `${match.exact} matching bank questions; each is a template of its own (the count is per template).`)
+        : tr(`将以题库中 ${match.exact} 道匹配的题为模板。`, `${match.exact} matching bank question${match.exact === 1 ? "" : "s"} will be the template.`)}{" "}
       <Link href="/bank" className="text-primary underline-offset-2 hover:underline">
         {tr("查看题库", "Open bank")}
       </Link>

@@ -64,9 +64,17 @@ export async function resolveTemplate(
     const sel = ref.selection;
     const categories = listCategories(owner, bankId);
     if (sel.category_id) getCategory(owner, bankId, sel.category_id);
-    const { items, relaxed, label } = selectTemplateItems(listItems(owner, bankId), categories, sel);
+    const selected = selectTemplateItems(listItems(owner, bankId), categories, sel);
+    const { relaxed, label } = selected;
+    let items = selected.items;
     if (!items.length) {
       throw new BankError(lt(`题库中没有“${label}”的题目，请换一个主题或使用内置出题`, `The bank has no questions for "${label}"; choose another topic or use built-in generation`), 404);
+    }
+    // One of the matching questions as a template of its own (the generator runs one generation per question).
+    if (ref.item_ids?.length) {
+      const wanted = new Set(ref.item_ids);
+      items = items.filter((it) => wanted.has(it.id));
+      if (!items.length) throw new BankError(lt("所选模板题不在匹配的题目中", "the chosen template question is not among the matching questions"), 400);
     }
     const body = await deriveProfile(items, { vocab: vocabFor(bank), model: bank.allow_model, bank });
     // New questions target what was chosen, even when the templates had to be widened.
@@ -77,7 +85,7 @@ export async function resolveTemplate(
       items_hash: itemsHash(items),
       computed_at: Date.now(),
     };
-    return { label, profile, exemplars: pickExemplars(items, EXEMPLARS), note: relaxationNote(sel, relaxed, items.length), matched: items.length };
+    return { label, profile, exemplars: pickExemplars(items, EXEMPLARS), note: relaxationNote(sel, relaxed, selected.items.length), matched: items.length };
   }
   if (ref.category_id) {
     const category = getCategory(owner, bankId, ref.category_id);
