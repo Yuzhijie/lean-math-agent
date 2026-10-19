@@ -14,6 +14,7 @@
  */
 import type { ProofSession, TacticOutcome } from "./proof-state";
 import { parseTryThis } from "./suggest";
+import { hugePower } from "../compute/nat-expr";
 
 export interface HammerOptions {
   useMathlib: boolean;
@@ -217,6 +218,9 @@ export async function hammerTheorem(
   source: string,
   opts: HammerOptions,
 ): Promise<{ tactic: string; attempts: HammerAttempt[]; durationMs: number } | undefined> {
+  // A power too big to compute (exponent above 2^24): every closing tactic here would try to
+  // evaluate it and Lean refuses ("Nat.pow exponent is too big"); leave it to the provers.
+  if (hugePower(source)) return undefined;
   const { openTheorem } = await import("./proof-state");
   let opened: Awaited<ReturnType<typeof openTheorem>>;
   try {

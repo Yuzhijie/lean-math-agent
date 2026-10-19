@@ -19,6 +19,7 @@ vi.mock("@/lib/lean/trivial-proof", () => ({ tryTrivialProof: m.tryTrivialProof 
 vi.mock("@/lib/prover/whole-proof", () => ({ proveWholeTheorem: m.proveWholeTheorem, wholeProofEnabled: () => true }));
 
 const { attemptLeanFormalization, leanAttemptRetryable } = await import("@/lib/pipeline/lean-attempt");
+const { hugePower } = await import("@/lib/compute/nat-expr");
 
 const GCD = {
   theorem_name: "gcd_two_powers",
@@ -179,5 +180,32 @@ describe("when solving produced two answers", () => {
     const a = await attemptLeanFormalization("p", { answers: ["1814400"] });
     expect(a.failure_reason).toMatch(/1814400/);
     expect(m.autoformalize).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("statements with numbers too big to compute", () => {
+  // 2025 ^ (2024 ^ 2024): Lean refuses exponents above 2^24 ("Nat.pow exponent is too big").
+  const HUGE = "(let N : ℕ := 2025 ^ (2024 ^ 2024) - 1; ∀ e : ℕ, ((2024 : ℕ) ^ e ∣ N ↔ e ≤ 2025))";
+
+  it("finds the power and estimates its size; small powers are not flagged", () => {
+    expect(hugePower(HUGE)).toEqual({ text: "2025 ^ (2024 ^ 2024)", exponentDigits: 6692 });
+    expect(hugePower("Nat.gcd (2^2024 + 1) (2^3036 - 1) = 1")).toBeUndefined();
+    expect(hugePower("x ^ 2 + 2 ^ 30000000 = y")?.text).toBe("2 ^ 30000000");
+  });
+
+  it("skips the computing automation, gives the prover the LTE lemmas and explains the failure", async () => {
+    m.autoformalize.mockResolvedValue({ ...GCD, theorem_type: `: ${HUGE}`, formal_statement: `theorem t : ${HUGE} := by sorry` });
+    m.proveWholeTheorem.mockResolvedValue({ ok: false, samples: 4, rounds: 1, candidates: [{ errors: 1, progress: 0, summary: "INTERNAL PANIC: Nat.pow exponent is too big" }] });
+    const a = await attemptLeanFormalization("p", { answer: "2025" });
+    expect(m.hammerTheorem).not.toHaveBeenCalled();
+    expect(m.tryTrivialProof).not.toHaveBeenCalled();
+    const sketch = m.proveWholeTheorem.mock.calls[0][0].sketch as string;
+    expect(sketch).toContain("padicValNat.pow_sub_pow");
+    expect(sketch).toContain("padicValNat_dvd_iff_le");
+    expect(sketch).toMatch(/Never let a tactic evaluate it/);
+    const text = (a.limitations ?? []).join("\n");
+    expect(text).toMatch(/2025 \^ \(2024 \^ 2024\)/);
+    expect(text).toMatch(/6692/);
+    expect(text).not.toMatch(/INTERNAL PANIC/);
   });
 });

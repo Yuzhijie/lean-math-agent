@@ -92,7 +92,7 @@ function sketchOf(solution: LeanAttemptContext["solution"]): string | undefined 
   return text || undefined;
 }
 
-import { evalNatExpr } from "../compute/nat-expr";
+import { evalNatExpr, hugePower } from "../compute/nat-expr";
 export { evalNatExpr };
 
 /** The argument of `name (...)` starting at `from` (balanced parentheses), or undefined. */
@@ -146,7 +146,7 @@ function sizeText(n: bigint): string {
  * Advice for the prover from the shape of the statement: `let` definitions to introduce first,
  * and finite statements that can be settled by explicit witnesses + kernel computation.
  */
-export function proofHints(theoremType: string, opts: { tooMany?: boolean } = {}): string[] {
+export function proofHints(theoremType: string, opts: { tooMany?: boolean; huge?: string } = {}): string[] {
   const hints: string[] = [];
   const t = theoremType.replace(/^\s*:\s*/, "");
   if (/^let\b/.test(t)) {
@@ -159,6 +159,19 @@ export function proofHints(theoremType: string, opts: { tooMany?: boolean } = {}
   if (finite && !opts.tooMany) {
     hints.push(
       "Everything in the statement ranges over finite types (Fin n, Finset (Fin n), ZMod n). Give explicit witnesses (e.g. `refine ⟨![{0, 2, 4, 6}, …], ?_, ?_, ?_⟩`, taking them from the solution) and close each remaining finite check with `decide +kernel` (the kernel evaluates it; plain `decide` hits recursion limits), or `fin_cases` + `simp` / `decide`.",
+    );
+  }
+  if (opts.huge) {
+    hints.push(
+      [
+        `The statement contains \`${opts.huge}\`: Lean cannot compute it ("Nat.pow exponent is too big" — exponents above 2^24 are refused). Never let a tactic evaluate it: no decide, decide +kernel, rfl, norm_num, simp or omega on goals that contain it, and do not unfold it into digits. Keep it symbolic (\`intro\` the lets, \`set m := … with hm\`) and argue with divisibility and p-adic valuations:`,
+        "- `padicValNat_dvd_iff_le (ha : a ≠ 0) : p ^ n ∣ a ↔ n ≤ padicValNat p a` (needs `[Fact p.Prime]`, e.g. `haveI := Fact.mk (by norm_num : Nat.Prime 11)`);",
+        "- lifting the exponent, odd prime p: `padicValNat.pow_sub_pow (hp1 : Odd p) (hyx : y < x) (hxy : p ∣ x - y) (hx : ¬p ∣ x) (hn : n ≠ 0) : padicValNat p (x ^ n - y ^ n) = padicValNat p (x - y) + padicValNat p n` (with y = 1, `one_pow`);",
+        "- p = 2: `padicValNat.pow_two_sub_one (h1x : 1 < x) (hx : ¬2 ∣ x) (hn : n ≠ 0) (hneven : Even n) : padicValNat 2 (x ^ n - 1) + 1 = padicValNat 2 (x + 1) + padicValNat 2 (x - 1) + padicValNat 2 n`;",
+        "- `padicValNat.pow (a n) : padicValNat p (a ^ n) = n * padicValNat p a`; small facts such as `padicValNat 11 2024 = 1` by `norm_num [padicValNat]` or `decide` on the small number only;",
+        "- a composite modulus: split it into coprime prime powers (2024 ^ e = 2 ^ (3e) * 11 ^ e * 23 ^ e) and use `Nat.Coprime.mul_dvd_of_dvd_of_dvd`, or `Nat.factorization_le_iff_dvd`;",
+        "- nonzero / positivity side conditions: `Nat.sub_ne_zero_of_lt`, `Nat.one_lt_pow (hn : n ≠ 0) (ha : 1 < a) : 1 < a ^ n`, `pow_pos`.",
+      ].join("\n"),
     );
   }
   hints.push("Never write `sorry` or `admit`: a proof that contains them is rejected.");
@@ -247,9 +260,15 @@ export async function attemptLeanFormalization(problemText: string, ctx: LeanAtt
       };
     }
 
+    // A number far too big to compute (2025 ^ (2024 ^ 2024)): the automation would only try to
+    // evaluate it and Lean refuses ("Nat.pow exponent is too big"), so go straight to the prover.
+    const huge = hugePower(formal.formal_statement ?? theoremType);
+
     // 1. Automation: the hammer cascade in REPL tactic mode, then single-tactic probes.
     const tried: string[] = [];
-    if (process.env.LEAN_SERVER_MODE !== "spawn") {
+    if (huge) {
+      tried.push(lt("跳过了会去直接计算的自动化策略（数太大，无法计算）", "skipped the automation that would compute (the number is too big to compute)"));
+    } else if (process.env.LEAN_SERVER_MODE !== "spawn") {
       const root = assembleLeanSource({ theoremName, theoremType, stepCodes: ["sorry"], useMathlib });
       const hit = await hammerTheorem(root, { useMathlib });
       tried.push(lt("自动化策略组合（rfl、decide、decide +kernel、simp、omega、norm_num、ring、linarith、aesop 等）", "the automation cascade (rfl, decide, decide +kernel, simp, omega, norm_num, ring, linarith, aesop, …)"));
@@ -259,7 +278,7 @@ export async function attemptLeanFormalization(problemText: string, ctx: LeanAtt
         if (v.ok) return done(v, source, { strategy: "hammer", attempts: 1 });
       }
     }
-    const trivial = await tryTrivialProof(sessionId, theoremName, theoremType, useMathlib, { expectedSignature });
+    const trivial = huge ? undefined : await tryTrivialProof(sessionId, theoremName, theoremType, useMathlib, { expectedSignature });
     if (trivial) return done(trivial.verification, trivial.source, { strategy: "trivial", attempts: 1 });
     if (!tried.length) tried.push(lt("单条策略（rfl、simp、norm_num、omega、decide、decide +kernel、ring、linarith 等）", "single tactics (rfl, simp, norm_num, omega, decide, decide +kernel, ring, linarith, …)"));
 
@@ -268,6 +287,15 @@ export async function attemptLeanFormalization(problemText: string, ctx: LeanAtt
     const cases = enumerationSize(formal.formal_statement ?? theoremType);
     const tooMany = cases !== undefined && cases > ENUMERATION_LIMIT;
     const limitations: string[] = [];
+    if (huge) {
+      const digits = Number.isFinite(huge.exponentDigits) ? lt(`约 ${huge.exponentDigits} 位`, `about ${huge.exponentDigits} digits`) : lt("天文数字级", "astronomically large");
+      limitations.push(
+        lt(
+          `陈述里的 ${huge.text} 无法直接计算：它的指数本身就有${digits}，而 Lean 拒绝计算指数超过 2^24 的幂（报“Nat.pow exponent is too big”）。要证明它，必须保持符号形式，用 p 进赋值和“升幂引理”（LTE，Mathlib 的 padicValNat.pow_sub_pow 等）分别算出每个素因子的次数，这需要较长的结构化证明`,
+          `${huge.text} in the statement cannot be computed: its exponent alone has ${digits}, and Lean refuses powers with an exponent above 2^24 ("Nat.pow exponent is too big"). A proof has to keep it symbolic and count each prime factor with p-adic valuations and the lifting-the-exponent lemma (Mathlib's padicValNat.pow_sub_pow etc.) — a long structured proof`,
+        ),
+      );
+    }
     if (tooMany) {
       limitations.push(
         lt(
@@ -289,7 +317,7 @@ export async function attemptLeanFormalization(problemText: string, ctx: LeanAtt
         sketch: [
           sketchOf(ctx.solution),
           tooMany ? `Note: the statement ranges over about ${sizeText(cases!)} cases. Do NOT try decide / rfl / norm_num [Finset.filter] over the range: it cannot finish. Prove it structurally (e.g. Chinese remainder theorem, counting in cyclic groups, bijections).` : undefined,
-          proofHints(theoremType, { tooMany }).join("\n"),
+          proofHints(theoremType, { tooMany, huge: huge?.text }).join("\n"),
         ]
           .filter(Boolean)
           .join("\n\n") || undefined,
@@ -302,6 +330,8 @@ export async function attemptLeanFormalization(problemText: string, ctx: LeanAtt
       const best = whole.candidates.length ? bestCandidate(whole) : undefined;
       if (best?.summary && /sorry/.test(best.summary)) {
         limitations.push(lt("模型写出了证明的框架，但其中有步骤没能补完（留下了 sorry），所以不算证明", "The model wrote the outline of a proof but left steps unfinished (`sorry`), so it does not count as a proof"));
+      } else if (best?.summary && /Nat\.pow exponent is too big/.test(best.summary)) {
+        if (!huge) limitations.push(lt("最接近的一个证明试图直接计算一个大到 Lean 拒绝计算的幂（指数超过 2^24）", "The closest proof tried to compute a power Lean refuses to compute (exponent above 2^24)"));
       } else if (best?.summary) {
         limitations.push(lt(`最接近的一个证明卡在：${best.summary}`, `The closest proof failed at: ${best.summary}`));
       }
