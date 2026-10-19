@@ -24,7 +24,7 @@ const A = { theorem_name: "t", theorem_type: "(n : ℕ) : n - 1 + 1 = n", domain
 const B = { ...A, theorem_type: "(n : ℕ) (h : 0 < n) : n - 1 + 1 = n" };
 const B2 = { ...A, theorem_type: "(m : ℕ) (hm : 0 < m) : m - 1 + 1 = m" };
 
-function llmAnswers(formalizations: object[]) {
+function llmAnswers(formalizations: object[], relevance: object = { extra_assumptions: [], contradictions: [], redundant: [], analysis: "相关" }) {
   let calls = 0;
   chatJson.mockImplementation(async (args: { schemaName: string }) => {
     switch (args.schemaName) {
@@ -39,7 +39,7 @@ function llmAnswers(formalizations: object[]) {
       case "numericalVerification":
         return { all_consistent: true, results: [] };
       case "hypothesisRelevance":
-        return { all_relevant: true, suspicious: [], analysis: "相关" };
+        return structuredClone(relevance);
       default:
         throw new Error(`unexpected schema ${args.schemaName}`);
     }
@@ -105,6 +105,32 @@ describe("autoformalize: non-triviality layer", () => {
     expect(call.user).toContain("Original problem:\nProve that n + 0 = n for every natural number n");
     expect(call.system).toContain("NOT degenerate");
     expect(call.system).toMatch(/faithful formalization of a problem that is itself easy/);
+  });
+});
+
+describe("autoformalize: hypothesis layer", () => {
+  // A 13-14-15 triangle stated as acute as well: redundant, but it follows from the data.
+  const H = { ...A, theorem_type: "(n : ℕ) : 0 < n → n - 1 + 1 = n" };
+
+  it("accepts redundant hypotheses that follow from the problem, and says so", async () => {
+    llmAnswers([H], { extra_assumptions: [], contradictions: [], redundant: ["0 < n 由题设推出"], analysis: "假设与题目一致" });
+    leanAnswers();
+    const r = await autoformalize({ problemText: "Prove n - 1 + 1 = n for every positive integer n", candidates: 1, maxRetries: 0 });
+    const l5 = r.validation_results.find((v) => v.layer === 5)!;
+    expect(l5.pass).toBe(true);
+    expect(l5.detail).toMatch(/多余但成立|Redundant/);
+    const call = chatJson.mock.calls.find((c) => (c[0] as { schemaName: string }).schemaName === "hypothesisRelevance")![0] as { system: string; user: string };
+    expect(call.user).toContain("Original problem:\nProve n - 1 + 1 = n for every positive integer n");
+    expect(call.system).toMatch(/Redundant hypotheses are ACCEPTABLE/);
+  });
+
+  it("fails an assumption the problem does not make", async () => {
+    llmAnswers([H], { extra_assumptions: ["0 < n：题目对所有自然数成立"], contradictions: [], redundant: [], analysis: "多了条件" });
+    leanAnswers();
+    const r = await autoformalize({ problemText: "Prove n - 1 + 1 = n", candidates: 1, maxRetries: 0 });
+    const l5 = r.validation_results.find((v) => v.layer === 5)!;
+    expect(l5.pass).toBe(false);
+    expect(l5.detail).toMatch(/问题中没有的假设|Assumptions the problem does not make/);
   });
 });
 

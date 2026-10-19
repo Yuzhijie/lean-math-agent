@@ -230,7 +230,7 @@ export async function autoformalize(args: {
     results.push(l4);
 
     // Layer 5: Hypothesis relevance check
-    const l5 = await layerHypothesisRelevance(formal);
+    const l5 = await layerHypothesisRelevance(formal, args.problemText);
     results.push(l5);
 
     const accepted = results.every((r) => r.pass);
@@ -657,8 +657,17 @@ ${JSON.stringify(formal.numerical_instances, null, 2)}`,
 
 // ── Layer 5: Hypothesis relevance ─────────────────────────────────────
 
+/**
+ * Layer 5: are the hypotheses the problem's? A hypothesis that the problem neither states nor
+ * implies narrows the claim (fail), and so do hypotheses that contradict each other. A redundant
+ * hypothesis that FOLLOWS from the problem's data (a 13-14-15 triangle stated as acute, an
+ * interior point stated by barycentric coordinates as well) does not weaken the theorem: it is
+ * reported, not failed — the judge once failed a statement for exactly that while finding the
+ * hypotheses consistent and serving the conclusion.
+ */
 async function layerHypothesisRelevance(
   formal: FormalizeResponse,
+  problemText?: string,
 ): Promise<ValidationResult> {
   // Simple heuristic: if there are no hypotheses (no → in type), skip
   const hasImplications = formal.theorem_type.includes("→") || formal.theorem_type.includes("->");
@@ -672,20 +681,24 @@ async function layerHypothesisRelevance(
 
   try {
     const check = await chatJson<{
-      all_relevant: boolean;
-      suspicious: string[];
+      extra_assumptions?: string[];
+      contradictions?: string[];
+      redundant?: string[];
       analysis: string;
     }>({
-      system: `Analyze the hypotheses in this Lean 4 theorem for relevance.
-Check if each hypothesis is:
-- Actually needed (not redundant)
-- Not contradictory with other hypotheses
-- Appropriately scoped (not overly restrictive)
-Return JSON: { "all_relevant": boolean, "suspicious": string[], "analysis": string (Chinese) }`,
-      user: `theorem ${formal.theorem_name} ${formal.theorem_type} := by sorry\n\nOriginal problem: ${formal.natural_language_restatement}`,
+      system: `You check the hypotheses of a Lean 4 theorem against the original problem.
+For each hypothesis decide which kind it is:
+- given: the problem states it (possibly in other words or as a definition, e.g. "I is the incenter" written as equal distances to the sides with feet on the segments);
+- redundant: the problem does not state it but it FOLLOWS from what the problem gives (e.g. "the triangle is acute" when the side lengths 13, 14, 15 are given). Redundant hypotheses are ACCEPTABLE: they do not weaken the theorem, because every configuration of the problem satisfies them;
+- extra_assumption: the problem neither states nor implies it, so it narrows the claim to a special case (e.g. assuming x > 0 when x may be any real, assuming the triangle is isosceles);
+- contradiction: it contradicts another hypothesis or the problem's data, so the theorem would be vacuous.
+List only extra assumptions and contradictions as problems; list redundant hypotheses separately for information.
+Return JSON: { "extra_assumptions": string[], "contradictions": string[], "redundant": string[], "analysis": string (Chinese) }`,
+      user: `theorem ${formal.theorem_name} ${formal.theorem_type} := by sorry\n\nOriginal problem:\n${(problemText ?? "").slice(0, 4000) || formal.natural_language_restatement}\n\nThe formalizer's restatement: ${formal.natural_language_restatement}`,
       schema: z.object({
-        all_relevant: z.boolean(),
-        suspicious: z.array(z.string()),
+        extra_assumptions: z.array(z.string()).default([]),
+        contradictions: z.array(z.string()).default([]),
+        redundant: z.array(z.string()).default([]),
         analysis: z.string().min(1),
       }),
       schemaName: "hypothesisRelevance",
@@ -693,13 +706,17 @@ Return JSON: { "all_relevant": boolean, "suspicious": string[], "analysis": stri
       role: "planner",
     });
 
-    return {
-      layer: 5,
-      pass: check.all_relevant,
-      detail: check.all_relevant
-        ? check.analysis
-        : `${lt("可疑假设", "Suspicious hypotheses")}: ${check.suspicious.join(", ")}\n${check.analysis}`,
-    };
+    const extra = check.extra_assumptions ?? [];
+    const contradictions = check.contradictions ?? [];
+    const redundant = check.redundant ?? [];
+    const pass = extra.length === 0 && contradictions.length === 0;
+    const parts = [
+      extra.length ? `${lt("问题中没有的假设", "Assumptions the problem does not make")}: ${extra.join("; ")}` : "",
+      contradictions.length ? `${lt("互相矛盾的假设", "Contradictory hypotheses")}: ${contradictions.join("; ")}` : "",
+      redundant.length ? `${lt("多余但成立的假设（不影响）", "Redundant hypotheses that follow from the problem (harmless)")}: ${redundant.join("; ")}` : "",
+      check.analysis,
+    ].filter(Boolean);
+    return { layer: 5, pass, detail: parts.join("\n") };
   } catch {
     return {
       layer: 5,
