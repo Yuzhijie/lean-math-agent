@@ -226,7 +226,7 @@ export function sameAnswer(a: string, b: string): boolean {
 }
 
 /** Two candidate answers: a careful independent check says which one is right (undefined when it cannot). */
-async function resolveConflict(problemText: string, a: string, b: string): Promise<string | undefined> {
+export async function resolveConflict(problemText: string, a: string, b: string): Promise<string | undefined> {
   try {
     const r = await chatJson({
       system:

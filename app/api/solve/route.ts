@@ -8,6 +8,7 @@ import { withUsageScope } from "@/lib/llm/usage-tracker";
 import { classifyProblem } from "@/lib/llm/classify-problem";
 import { solveComputational } from "@/lib/compute/solver";
 import { solveOptimization } from "@/lib/compute/optimization-solver";
+import { reconcileWithSolution } from "@/lib/compute/reconcile";
 import { solveFindAll } from "@/lib/compute/find-all-solver";
 import { extractOptimizationStructure } from "@/lib/llm/optimization-extract";
 import { generateNLSolution } from "@/lib/llm/nl-solution";
@@ -337,6 +338,34 @@ async function handleOptimizationProblem(
     }
   }
 
+  // Step 3b: the search answers the structure the model extracted, which may be the wrong
+  // problem: the written solution is a second opinion, and a disagreement is re-checked.
+  let answer = answerStr;
+  let crossValidated = true;
+  const checks: string[] = [];
+  if (nlSolution) {
+    const rec = await reconcileWithSolution(session.problem_text, answerStr, nlSolution.final_answer);
+    if (!rec.agreed) {
+      answer = rec.answer;
+      crossValidated = false;
+      if (rec.check) {
+        checks.push(rec.check);
+        events.push({ stage: "nl_solving", detail: `⚠️ ${rec.check}` });
+      }
+      if (rec.solutionStale) {
+        try {
+          nlSolution = await generateNLSolution({ problemText: session.problem_text, problemType: "computational", computeResult: { answer, answer_decimal: answer, solution_steps: [] } });
+          updateSession(session.id, { nl_solution: nlSolution });
+        } catch {
+          /* keep the first solution; the checks say which answer was chosen */
+        }
+      }
+      updateSession(session.id, {
+        computation_result: { answer, answer_exact: answer, answer_decimal: answer, cross_validated: false, methods_used: ["deterministic_optimization", "answer_recheck"], solution_steps: result.reasoning.split("\n"), checks },
+      });
+    }
+  }
+
   // Step 4: Lean formalization (best-effort, usually skip for optimization)
   const leanProofAttempt: LeanProofAttempt = {
     attempted: false,
@@ -351,7 +380,7 @@ async function handleOptimizationProblem(
 
   events.push({
     stage: "complete",
-    detail: lt(`求解完成 — 最优值: ${answerStr}`, `Solved — optimal value: ${answerStr}`),
+    detail: crossValidated ? lt(`求解完成 — 最优值: ${answer}`, `Solved — optimal value: ${answer}`) : lt(`求解完成 — 答案: ${answer}`, `Solved — answer: ${answer}`),
   });
 
   await saveSessionToDisk(session.id);
@@ -363,18 +392,19 @@ async function handleOptimizationProblem(
     nl_solution: nlSolution,
     lean_proof_attempt: leanProofAttempt,
     // Optimization-specific fields
-    answer: answerStr,
-    answer_exact: answerStr,
-    answer_decimal: answerStr,
+    answer,
+    answer_exact: answer,
+    answer_decimal: answer,
     optimal_value: result.optimal_value,
     assignments: result.assignments,
     is_feasible: result.is_feasible,
     reasoning: result.reasoning,
     example_sets: result.example_sets,
     optimization_structure: structure,
-    confidence: 1.0,
-    cross_validated: true,
-    methods_used: ["deterministic_optimization"],
+    confidence: crossValidated ? 1.0 : 0.5,
+    cross_validated: crossValidated,
+    checks,
+    methods_used: crossValidated ? ["deterministic_optimization"] : ["deterministic_optimization", "answer_recheck"],
   });
 }
 

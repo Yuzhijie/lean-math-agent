@@ -11,7 +11,8 @@ Rules:
 - Competition problems that ask for a specific numerical answer are "computational".
 - Problems asking to prove an identity, property, or theorem are "theorem".
 - Problems asking to MAXIMIZE or MINIMIZE a quantity (like "3m+4n") subject to sum/count constraints are ALWAYS "optimization". These are discrete combinatorial optimization problems.
-- If ambiguous, prefer "optimization" when keywords like "maximum", "minimum", "maximize", "minimize", "最大", "最小" appear.
+- Counting what a figure or drawing contains is "computational", even when it says "maximum"/"最多": "how many triangles/squares/rectangles can be traced/found in the drawing", "the maximum number of triangles in the figure", "图中最多能数出几个三角形". The answer is a count of what is drawn (or of the cases listed), not an optimum over variables under constraints.
+- If ambiguous, prefer "optimization" when keywords like "maximum", "minimum", "maximize", "minimize", "最大", "最小" appear and the problem has quantities to choose under constraints.
 - Problems asking to find ALL values of a parameter (m, k, n, etc.) such that a sequence, equation, or structure satisfies a property are ALWAYS "find_all_values". Key signals:
   - "Determine all integers/values..."
   - "Find all m such that..."

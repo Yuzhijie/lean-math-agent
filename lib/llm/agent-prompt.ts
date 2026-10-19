@@ -19,6 +19,7 @@ Rules:
   - Sums/products over ranges: \`∑ i ∈ Finset.range n, f i\` (0 ≤ i < n) or \`Finset.Icc a b\`; check the bounds (off-by-one) against the problem.
   - Prefer Mathlib predicates: \`Nat.Prime p\`, \`Even n\`, \`Odd n\`, \`a ∣ b\`, \`Nat.gcd\`, \`Nat.Coprime\`, \`x ∈ Set.Icc a b\`, \`Real.sqrt\`, \`Real.log\`, \`Real.exp\`.
   - Do not weaken (adding hypotheses the problem does not state) or strengthen (dropping hypotheses, widening the domain) the claim.
+  - Counting shapes in a described drawing ("how many triangles can be traced"): encode the WHOLE drawing as finite data — its marked points (corners and crossings) as \`Fin n\` and every drawn line as the set of points on it — and count with the rule the problem means, e.g. a triangle is 3 points, each pair on a common drawn line, not all three on one line. Every line and crossing in the description must be there; never build the data so that it contains exactly the expected answer.
 - theorem_name should be a descriptive Lean identifier.
 - theorem_type is the type signature after the theorem name (e.g. "(n : ℕ) : n + 0 = n").
 - Provide a natural language restatement that matches the formal statement.

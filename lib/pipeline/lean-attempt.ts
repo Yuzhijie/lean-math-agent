@@ -174,8 +174,10 @@ export async function attemptLeanFormalization(problemText: string, ctx: LeanAtt
   const sessionId = ctx.sessionId ?? "lean-attempt";
   let formal_statement: string | undefined;
   try {
-    // Formalize with the most trusted answer; when the numeric (L4) or counterexample (L6) check
-    // refutes the statement and solving produced another answer, try that one.
+    // Formalize with the most trusted answer; when its statement does not pass the checks and
+    // solving produced another answer, try that one (a wrong answer forces a statement that
+    // misstates the problem: the numeric / counterexample checks refute it, or the
+    // non-triviality check finds it built to fit — a figure encoded with 2 triangles for "2").
     const answers = ctx.answers?.length ? ctx.answers : ctx.answer ? [ctx.answer] : [undefined];
     const notes: string[] = [];
     let formal!: Awaited<ReturnType<typeof autoformalize>>;
@@ -184,12 +186,18 @@ export async function attemptLeanFormalization(problemText: string, ctx: LeanAtt
       formal_statement = formal.formal_statement;
       if (formal.accepted) break;
       const refuted = formal.validation_results.some((v) => !v.pass && (v.layer === 4 || v.layer === 6));
-      if (!refuted || k === answers.length - 1) break;
+      if (k === answers.length - 1 || answers[k] === undefined) break;
+      const failedLayers = formal.validation_results.filter((v) => !v.pass).map((v) => `L${v.layer}`).join(", ");
       notes.push(
-        lt(
-          `按答案 ${answers[k]} 写出的陈述被数值检查推翻，改用解答中的另一个答案 ${answers[k + 1]}`,
-          `The statement with the answer ${answers[k]} was refuted by the numeric check; trying the solution's other answer ${answers[k + 1]}`,
-        ),
+        refuted
+          ? lt(
+              `按答案 ${answers[k]} 写出的陈述被数值检查推翻，改用解答中的另一个答案 ${answers[k + 1]}`,
+              `The statement with the answer ${answers[k]} was refuted by the numeric check; trying the solution's other answer ${answers[k + 1]}`,
+            )
+          : lt(
+              `按答案 ${answers[k]} 写出的陈述没有通过检查（${failedLayers || "未给出原因"}），改用解答中的另一个答案 ${answers[k + 1]}`,
+              `The statement with the answer ${answers[k]} did not pass the checks (${failedLayers || "no reason given"}); trying the solution's other answer ${answers[k + 1]}`,
+            ),
       );
     }
 

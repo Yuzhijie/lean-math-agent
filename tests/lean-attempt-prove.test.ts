@@ -161,6 +161,19 @@ describe("when solving produced two answers", () => {
     expect(a.limitations?.[0]).toMatch(/1814400.*907200/);
   });
 
+  it("formalizes again with the other answer when the first statement fails any check", async () => {
+    // A wrong answer (2 for a figure with 18 triangles) forced a figure encoding built to fit; L2 caught it.
+    m.autoformalize
+      .mockResolvedValueOnce({ ...GCD, accepted: false, validation_results: [{ layer: 2, pass: false, detail: "该形式化是退化的" }] })
+      .mockResolvedValueOnce(GCD);
+    m.hammerTheorem.mockResolvedValue({ tactic: "decide", attempts: [], durationMs: 5 });
+    const a = await attemptLeanFormalization("p", { answers: ["2", "18"] });
+    expect(m.autoformalize).toHaveBeenCalledTimes(2);
+    expect(m.autoformalize.mock.calls[1][0].problemText).toContain("is: 18");
+    expect(a.success).toBe(true);
+    expect(a.limitations?.[0]).toMatch(/2.*L2.*18/);
+  });
+
   it("says the answer may be wrong when its statement is refuted and nothing else is left", async () => {
     m.autoformalize.mockResolvedValue({ ...GCD, accepted: false, validation_results: [{ layer: 4, pass: false, detail: "Inconsistent instances" }] });
     const a = await attemptLeanFormalization("p", { answers: ["1814400"] });

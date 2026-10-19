@@ -163,7 +163,7 @@ lib/
     problem-figures.ts              # Figures sent with a problem (bank images, `figures: [{bank_id, asset}]` on /api/solve-stream, /api/solve, /api/enumerate): read once by the vision model into a description appended to problem_text (session.figure_description); failures fall back to text-only with a note
   pipeline/
     theorem-pipeline.ts             # Theorem pipeline shared by /api/solve and /api/solve-stream
-    lean-attempt.ts                 # Lean formalization attempt for non-theorem problems; solves skip it unless `options.lean_attempt: true` (the UI starts it from the Lean tab). The known answer goes into the formalization; an accepted statement is proved (hammer → single tactics → whole-proof loop with the NL solution as sketch, PROOF_BUDGET default low); a failure lists what was tried and where the closest proof failed; a failed attempt can be run again ("再试一次")
+    lean-attempt.ts                 # Lean formalization attempt for non-theorem problems; solves skip it unless `options.lean_attempt: true` (the UI starts it from the Lean tab). The known answer goes into the formalization; an accepted statement is proved (hammer → single tactics → whole-proof loop with the NL solution as sketch, PROOF_BUDGET default low); a failure lists what was tried and where the closest proof failed; a failed attempt can be run again ("再试一次"); when the statement with the first answer fails any check and solving produced another answer, that one is formalized next
   prover/
     whole-proof.ts                  # Whole-proof loop: sample k proofs → verify → repair with feedback + suggestions; each candidate records `progress` (tactic lines before the first error); earlyStop (PROOF_EARLY_STOP) gives up after round 0 when no candidate got past its first tactic (gaveUpEarly); stops when the run's cost cap is reached (costCapped); a native prover (proverPromptStyle) gets nativeProverPrompt (no system message, plan first, LLM_PROVER_MAX_TOKENS/TIMEOUT_MS) and a self-correction turn (its proof as the assistant turn + Lean's errors); extractTactics(text, theoremName) takes the target declaration when the answer also defines helper lemmas (logged, not carried over)
     sketch.ts                       # Sketch-and-fill: numbered informal proof first (planner role, high effort; SKETCH_INFORMAL, skipped when the caller gives a hint) → skeleton with one `have … := by sorry` per step → each hole: hammer, then the whole-proof prover on the hole as a lemma of its own (goal-statement.ts; checked to elaborate first; SKETCH_HOLE_PROVER auto = when LLM_PROVER_MODEL is set), then goal search → splice → strict verify
@@ -181,7 +181,7 @@ lib/
     prompts.ts                      # Prompts (enumerate/plan/prove-step/whole-proof, Lean 4 pitfalls)
     agent-prompt.ts                 # Agent system prompts (6 roles + 10 domains)
     autoformalize.ts                # Autoformalization: candidate voting (AUTOFORMALIZE_CANDIDATES) + 6 validation layers (elaborate, refute, non-trivial, back-translate, numeric, relevance); the non-trivial layer judges the statement against the original problem text (a faithful statement of an easy problem such as n + 0 = n passes; only a formalization that became easier than the problem fails)
-    classify-problem.ts             # Problem type classifier
+    classify-problem.ts             # Problem type classifier (counting what a drawing contains is computational even when it says "maximum")
     enumerate.ts                    # Method enumeration
     equation-setup.ts               # Equation extraction from word problems
     evaluate.ts                     # Multi-method evaluation (critic scoring)
@@ -224,6 +224,7 @@ lib/
     order-check.ts                  # "Smallest positive n with a^n ≡ 1 (mod m), …": congruences read from LaTeX/plain text, multiplicative orders via Carmichael λ, answer = lcm (a model once answered 1814400 for 907200)
     nat-expr.ts                     # Closed natural-number expressions (+ − × ^, parentheses) → BigInt; used by order-check and the Lean attempt's range-size estimate
     cross-validate.ts               # Result cross-validation (tolerance clustering)
+    reconcile.ts                    # Program answer vs the written solution's \boxed answer (optimization handlers): a disagreement is re-checked (resolveConflict), reported in `checks` and no longer cross-validated; the solution is rewritten when it argues for the losing answer (a "how many triangles in the drawing" question was once extracted as "2 positive integers summing to 3" → 2, the solution counted 18)
     optimization-solver.ts          # Deterministic optimization search
     find-all-solver.ts              # Systematic find-all-values + completeness proof
     sympy-bridge.ts                 # HTTP client to Python compute server
