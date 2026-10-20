@@ -278,7 +278,7 @@ lean-sandbox/
   lakefile.toml                     # Lake build config (mathlib v4.33.1 + repl v4.33.0 dependency)
 
 proxy.ts                            # Next 16 proxy (ex-middleware): when auth is required, pages redirect to /auth/signin and API calls get 401 without a session token (public: /auth, /api/auth, /api/payments/webhook, /api/health)
-instrumentation.ts                  # Server start: lib/startup-checks.ts
+instrumentation.ts                  # Server start: on the Node runtime imports instrumentation-node.ts (lib/startup-checks.ts; process.exit on a fatal problem — kept out of this file, which Next also compiles for the Edge runtime)
 Dockerfile                          # Debian images: Lean stage (elan + Mathlib cache + `lake build repl`), Next standalone runner with /opt/elan + built lean-sandbox; CMD = scripts/migrate.mjs then server.js; HEALTHCHECK /api/health
 Dockerfile.compute                  # Python compute server
 docker-compose.yml                  # Invite-only beta: env_file .env.production (template .env.production.example), AUTH_REQUIRED=true, state on the app-data volume; only nginx publishes ports; neo4j optional (--profile knowledge)
