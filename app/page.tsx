@@ -176,7 +176,11 @@ export default function Home() {
   // A question generated on the bank page ("使用此题"): exporting it prints the generated question (with its answer
   // and solution) from the generation, while the text is unchanged.
   const [problemSource, setProblemSource] = useState<{ bankId: string; genId: string; candId: string; text: string } | null>(null);
+  // Bumped for every problem put in the box from outside (generator, bank, image): the preview's figure
+  // components are rebuilt, so a new question never shows the previous question's figure.
+  const [usedKey, setUsedKey] = useState(0);
   const applyProblem = (text: string, figure?: UsedProblemFigure) => {
+    setUsedKey((k) => k + 1);
     loadGeneratedProblem(text);
     // A generated question's figure comes with its exact description, which is added to the problem when solving;
     // bank figures (images) are registered by the caller and read by the vision model.
@@ -640,7 +644,7 @@ export default function Home() {
                     <MathText text={problemText} />
                   </div>
                   {usedFigure && (
-                    <div className="mt-3">
+                    <div className="mt-3" key={usedKey}>
                       {usedFigure.figure ? (
                         <FigurePanel problemText={problemText} initialFigure={usedFigure.figure} />
                       ) : usedFigure.fallbackSvg ? (
