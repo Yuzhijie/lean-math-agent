@@ -102,7 +102,13 @@ export function summarizeFailure(result: LeanVerifyResult, maxChars = 200): stri
   if (result.rejected) return truncate(result.rejected, maxChars);
   const first = result.messages.find((m) => m.severity === "error");
   if (!first) return truncate(result.log || "verification failed", maxChars);
-  return truncate(first.message.split("\n")[0], maxChars);
+  const lines = first.message.split("\n");
+  // "unsolved goals" alone says nothing: add the goal that was left (its ⊢ line).
+  if (/^unsolved goals/.test(lines[0])) {
+    const goal = lines.find((l) => l.trim().startsWith("⊢"));
+    if (goal) return truncate(`${lines[0]}: ${goal.trim().replace(/\s+/g, " ")}`, maxChars);
+  }
+  return truncate(lines[0], maxChars);
 }
 
 /**

@@ -174,6 +174,20 @@ export function proofHints(theoremType: string, opts: { tooMany?: boolean; huge?
       ].join("\n"),
     );
   }
+  if (/∣/.test(t) && /\(\s*\w+\s*:\s*(ℕ|ℤ|Nat|Int)\s*\)|∀\s*\w+\s*:\s*(ℕ|ℤ)/.test(t) && /↔|∃/.test(t)) {
+    hints.push(
+      [
+        "Divisibility conditions on an integer variable (\"find all n\"): bound n, then check the cases.",
+        "- turn each `a ∣ f n` into `a ∣ constant` by adding or subtracting multiples of a: e.g. from `h : n + 5 ∣ n ^ 2 + 14`,",
+        "    `have h2 : n + 5 ∣ (n ^ 2 + 14) + 10 * (n + 5) := dvd_add h (dvd_mul_left _ _)`,",
+        "    `rw [show (n ^ 2 + 14) + 10 * (n + 5) = (n + 5) * (n + 5) + 39 by ring] at h2`,",
+        "    `have h39 : n + 5 ∣ 39 := (Nat.dvd_add_right (dvd_mul_right _ _)).mp h2`",
+        "  (in ℕ never subtract — `n - 5` truncates — add instead; or cast to ℤ and use `dvd_sub`);",
+        "- `have hb : n + 5 ≤ 39 := Nat.le_of_dvd (by norm_num) h39`, then `interval_cases n` and close every case with `first | omega | (norm_num at *) | decide | simp_all`;",
+        "- the ← direction: `rintro rfl` then `norm_num` or `decide`; split ↔ with `constructor` first.",
+      ].join("\n"),
+    );
+  }
   if (/ℝ\s*×\s*ℝ|EuclideanSpace|Fin\s+2\s*→\s*ℝ/.test(t)) {
     hints.push(
       [

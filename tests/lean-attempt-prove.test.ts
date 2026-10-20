@@ -224,3 +224,12 @@ describe("coordinate geometry", () => {
     expect((a.limitations ?? []).join("\n")).toMatch(/计算步数上限|computation budget/);
   });
 });
+
+describe("divisibility, find all n", () => {
+  it("tells the prover to bound n through a ∣ constant, then interval_cases", () => {
+    const h = proofHints("(n : ℕ) : (0 < n ∧ n + 5 ∣ n ^ 2 + 14 ∧ 2 * n + 1 ∣ n ^ 2 + 4) ↔ n = 8").join("\n");
+    expect(h).toMatch(/Nat\.dvd_add_right/);
+    expect(h).toMatch(/interval_cases n/);
+    expect(proofHints("(a b : ℕ) (h : a ∣ b) : a ≤ b + a").join("\n")).not.toMatch(/interval_cases/);
+  });
+});
