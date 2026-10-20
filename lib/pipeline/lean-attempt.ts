@@ -174,6 +174,18 @@ export function proofHints(theoremType: string, opts: { tooMany?: boolean; huge?
       ].join("\n"),
     );
   }
+  if (/ℝ\s*×\s*ℝ|EuclideanSpace|Fin\s+2\s*→\s*ℝ/.test(t)) {
+    hints.push(
+      [
+        "Coordinate geometry. Keep the computation small, or Lean runs out of heartbeats (`(deterministic) timeout at whnf`):",
+        "- `intro` the lets and the points, then `rintro ⟨h1, h2, …⟩`; never `simp` / `norm_num` with all the let definitions unfolded at once — unfold one (`simp only [qdist] at h1`) where needed;",
+        "- work componentwise: write each point as its two coordinates (`obtain ⟨x, y⟩ := P`, `Prod.ext_iff`, `Prod.fst_add`, `Prod.smul_fst`), turn every condition into equations over ℝ;",
+        "- solve the parameters (t, s) of the ∃s with `field_simp` / `linarith` / `nlinarith [sq_nonneg …]`, or give their values explicitly and check them;",
+        "- close polynomial identities with `linear_combination (coeff) * h1 + …` or `nlinarith`; absolute values with `abs_of_pos` / `abs_of_neg` once the sign is known;",
+        "- if a step is heavy but correct, `set_option maxHeartbeats 400000 in` before the theorem is allowed (0 is not).",
+      ].join("\n"),
+    );
+  }
   hints.push("Never write `sorry` or `admit`: a proof that contains them is rejected.");
   return hints;
 }
@@ -332,6 +344,13 @@ export async function attemptLeanFormalization(problemText: string, ctx: LeanAtt
         limitations.push(lt("模型写出了证明的框架，但其中有步骤没能补完（留下了 sorry），所以不算证明", "The model wrote the outline of a proof but left steps unfinished (`sorry`), so it does not count as a proof"));
       } else if (best?.summary && /Nat\.pow exponent is too big/.test(best.summary)) {
         if (!huge) limitations.push(lt("最接近的一个证明试图直接计算一个大到 Lean 拒绝计算的幂（指数超过 2^24）", "The closest proof tried to compute a power Lean refuses to compute (exponent above 2^24)"));
+      } else if (best?.summary && /maximum number of heartbeats|\(deterministic\) timeout/.test(best.summary)) {
+        limitations.push(
+          lt(
+            `最接近的一个证明在 Lean 里算到一半超出了计算步数上限（${best.summary}）：通常是一次展开或化简的式子太大。这不说明陈述有错，需要把证明拆成更小的步骤`,
+            `The closest proof ran out of Lean's computation budget part-way (${best.summary}): usually one unfolding or simplification was too big. This does not mean the statement is wrong; the proof needs smaller steps`,
+          ),
+        );
       } else if (best?.summary) {
         limitations.push(lt(`最接近的一个证明卡在：${best.summary}`, `The closest proof failed at: ${best.summary}`));
       }

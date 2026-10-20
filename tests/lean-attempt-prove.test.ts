@@ -18,7 +18,7 @@ vi.mock("@/lib/lean/sandbox", () => ({ verifyLeanSource: m.verifyLeanSource, che
 vi.mock("@/lib/lean/trivial-proof", () => ({ tryTrivialProof: m.tryTrivialProof }));
 vi.mock("@/lib/prover/whole-proof", () => ({ proveWholeTheorem: m.proveWholeTheorem, wholeProofEnabled: () => true }));
 
-const { attemptLeanFormalization, leanAttemptRetryable } = await import("@/lib/pipeline/lean-attempt");
+const { attemptLeanFormalization, leanAttemptRetryable, proofHints } = await import("@/lib/pipeline/lean-attempt");
 const { hugePower } = await import("@/lib/compute/nat-expr");
 
 const GCD = {
@@ -122,7 +122,7 @@ describe("hints for the prover and the sorry report", () => {
     ": let rot : Fin 12 → Fin 12 → Fin 12 := fun k i => ⟨(i.val + k.val) % 12, Nat.mod_lt _ (by decide)⟩; let Valid : Finset (Fin 12) → Prop := fun s => s.card = 4; ∃ reps : Fin 8 → Finset (Fin 12), ∀ j, Valid (reps j)";
 
   it("says to introduce the lets and to use witnesses + decide +kernel on finite statements", async () => {
-    const { proofHints } = await import("@/lib/pipeline/lean-attempt");
+
     const h = proofHints(DODECAGON).join("\n");
     expect(h).toContain("intro rot Valid");
     expect(h).toContain("decide +kernel");
@@ -207,5 +207,20 @@ describe("statements with numbers too big to compute", () => {
     expect(text).toMatch(/2025 \^ \(2024 \^ 2024\)/);
     expect(text).toMatch(/6692/);
     expect(text).not.toMatch(/INTERNAL PANIC/);
+  });
+});
+
+describe("coordinate geometry", () => {
+  const GEO = ": let area : (ℝ × ℝ) → (ℝ × ℝ) → (ℝ × ℝ) → ℝ := fun X Y Z => 0; ∀ (A B C : ℝ × ℝ), A = B → area A B C = 0";
+
+  it("gives the prover componentwise advice and explains a heartbeat timeout in words", async () => {
+    expect(proofHints(GEO).join("\n")).toMatch(/Coordinate geometry/);
+    m.autoformalize.mockResolvedValue({ ...GCD, theorem_type: GEO, formal_statement: `theorem t ${GEO} := by sorry` });
+    m.hammerTheorem.mockResolvedValue(undefined);
+    m.tryTrivialProof.mockResolvedValue(undefined);
+    m.proveWholeTheorem.mockResolvedValue({ ok: false, samples: 2, rounds: 1, candidates: [{ errors: 1, progress: 3, summary: "(deterministic) timeout at `whnf`, maximum number of heartbeats (200000) has been reached" }] });
+    const a = await attemptLeanFormalization("p", { answer: "0" });
+    expect((m.proveWholeTheorem.mock.calls[0][0].sketch as string)).toMatch(/Coordinate geometry/);
+    expect((a.limitations ?? []).join("\n")).toMatch(/计算步数上限|computation budget/);
   });
 });
