@@ -183,7 +183,7 @@ lib/
     autoformalize.ts                # Autoformalization: candidate voting (AUTOFORMALIZE_CANDIDATES) + 6 validation layers (elaborate, refute, non-trivial, back-translate, numeric, relevance); the non-trivial layer judges the statement against the original problem text (a faithful statement of an easy problem such as n + 0 = n passes; only a formalization that became easier than the problem fails; the relevance layer (L5) judges hypotheses against the original problem too: an assumption the problem neither states nor implies, or a contradiction, fails; a redundant hypothesis that follows from the data (a 13-14-15 triangle also stated as acute) is reported, not failed)
     classify-problem.ts             # Problem type classifier (counting what a drawing contains is computational even when it says "maximum")
     enumerate.ts                    # Method enumeration
-    equation-setup.ts               # Equation extraction from word problems
+    equation-setup.ts               # Equation extraction from word problems (target_expression: a list from the model becomes one SymPy tuple "(x, y)", one item is taken as is)
     evaluate.ts                     # Multi-method evaluation (critic scoring)
     generate-problem.ts             # Problem generation + answer verification
     intuition.ts                    # Two-pass intuition review

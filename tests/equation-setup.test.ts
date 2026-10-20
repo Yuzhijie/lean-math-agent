@@ -146,3 +146,28 @@ describe("setupEquations", () => {
     expect(messages[0].content).toContain("SymPy");
   });
 });
+
+describe("equationSetupSchema: a list where one expression is expected", () => {
+  const base = {
+    variables: [{ name: "x", description: "x", domain: "real" }, { name: "y", description: "y", domain: "real" }],
+    equations: [{ lhs: "x + y", rhs: "10", description: "和" }],
+    constraints: [],
+    solution_methods: [
+      { name: "substitution", description: "代入" },
+      { name: "elimination", description: "消元" },
+    ],
+  };
+
+  it("several targets become one SymPy tuple, their descriptions are joined", () => {
+    // A model once returned target_expression: ["x", "y"] for "find x and y".
+    const r = equationSetupSchema.parse({ ...base, target_expression: ["x", "y"], target_description: ["x 的值", "y 的值"] });
+    expect(r.target_expression).toBe("(x, y)");
+    expect(r.target_description).toBe("x 的值; y 的值");
+  });
+
+  it("a one-item list or a number is taken as is; an empty list is still refused", () => {
+    expect(equationSetupSchema.parse({ ...base, target_expression: ["x*y"], target_description: "积" }).target_expression).toBe("x*y");
+    expect(equationSetupSchema.parse({ ...base, target_expression: 12, target_description: "值" }).target_expression).toBe("12");
+    expect(equationSetupSchema.safeParse({ ...base, target_expression: [], target_description: "值" }).success).toBe(false);
+  });
+});

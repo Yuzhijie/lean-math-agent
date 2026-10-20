@@ -55,7 +55,7 @@ export const EQUATION_SETUP_SYSTEM = `You are a mathematical modeling specialist
    - lhs and rhs must be valid SymPy expressions
    - The equation represents lhs = rhs
 3. constraints: list domain constraints as SymPy boolean expressions (e.g., "x > 0", "x < 3")
-4. target_expression: the SymPy expression whose value is the final answer
+4. target_expression: ONE SymPy expression (a string, never a list) whose value is the final answer; when the problem asks for several quantities, write them as one tuple, e.g. "(x, y)"
 5. target_description: Chinese description of what the target represents
 6. solution_methods: at least 2 different approaches to solve the problem:
    - For quadratic equations: always include "explicit_solve" (solve for roots directly) and "vieta" (use sum/product of roots)
