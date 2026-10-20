@@ -217,6 +217,9 @@ export function proofHints(theoremType: string, opts: { tooMany?: boolean; huge?
         "- work componentwise: write each point as its two coordinates (`obtain ⟨x, y⟩ := P`, `Prod.ext_iff`, `Prod.fst_add`, `Prod.smul_fst`), turn every condition into equations over ℝ;",
         "- solve the parameters (t, s) of the ∃s with `field_simp` / `linarith` / `nlinarith [sq_nonneg …]`, or give their values explicitly and check them;",
         "- close polynomial identities with `linear_combination (coeff) * h1 + …` or `nlinarith`; absolute values with `abs_of_pos` / `abs_of_neg` once the sign is known;",
+        "- a parameter fixed by a quadratic condition (a point on a circle through a known point): substitute the point, factor out the known root and exclude it with the `≠` hypothesis —",
+        "    `have hq : t * (25 * t - 16) = 0 := by linear_combination hCircle`, `have ht0 : t ≠ 0 := by rintro rfl; exact hne (by norm_num)`,",
+        "    `have ht : t = 16 / 25 := by rcases mul_eq_zero.mp hq with h | h; · exact absurd h ht0; · linarith`, then `subst ht` and `norm_num` — never leave `t` unsolved and try to close `t * 3 = 48 / 25` directly;",
         "- if a step is heavy but correct, `set_option maxHeartbeats 400000 in` before the theorem is allowed (0 is not).",
       ].join("\n"),
     );
