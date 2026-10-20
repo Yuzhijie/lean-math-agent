@@ -172,7 +172,7 @@ lib/
     replay.ts                       # Memory replay (plan 7b P3): recalled proofs of similar theorems tried verbatim before any model call (≤ 3 Lean checks, scripts ≤ 40 lines, full verification incl. statement lock); PROOF_MEMORY_REPLAY=false turns it off; theorem pipeline stage "memory" (strategy "memory"), bench cascade proved_by "memory"
     dataset.ts                      # Expert iteration data: harvestRows (bench result rows → proofs to remember), sftRecords / repairRecords (native prover chat format, stable hash train/eval split, benchmark test sets left out unless includeTest), tacticNames / jaccard, memoryHitStats (leave-one-out similar-theorem hit rate)
   llm/
-    client.ts                       # Core LLM client (roles, sampling, retry, fallback, cache, Zod)
+    client.ts                       # Core LLM client (roles, sampling, retry, fallback, cache, Zod); extractJson runs fixLatexEscapes first: LaTeX written with one backslash inside JSON strings (\frac, \times, \neq, \angle) is kept instead of turning into a form feed / tab / newline or a parse error
     output-locale.ts                # Output language per request (ui_locale cookie): prompt switch for English, lt(zh, en), withRequestLocale
     config.ts                       # LLM config from env vars (role chains, prices); proverPromptStyle (LLM_PROVER_PROMPT auto|native|chat — auto = native when the prover model name contains "prover"), nativeProverSettings, chatProverRole (sketch + goal-search use the general chain when the prover is native)
     cache.ts                        # LRU response cache (SHA-256 keyed)
@@ -201,8 +201,8 @@ lib/
     repl.ts                         # leanprover-community/repl client: worker pool, header env reuse, tactic mode, timeouts
     proof-state.ts                  # ProofSession: pinned REPL worker, goal states as handles, apply tactic, replay on worker loss
     hammer.ts                       # Automation cascade (skipped when the statement has a power too big to compute — hugePower; rfl/decide/`decide +kernel` on closed goals — big-number facts such as gcd(2^2024+1, 2^3036-1) = 1, which the elaborator refuses above exponent 256/simp/omega/norm_num/linarith/nlinarith hints/positivity/aesop/exact?)
-    premises.ts                     # Premise retrieval: BM25 over Mathlib names/statements (built index + curated seed), similar-name hints
-    premise-seed.ts                 # ~700 curated Mathlib lemmas used when no index is built
+    premises.ts                     # Premise retrieval: BM25 over Mathlib names/statements (built index + curated seed), similar-name hints; RENAMED_LEMMAS (old Mathlib names models still write → current name, e.g. Real.sqrt_eq_iff_sq_eq → Real.sqrt_eq_iff_eq_sq, Set.mem_setOf_eq → Set.mem_ofPred_eq) answered first
+    premise-seed.ts                 # ~700 curated Mathlib lemmas used when no index is built (names checked against the sandbox's Mathlib v4.33.1 sources; a test keeps renamed names out)
     proof-memory.ts                 # Verified proofs stored in .data/proof-memory.json (PROOF_MEMORY_MAX default 10000; each with source "solve" / "bench:<file>" and opens); similar proofs recalled as worked examples (recallScored: with BM25 scores, `touch: false` / `among` for evaluation); rememberProofs (bulk, one write); replay hits counted per entry; repair pairs (failed proof + Lean feedback → fixed proof) appended to .data/proof-repairs.jsonl (PROOF_REPAIRS_PATH)
     refute.ts                       # Counterexample search for statements: `decide` on the negation, Mathlib `plausible`
     sanitize.ts                     # Forbidden-command filter (#eval, elab, unsafe, axiom, …) + statement validation
@@ -213,7 +213,7 @@ lib/
     modernize.ts                    # Rewrites removed/Lean 3 syntax in model output (∑ x in s → ∑ x ∈ s, cases … with x → cases', λ x, e)
     feedback.ts                     # Verification result → proof-relative feedback for the model; summarizeFailure adds the remaining ⊢ goal to "unsolved goals"
     suggest.ts                      # exact?/apply?/simp? probes at the failing goal ("Try this" parsing)
-    loogle.ts                       # Optional Loogle client (LOOGLE_URL) for unknown identifiers
+    loogle.ts                       # Optional Loogle client (LOOGLE_URL) for unknown identifiers; unknownIdentifiers reads Lean 4's "Unknown constant `X`" (backticks) as well as the old '…' quoting
     sorry-gate.ts                   # Sorry labeling + verification report
   agents/
     orchestrator.ts                 # Multi-agent orchestration (parallel fan-out)

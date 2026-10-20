@@ -57,6 +57,9 @@ describe("loogle client", () => {
   it("extracts unknown identifiers from Lean errors and formats hints", async () => {
     expect(unknownIdentifiers(["unknown identifier 'Nat.foo_bar'", "unknown constant 'Real.sqrt_four'", "unknown identifier 'Nat.foo_bar'"]))
       .toEqual(["Nat.foo_bar", "Real.sqrt_four"]);
+    // Lean 4 wording: capitalised, name in backticks.
+    expect(unknownIdentifiers(["Unknown constant `Real.sqrt_eq_iff_sq_eq`", "Unknown identifier `Nat.foo'`"]))
+      .toEqual(["Real.sqrt_eq_iff_sq_eq", "Nat.foo'"]);
 
     process.env.LOOGLE_URL = "https://loogle.example";
     const f = vi.fn(async (url: string) =>

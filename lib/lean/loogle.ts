@@ -63,13 +63,14 @@ export async function loogleSearch(query: string, opts: LoogleOptions = {}): Pro
   }
 }
 
-const UNKNOWN_ID_RE = /unknown (?:identifier|constant) '([^']+)'/g;
+// Lean 4 quotes the name in backticks ("Unknown constant `Real.foo`"); older versions used '…'.
+const UNKNOWN_ID_RE = /unknown (?:identifier|constant) (?:`([^`\s]+)`|'([^'\s]+)'|«([^»]+)»)/gi;
 
 /** Identifiers Lean could not resolve, from error messages (deduplicated). */
 export function unknownIdentifiers(messages: string[]): string[] {
   const out = new Set<string>();
   for (const msg of messages) {
-    for (const m of msg.matchAll(UNKNOWN_ID_RE)) out.add(m[1]);
+    for (const m of msg.matchAll(UNKNOWN_ID_RE)) out.add(m[1] ?? m[2] ?? m[3]);
   }
   return [...out];
 }

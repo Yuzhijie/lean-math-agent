@@ -9,11 +9,13 @@ import {
   localHintsForUnknownIdentifiers,
   mainRelation,
   premiseStats,
+  RENAMED_LEMMAS,
   resetPremiseCache,
   retrievePremises,
   similarNames,
 } from "@/lib/lean/premises";
 import { Bm25Index, leanTokens, weightedQuery } from "@/lib/search/bm25";
+import { PREMISE_SEED } from "@/lib/lean/premise-seed";
 
 describe("leanTokens", () => {
   it("maps notation to Mathlib naming tokens and splits identifiers", () => {
@@ -114,6 +116,20 @@ describe("retrievePremises (seed only)", () => {
     const block = await localHintsForUnknownIdentifiers(["Nat.sqrt_le_sqrt"]);
     expect(block).toContain("`Nat.sqrt_le_sqrt` does not exist");
     expect(await localHintsForUnknownIdentifiers([])).toBe("");
+  });
+
+  it("names the current lemma for a renamed one", async () => {
+    const block = await localHintsForUnknownIdentifiers(["Real.sqrt_eq_iff_sq_eq"]);
+    expect(block).toContain("`Real.sqrt_eq_iff_eq_sq`");
+  });
+});
+
+describe("premise seed", () => {
+  it("has no renamed or removed names and no repeats", () => {
+    const names = PREMISE_SEED.map(([n]) => n);
+    expect(new Set(names).size).toBe(names.length);
+    for (const old of Object.keys(RENAMED_LEMMAS)) expect(names).not.toContain(old);
+    expect(names).toContain("Real.sqrt_eq_iff_eq_sq");
   });
 });
 

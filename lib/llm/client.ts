@@ -224,7 +224,49 @@ export function extractJson(text: string): unknown {
   const trimmed = text.trim();
   const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
   const raw = fence ? fence[1] : trimmed;
-  return JSON.parse(raw);
+  return JSON.parse(fixLatexEscapes(raw));
+}
+
+/**
+ * LaTeX commands whose first letter is also a JSON escape (\b \f \n \r \t): a model that writes
+ * "\frac" or "\times" with one backslash produces valid JSON with a form feed or a tab in it, and
+ * the maths is silently lost ("\angle" and the like, an invalid escape, would fail to parse).
+ */
+const LATEX_ON_JSON_ESCAPE =
+  /^(?:b(?:eta|inom|ar|ig|igg|ox|oxed|egin|ot|ullet|ackslash|mod|f)|f(?:rac|orall|lat|box)|n(?:eq|e|abla|ot|otin|u|eg|i|leq|geq|mid|ewline|ewcommand|parallel|subseteq|ormalsize)|r(?:ight|angle|ceil|floor|ho|ightarrow|Rightarrow|m|aisebox)|t(?:imes|heta|an|ext|extbf|extrm|frac|o|op|riangle|ilde|herefore|au|imes|anh|extit))(?![A-Za-z])/;
+
+/**
+ * Doubles backslashes the model meant as LaTeX inside JSON strings: before a LaTeX command that
+ * starts with a JSON escape letter (\frac, \times, \neq, \right, \beta), and before any letter
+ * that is not a JSON escape (\angle, \sqrt, \le). Real escapes (\n, \", \\, \u00e9) are kept.
+ */
+export function fixLatexEscapes(raw: string): string {
+  if (!raw.includes("\\")) return raw;
+  let out = "";
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (c !== "\\") {
+      out += c;
+      continue;
+    }
+    const next = raw[i + 1] ?? "";
+    if (next === "\\" || next === '"' || next === "/") {
+      out += c + next;
+      i++;
+      continue;
+    }
+    if (next === "u" && /^[0-9a-fA-F]{4}$/.test(raw.slice(i + 2, i + 6))) {
+      out += c;
+      continue;
+    }
+    if ("bfnrt".includes(next) && next !== "") {
+      out += LATEX_ON_JSON_ESCAPE.test(raw.slice(i + 1)) ? "\\\\" : c;
+      continue;
+    }
+    // Not a JSON escape at all (\angle, \sqrt, \(, \{): keep the backslash as text.
+    out += "\\\\";
+  }
+  return out;
 }
 
 // ══════════════════════════════════════════════════════════════════════
