@@ -130,6 +130,13 @@ describe("hints for the prover and the sorry report", () => {
     const sq = proofHints(": ∀ (px py : ℝ), px = 0 → Real.sqrt ((px - 4) ^ 2 + py ^ 2) = 20 / 3").join("\n");
     expect(sq).toContain("Real.sqrt_eq_iff_eq_sq");
     expect(proofHints(": ∀ x : ℝ, x ^ 2 ≥ 0").join("\n")).not.toContain("Square roots");
+    const fermat = proofHints(
+      ": (341 = 11 * 31 ∧ 341 ∣ 2 ^ (341 - 1) - 1) ∧ ∀ n p q : ℕ, 0 < n → n < 341 → n = p * q → Nat.Prime p → Nat.Prime q → p < q → ¬ n ∣ 2 ^ (n - 1) - 1",
+    ).join("\n");
+    expect(fermat).toContain("exponent 340");
+    expect(fermat).toContain("decide +kernel");
+    expect(fermat).toContain("Smallest n");
+    expect(proofHints(": 2 ^ 10 = 1024").join("\n")).not.toContain("above 256");
     expect(proofHints(": ∀ n : ℕ, n + 0 = n").join("\n")).not.toContain("finite types");
   });
 

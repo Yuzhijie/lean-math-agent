@@ -174,6 +174,27 @@ export function proofHints(theoremType: string, opts: { tooMany?: boolean; huge?
       ].join("\n"),
     );
   }
+  const bigExp = !opts.huge && bigClosedExponent(t);
+  if (bigExp) {
+    hints.push(
+      [
+        `The statement has a power with exponent ${bigExp} (above 256). Plain \`decide\` and \`rfl\` refuse such powers ("exponent too big"); the kernel and norm_num do not:`,
+        "- a closed fact such as `341 ∣ 2 ^ 340 - 1` or `2 ^ 340 % 341 = 1`: `by decide +kernel` (or `by norm_num`); `Nat.Prime 31`: `by norm_num`;",
+        "- split a conjunction of closed facts with `refine ⟨⟨by norm_num, by norm_num, …, by decide +kernel⟩, ?_⟩` rather than one big tactic.",
+      ].join("\n"),
+    );
+  }
+  if (/∀\s*[\w\s]+:\s*ℕ\s*,/.test(t) && /\w\s*<\s*\d+/.test(t) && /\^\s*\(?\s*[a-z]/.test(t)) {
+    hints.push(
+      [
+        "\"Smallest n\" part — no n below the bound works: turn it into a bounded statement and let the kernel check every case.",
+        "- from `n = p * q` with `2 ≤ p < q` get bounds `p < B₁`, `q < B₂` (`nlinarith`), `subst` n, then prove a finite statement such as",
+        "    `have key : ∀ p < 19, ∀ q < 171, 2 ≤ p → p < q → p * q < 341 → ¬ p * q ∣ 2 ^ (p * q - 1) - 1 := by decide +kernel`",
+        "  (leave `Nat.Prime` out of what the kernel decides — its decision procedure is slow there; `hp.two_le` gives `2 ≤ p`) and finish with `exact key p hp' q hq' hp.two_le hpq hlt`;",
+        "- or `interval_cases n` and close each case with `all_goals first | decide +kernel | (simp_all; omega)` — only when the range is small.",
+      ].join("\n"),
+    );
+  }
   if (/∣/.test(t) && /\(\s*\w+\s*:\s*(ℕ|ℤ|Nat|Int)\s*\)|∀\s*\w+\s*:\s*(ℕ|ℤ)/.test(t) && /↔|∃/.test(t)) {
     hints.push(
       [
@@ -212,6 +233,16 @@ export function proofHints(theoremType: string, opts: { tooMany?: boolean; huge?
   }
   hints.push("Never write `sorry` or `admit`: a proof that contains them is rejected.");
   return hints;
+}
+
+/** Largest closed exponent above 256 (and below what Lean refuses outright), as text, else undefined. */
+function bigClosedExponent(t: string): string | undefined {
+  let best: bigint | undefined;
+  for (const m of t.matchAll(/\^\s*(\d+|\(\s*[\d\s+\-*]+\))/g)) {
+    const v = evalNatExpr(m[1].replace(/^\(|\)$/g, ""));
+    if (v !== undefined && v > 256n && v < 2n ** 24n && (best === undefined || v > best)) best = v;
+  }
+  return best?.toString();
 }
 
 /** The candidate that got furthest, for the failure report. */
