@@ -127,6 +127,9 @@ describe("hints for the prover and the sorry report", () => {
     expect(h).toContain("intro rot Valid");
     expect(h).toContain("decide +kernel");
     expect(proofHints(": ∀ x : ℝ, x ^ 2 ≥ 0").join("\n")).not.toContain("finite types");
+    const sq = proofHints(": ∀ (px py : ℝ), px = 0 → Real.sqrt ((px - 4) ^ 2 + py ^ 2) = 20 / 3").join("\n");
+    expect(sq).toContain("Real.sqrt_eq_iff_eq_sq");
+    expect(proofHints(": ∀ x : ℝ, x ^ 2 ≥ 0").join("\n")).not.toContain("Square roots");
     expect(proofHints(": ∀ n : ℕ, n + 0 = n").join("\n")).not.toContain("finite types");
   });
 

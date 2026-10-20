@@ -15,6 +15,7 @@
  * count double because Mathlib names spell out the statement
  * (`mul_le_mul`, `sq_nonneg`, `Finset.sum_range_succ` …).
  */
+import { RENAMED_LEMMAS } from "./renamed";
 import { promises as fs } from "node:fs";
 import { Bm25Index, leanTokens, weightedQuery } from "../search/bm25";
 import { PREMISE_SEED } from "./premise-seed";
@@ -236,40 +237,8 @@ export function formatPremises(premises: Premise[], title = "Possibly relevant M
   );
 }
 
-/**
- * Mathlib / Lean names that were renamed or removed, as models trained on older Mathlib still
- * write them (checked against the sandbox's Mathlib v4.33.1). Old name → name to use now.
- */
-export const RENAMED_LEMMAS: Record<string, string> = {
-  "Real.sqrt_eq_iff_sq_eq": "Real.sqrt_eq_iff_eq_sq",
-  "Real.pi_gt_314": "Real.pi_gt_d2",
-  "Real.pi_lt_315": "Real.pi_lt_d2",
-  "Real.sqrt_two_mul_self": "Real.mul_self_sqrt",
-  mul_self_abs: "abs_mul_abs_self",
-  "sq_eq_zero'": "sq_eq_zero_iff",
-  abs_le_abs_of_sq_le_sq: "sq_le_sq",
-  le_or_lt: "le_or_gt",
-  lt_or_le: "lt_or_ge",
-  "dvd_sub'": "dvd_sub",
-  "Nat.dvd_sub'": "Nat.dvd_sub",
-  "Nat.succ_mul_choose_eq": "Nat.add_one_mul_choose_eq",
-  "Nat.prime_def_lt''": "Nat.prime_def",
-  "Nat.sq_sub_sq'": "Nat.sq_sub_sq",
-  "Nat.even_mul_self_pred": "Nat.even_mul_pred_self",
-  "Nat.exists_mul_emod_eq_one_of_coprime": "Nat.exists_mul_mod_eq_one_of_coprime",
-  "Even.pow": "Even.pow_of_ne_zero",
-  "Finset.card_insert_of_not_mem": "Finset.card_insert_of_notMem",
-  "Finset.filter_card_add_filter_neg_card_eq_card": "Finset.card_filter_add_card_filter_not",
-  "Finset.eq_empty_iff_forall_not_mem": "Finset.eq_empty_iff_forall_notMem",
-  "Finset.not_mem_empty": "Finset.notMem_empty",
-  "Finset.inner_mul_le_norm_mul_norm": "Finset.sum_mul_sq_le_sq_mul_sq",
-  "Set.mem_setOf_eq": "Set.mem_ofPred_eq",
-  "Set.mem_setOf": "Set.mem_ofPred",
-  "Set.mem_def": "Set.mem_ofPred",
-  "Irrational.add_rat": "Irrational.add_ratCast",
-  "ZMod.natCast_self_eq_zero": "ZMod.natCast_self",
-  "ZMod.natCast_zmod_eq_zero_iff_dvd": "ZMod.natCast_eq_zero_iff",
-};
+
+export { RENAMED_LEMMAS };
 
 /** Prompt block for identifiers Lean did not know, from the local index (no network). */
 export async function localHintsForUnknownIdentifiers(identifiers: string[]): Promise<string> {

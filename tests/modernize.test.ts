@@ -28,6 +28,20 @@ describe("modernizeLeanSyntax", () => {
     expect(t2).toContain("∑ i ∈ Finset.range 3, i");
     expect(extractTactic("cases h with x hx")).toBe("cases' h with x hx");
   });
+
+  it("gives renamed Mathlib lemmas their current name", () => {
+    expect(modernizeLeanSyntax("rw [Real.sqrt_eq_iff_sq_eq (by positivity) (by norm_num)]")).toBe(
+      "rw [Real.sqrt_eq_iff_eq_sq (by positivity) (by norm_num)]",
+    );
+    expect(modernizeLeanSyntax("rw [sqrt_eq_iff_sq_eq h1 h2]")).toBe("rw [sqrt_eq_iff_eq_sq h1 h2]");
+    expect(modernizeLeanSyntax("simp only [Set.mem_setOf_eq, Finset.card_insert_of_not_mem h]")).toBe(
+      "simp only [Set.mem_ofPred_eq, Finset.card_insert_of_notMem h]",
+    );
+    // current names and longer names that merely contain an old one are left alone
+    expect(modernizeLeanSyntax("rcases le_or_gt a b with h | h")).toBe("rcases le_or_gt a b with h | h");
+    expect(modernizeLeanSyntax("exact Real.sqrt_eq_iff_sq_eq'")).toBe("exact Real.sqrt_eq_iff_sq_eq'");
+    expect(modernizeLeanSyntax("rcases le_or_lt a b with h | h")).toBe("rcases le_or_gt a b with h | h");
+  });
 });
 
 describe("extractTactics with let in the statement", () => {

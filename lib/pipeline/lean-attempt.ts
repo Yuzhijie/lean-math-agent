@@ -200,6 +200,16 @@ export function proofHints(theoremType: string, opts: { tooMany?: boolean; huge?
       ].join("\n"),
     );
   }
+  if (/Real\.sqrt|√/.test(t)) {
+    hints.push(
+      [
+        "Square roots (names below are the current Mathlib ones — `Real.sqrt_eq_iff_sq_eq` no longer exists):",
+        "- goal `Real.sqrt E = c` with c ≥ 0: `rw [Real.sqrt_eq_iff_eq_sq (by positivity) (by norm_num)]` leaves `E = c ^ 2`; or `rw [show E = c ^ 2 by …]; exact Real.sqrt_sq (by norm_num)`;",
+        "- also `Real.sqrt_eq_iff_mul_self_eq (hx : 0 ≤ x) (hy : 0 ≤ y) : √x = y ↔ x = y * y`, `Real.sq_sqrt (h : 0 ≤ a) : √a ^ 2 = a`, `Real.sqrt_sq (h : 0 ≤ a) : √(a ^ 2) = a`, `Real.mul_self_sqrt (h : 0 ≤ a) : √a * √a = a`;",
+        "- hypotheses that fix the numbers (`ax = -4 ∧ ay = 3`): `obtain ⟨rfl, rfl⟩ := h` first, then find the unknowns from the linear conditions with `linarith` (`have hx : px = 0 := by linarith`), substitute them and finish with `norm_num`.",
+      ].join("\n"),
+    );
+  }
   hints.push("Never write `sorry` or `admit`: a proof that contains them is rejected.");
   return hints;
 }

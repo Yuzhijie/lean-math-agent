@@ -8,8 +8,10 @@
  *   induction n with n ih  →  induction' n with n ih
  *   λ x, e                 →  fun x => e           (Lean 3 lambda)
  *
- * Structured forms (`cases h with | inl h => …`) are left alone.
+ * Structured forms (`cases h with | inl h => …`) are left alone. Lemmas renamed in Mathlib
+ * (Real.sqrt_eq_iff_sq_eq → Real.sqrt_eq_iff_eq_sq, …) get their current name (renamed.ts).
  */
+import { renameOldLemmas } from "./renamed";
 
 const BIG_OPS = "∑∏⋃⋂⨆⨅";
 
@@ -33,5 +35,5 @@ export function modernizeLeanSyntax(text: string): string {
   // Lean 3 lambda: `λ x, body` / `λ ⟨a, b⟩, body` → `fun x => body`.
   out = out.replace(/λ\s*(⟨[^⟩\n]*⟩|[^,\n=>]+?),\s*/g, "fun $1 => ");
 
-  return out;
+  return renameOldLemmas(out);
 }
