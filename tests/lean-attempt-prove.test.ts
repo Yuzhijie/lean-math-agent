@@ -134,6 +134,7 @@ describe("hints for the prover and the sorry report", () => {
       ": (341 = 11 * 31 ∧ 341 ∣ 2 ^ (341 - 1) - 1) ∧ ∀ n p q : ℕ, 0 < n → n < 341 → n = p * q → Nat.Prime p → Nat.Prime q → p < q → ¬ n ∣ 2 ^ (n - 1) - 1",
     ).join("\n");
     expect(proofHints(": ∀ E : ℝ × ℝ, (∃ t : ℝ, E = (-3 * t, 4 - 4 * t) ∧ E ≠ (0, 4)) → E.1 = -48 / 25").join("\n")).toContain("mul_eq_zero");
+    expect(proofHints(": ∀ D T O : ℝ × ℝ, Real.sqrt ((D.1 - O.1) ^ 2) = 1 → D.1 = 1").join("\n")).toContain("linarith only");
     expect(fermat).toContain("exponent 340");
     expect(fermat).toContain("decide +kernel");
     expect(fermat).toContain("Smallest n");

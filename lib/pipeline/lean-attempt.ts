@@ -220,6 +220,9 @@ export function proofHints(theoremType: string, opts: { tooMany?: boolean; huge?
         "- a parameter fixed by a quadratic condition (a point on a circle through a known point): substitute the point, factor out the known root and exclude it with the `≠` hypothesis —",
         "    `have hq : t * (25 * t - 16) = 0 := by linear_combination hCircle`, `have ht0 : t ≠ 0 := by rintro rfl; exact hne (by norm_num)`,",
         "    `have ht : t = 16 / 25 := by rcases mul_eq_zero.mp hq with h | h; · exact absurd h ht0; · linarith`, then `subst ht` and `norm_num` — never leave `t` unsolved and try to close `t * 3 = 48 / 25` directly;",
+        "- distances written with `Real.sqrt`: first turn `ed O A = ed O B` into a polynomial equation (`Real.sqrt_inj (by positivity) (by positivity)` then `.mp`), and `ed B D` with `D.2 = 0` into `|D.1|` (`Real.sqrt_sq_eq_abs`), then `abs_of_nonneg`;",
+        "- find the unknown coordinates one at a time, each in its own `have hO1 : O.1 = 15 / 2 := by nlinarith [h1, h2]` (or `linarith only [h1, h2]`) naming only the hypotheses it needs, then `obtain ⟨o1, o2⟩ := O` / `simp only [hO1] at *`; calling `linarith` / `nlinarith` with every hypothesis in context makes it time out (`Linarith…Gauss…heartbeats`) — `clear` the ones already used;",
+        "- the final value: once every coordinate is a number, rewrite the distance as `Real.sqrt (c ^ 2)` (`rw [show … = (910 / 9) ^ 2 by norm_num]`) and use `Real.sqrt_sq (by norm_num)`; for a ratio, show numerator and denominator equal and use `div_self (by positivity)`;",
         "- if a step is heavy but correct, `set_option maxHeartbeats 400000 in` before the theorem is allowed (0 is not).",
       ].join("\n"),
     );
