@@ -1188,6 +1188,11 @@ export default function Home() {
                                       )}
                             </span>
                           )}
+                          {leanProofAttempt.remembered && (
+                            <span title={tr("相似的题会先试这个证明；它也会成为训练证明模型的数据（npm run expert:iterate）", "Similar problems try this proof first; it also becomes training data for the prover (npm run expert:iterate)")}>
+                              {tr("已存入证明记忆", "Saved to proof memory")}
+                            </span>
+                          )}
                         </div>
                       )}
 

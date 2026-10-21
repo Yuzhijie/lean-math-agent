@@ -11,11 +11,25 @@
  *
  * Proofs of benchmark test sets (source bench:*test*) stay out of the sft/repair files unless
  * --include-test: a prover fine-tuned on miniF2F-test can no longer be measured on it.
+ * --exclude-from a.json,b.json also leaves out every proof of a statement in those bench files,
+ * whatever its source (expert iteration passes its held-out set).
  */
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { allProofs, readRepairs } from "../lib/lean/proof-memory";
 import { isTestSource, repairRecords, sftRecords } from "../lib/prover/dataset";
+import { normaliseStatement, withoutStatements } from "../lib/prover/expert-iteration";
+import { fixStatement } from "./fetch-benchmark";
+
+/** Normalised statements of the theorems in bench files (as bench.ts runs them: fixStatement applied). */
+export async function heldOutStatements(files: string[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  for (const f of files) {
+    const parsed = JSON.parse(await fs.readFile(f, "utf8")) as { theorems?: { type: string }[] } | { type: string }[];
+    for (const t of Array.isArray(parsed) ? parsed : (parsed.theorems ?? [])) out.add(normaliseStatement(fixStatement(t.type)));
+  }
+  return out;
+}
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -44,8 +58,11 @@ async function main(): Promise<void> {
   const includeTest = flag("include-test");
   const entries = await allProofs();
   const pairs = await readRepairs();
-  const sft = sftRecords(entries, { evalShare, includeTest });
-  const rep = repairRecords(pairs, { evalShare, includeTest });
+  const heldOut = await heldOutStatements((arg("exclude-from") ?? "").split(",").map((x) => x.trim()).filter(Boolean));
+  const trainable = withoutStatements(entries, heldOut);
+  const trainablePairs = withoutStatements(pairs, heldOut);
+  const sft = sftRecords(trainable, { evalShare, includeTest });
+  const rep = repairRecords(trainablePairs, { evalShare, includeTest });
 
   await fs.mkdir(out, { recursive: true });
   await fs.writeFile(
@@ -89,6 +106,9 @@ async function main(): Promise<void> {
       : `Left out of sft/repair: ${sft.excludedTest} proofs and ${rep.excludedTest} repair pairs from benchmark test sets (${count(entries.filter((e) => isTestSource(e.source)), (e) => e.source ?? "?")
           .map(([k, n]) => `${k} ${n}`)
           .join(", ") || "none"}); pass --include-test to keep them.`,
+    heldOut.size
+      ? `Left out as held-out statements (--exclude-from): ${entries.length - trainable.length} proofs and ${pairs.length - trainablePairs.length} repair pairs.`
+      : "",
     "",
     "Format: chat messages in the native prover format the whole-proof loop uses (lib/llm/prompts.ts nativeProverPrompt / nativeProverRepairPrompt); the assistant turn is the verified proof in a `lean4` block. Every proof passed the verifier: no sorry, standard axioms only, statement unchanged.",
     "",

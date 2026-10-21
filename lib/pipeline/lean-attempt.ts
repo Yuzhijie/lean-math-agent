@@ -24,6 +24,9 @@ import { CancelledError } from "../jobs";
 import { CostCapError } from "../llm/client";
 import { costCapReached } from "../llm/usage-tracker";
 import { budgetPreset } from "../prover/budget";
+import { buildProverContext, rememberVerifiedProof } from "../prover/context";
+import { replayRecalled } from "../prover/replay";
+import { rememberRepair } from "../lean/proof-memory";
 import { proveWholeTheorem, wholeProofEnabled, type WholeProofResult } from "../prover/whole-proof";
 import type { LeanProofAttempt, NaturalLanguageSolution } from "../types";
 
@@ -309,7 +312,13 @@ export async function attemptLeanFormalization(problemText: string, ctx: LeanAtt
     const theoremType = formal.theorem_type;
     const expectedSignature = formal.formal_signature;
     const useMathlib = true;
-    const done = (v: LeanVerifyResult, source: string, extra: Partial<LeanProofAttempt>): LeanProofAttempt => ({
+    // Expert iteration: every proof Lean accepts here is remembered (source "lean-attempt"), so a
+    // similar problem later can replay it or see it as a worked example, and it becomes training data.
+    const done = async (v: LeanVerifyResult, source: string, extra: Partial<LeanProofAttempt>, tactics?: string): Promise<LeanProofAttempt> => {
+      const remembered = tactics?.trim()
+        ? await rememberVerifiedProof({ theoremName, theoremType, tactics, strategy: extra.strategy, problemText, source: LEAN_ATTEMPT_SOURCE })
+        : false;
+      return {
       attempted: true,
       success: true,
       formal_statement,
@@ -319,7 +328,9 @@ export async function attemptLeanFormalization(problemText: string, ctx: LeanAtt
       verifier: v.backend,
       ...(notes.length ? { limitations: notes } : {}),
       ...extra,
-    });
+      ...(remembered ? { remembered: true } : {}),
+      };
+    };
 
     const avail = await checkLeanAvailable();
     if (!avail.ok) {
@@ -348,12 +359,22 @@ export async function attemptLeanFormalization(problemText: string, ctx: LeanAtt
       if (hit) {
         const source = assembleLeanSource({ theoremName, theoremType, stepCodes: [hit.tactic], useMathlib });
         const v = await verifyLeanSource(sessionId, source, { theoremName, expectedSignature });
-        if (v.ok) return done(v, source, { strategy: "hammer", attempts: 1 });
+        if (v.ok) return done(v, source, { strategy: "hammer", attempts: 1 }, hit.tactic);
       }
     }
     const trivial = huge ? undefined : await tryTrivialProof(sessionId, theoremName, theoremType, useMathlib, { expectedSignature });
-    if (trivial) return done(trivial.verification, trivial.source, { strategy: "trivial", attempts: 1 });
+    if (trivial) return done(trivial.verification, trivial.source, { strategy: "trivial", attempts: 1 }, trivial.tactic);
+
     if (!tried.length) tried.push(lt("单条策略（rfl、simp、norm_num、omega、decide、decide +kernel、ring、linarith 等）", "single tactics (rfl, simp, norm_num, omega, decide, decide +kernel, ring, linarith, …)"));
+
+    // Proof memory: verified proofs of similar statements, tried verbatim first (no model call),
+    // then given to the prover as worked examples together with the retrieved Mathlib lemmas.
+    const proverContext = await buildProverContext({ theoremType, problemText, useMathlib });
+    if (proverContext.recalled.length && !huge) {
+      const replay = await replayRecalled({ sessionId, theoremName, theoremType, recalled: proverContext.recalled, expectedSignature, useMathlib });
+      if (replay) return done(replay.verification, replay.source, { strategy: "memory", attempts: replay.tried }, replay.tactics);
+      tried.push(lt(`证明记忆里 ${proverContext.recalled.length} 个相似题的已验证证明（原样重放）`, `${proverContext.recalled.length} verified proof(s) of similar problems from memory (replayed as is)`));
+    }
 
     // A statement over a huge finite range cannot be settled by computation: say so to the
     // prover (no `decide` over the range) and to the user.
@@ -394,10 +415,21 @@ export async function attemptLeanFormalization(problemText: string, ctx: LeanAtt
         ]
           .filter(Boolean)
           .join("\n\n") || undefined,
+        premises: proverContext.block || undefined,
         config: { ...preset.wholeProof, useMathlib },
       });
       if (whole.ok && whole.verification && whole.source) {
-        return done(whole.verification, whole.source, { strategy: "whole_proof", attempts: whole.samples, rounds: whole.rounds });
+        if (whole.repairedFrom && whole.tactics) {
+          void rememberRepair({
+            theorem_name: theoremName,
+            theorem_type: theoremType,
+            failed_tactics: whole.repairedFrom.tactics,
+            feedback: whole.repairedFrom.feedback,
+            fixed_tactics: whole.tactics,
+            source: LEAN_ATTEMPT_SOURCE,
+          }).catch(() => false);
+        }
+        return done(whole.verification, whole.source, { strategy: "whole_proof", attempts: whole.samples, rounds: whole.rounds }, whole.tactics);
       }
       tried.push(lt(`模型写的完整证明 ${whole.samples} 个（${whole.rounds} 轮，含按 Lean 报错修改）`, `${whole.samples} complete proofs written by the model (${whole.rounds} round(s), including repairs from Lean's errors)`));
       const best = whole.candidates.length ? bestCandidate(whole) : undefined;
@@ -443,6 +475,9 @@ export async function attemptLeanFormalization(problemText: string, ctx: LeanAtt
     };
   }
 }
+
+/** Proof-memory / repair-pair source of proofs found by the Lean attempt. */
+export const LEAN_ATTEMPT_SOURCE = "lean-attempt";
 
 /** Whether a stored attempt may be run again (it failed, or was never run). */
 export function leanAttemptRetryable(a: LeanProofAttempt | undefined): boolean {

@@ -10,6 +10,10 @@ const m = vi.hoisted(() => ({
   checkLeanAvailable: vi.fn(),
   tryTrivialProof: vi.fn(),
   proveWholeTheorem: vi.fn(),
+  buildProverContext: vi.fn(),
+  rememberVerifiedProof: vi.fn(),
+  replayRecalled: vi.fn(),
+  rememberRepair: vi.fn(),
 }));
 
 vi.mock("@/lib/llm/autoformalize", () => ({ autoformalize: m.autoformalize }));
@@ -17,6 +21,9 @@ vi.mock("@/lib/lean/hammer", () => ({ hammerTheorem: m.hammerTheorem }));
 vi.mock("@/lib/lean/sandbox", () => ({ verifyLeanSource: m.verifyLeanSource, checkLeanAvailable: m.checkLeanAvailable }));
 vi.mock("@/lib/lean/trivial-proof", () => ({ tryTrivialProof: m.tryTrivialProof }));
 vi.mock("@/lib/prover/whole-proof", () => ({ proveWholeTheorem: m.proveWholeTheorem, wholeProofEnabled: () => true }));
+vi.mock("@/lib/prover/context", () => ({ buildProverContext: m.buildProverContext, rememberVerifiedProof: m.rememberVerifiedProof }));
+vi.mock("@/lib/prover/replay", () => ({ replayRecalled: m.replayRecalled }));
+vi.mock("@/lib/lean/proof-memory", () => ({ rememberRepair: m.rememberRepair }));
 
 const { attemptLeanFormalization, leanAttemptRetryable, proofHints } = await import("@/lib/pipeline/lean-attempt");
 const { hugePower } = await import("@/lib/compute/nat-expr");
@@ -38,6 +45,56 @@ beforeEach(() => {
   m.hammerTheorem.mockResolvedValue(undefined);
   m.tryTrivialProof.mockResolvedValue(null);
   m.verifyLeanSource.mockResolvedValue(okVerify);
+  m.buildProverContext.mockResolvedValue({ block: "", premises: [], recalled: [] });
+  m.rememberVerifiedProof.mockResolvedValue(true);
+  m.replayRecalled.mockResolvedValue(undefined);
+  m.rememberRepair.mockResolvedValue(true);
+});
+
+describe("expert iteration: the Lean attempt and the proof memory", () => {
+  const entry = { id: "e1", theorem_name: "old_gcd", theorem_type: ": Nat.gcd 5 7 = 1", tactics: "decide +kernel", source: "lean-attempt" };
+
+  it("replays a remembered proof of a similar statement before asking the model", async () => {
+    m.buildProverContext.mockResolvedValue({ block: "Similar proofs …", premises: [], recalled: [entry] });
+    m.replayRecalled.mockResolvedValue({ tactics: "norm_num", source: "theorem gcd_two_powers … := by norm_num", verification: okVerify, entry, tried: 1 });
+    const a = await attemptLeanFormalization("p", { answer: "1" });
+    expect(a).toMatchObject({ success: true, strategy: "memory", attempts: 1 });
+    expect(m.proveWholeTheorem).not.toHaveBeenCalled();
+    expect(m.rememberVerifiedProof).toHaveBeenCalledWith(expect.objectContaining({ tactics: "norm_num", strategy: "memory", source: "lean-attempt" }));
+  });
+
+  it("gives the prover the recalled proofs and premises, and remembers its proof and the repair pair", async () => {
+    m.buildProverContext.mockResolvedValue({ block: "Possibly relevant Mathlib lemmas …", premises: [], recalled: [entry] });
+    m.proveWholeTheorem.mockResolvedValue({
+      ok: true,
+      source: "theorem gcd_two_powers … := by\n  norm_num",
+      tactics: "norm_num",
+      verification: okVerify,
+      samples: 4,
+      rounds: 2,
+      candidates: [],
+      repairedFrom: { tactics: "simp", feedback: "unsolved goals" },
+    });
+    const a = await attemptLeanFormalization("求最大公因数", { answer: "1" });
+    expect(a).toMatchObject({ success: true, strategy: "whole_proof" });
+    expect(m.proveWholeTheorem.mock.calls[0][0].premises).toContain("Possibly relevant");
+    expect(m.rememberVerifiedProof).toHaveBeenCalledWith(
+      expect.objectContaining({ theoremName: "gcd_two_powers", tactics: "norm_num", strategy: "whole_proof", source: "lean-attempt", problemText: expect.stringContaining("求最大公因数") }),
+    );
+    expect(m.rememberRepair).toHaveBeenCalledWith(expect.objectContaining({ failed_tactics: "simp", fixed_tactics: "norm_num", source: "lean-attempt" }));
+  });
+
+  it("remembers automation proofs too, and nothing when the attempt fails", async () => {
+    m.hammerTheorem.mockResolvedValue({ tactic: "decide +kernel", attempts: [], durationMs: 5 });
+    await attemptLeanFormalization("p", { answer: "1" });
+    expect(m.rememberVerifiedProof).toHaveBeenCalledWith(expect.objectContaining({ tactics: "decide +kernel", strategy: "hammer" }));
+    m.rememberVerifiedProof.mockClear();
+    m.hammerTheorem.mockResolvedValue(undefined);
+    m.proveWholeTheorem.mockResolvedValue({ ok: false, samples: 2, rounds: 1, candidates: [] });
+    const a = await attemptLeanFormalization("p", { answer: "1" });
+    expect(a.success).toBe(false);
+    expect(m.rememberVerifiedProof).not.toHaveBeenCalled();
+  });
 });
 
 describe("attemptLeanFormalization", () => {

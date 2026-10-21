@@ -28,7 +28,9 @@
     "proofs:export": "tsx scripts/proofs-export.ts",
     "proofs:eval": "tsx scripts/proofs-eval.ts",
     "bench:formalize": "tsx scripts/bench-formalize.ts",
-    "prover:check": "tsx scripts/prover-check.ts"
+    "prover:check": "tsx scripts/prover-check.ts",
+    "prover:serve": "tsx scripts/prover-serve.ts",
+    "expert:iterate": "tsx scripts/expert-iterate.ts"
   },
   "dependencies": {
     "@next-auth/prisma-adapter": "^1.0.7",
