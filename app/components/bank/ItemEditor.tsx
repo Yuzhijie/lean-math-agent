@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, ExternalLink, FileText, ImageIcon, Plus, Save, Trash2, X } from "lucide-react";
+import { ArrowRight, ClipboardCheck, ExternalLink, FileText, ImageIcon, Plus, Save, Trash2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -321,6 +321,16 @@ export function ItemEditor({ bankId, item, detail, categories, onSaved, onDelete
         <Button size="sm" variant="outline" className="gap-1.5" onClick={() => router.push(problemHref(item, bankId))}>
           <ArrowRight className="h-3.5 w-3.5" />
           {tr("使用此题", "Use this problem")}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="gap-1.5"
+          title={tr("上传学生对这道题的手写作答照片，用题库答案批改", "Upload photos of students' work on this question; marked against the bank answer")}
+          onClick={() => router.push(`/grading?bank=${encodeURIComponent(bankId)}&item=${encodeURIComponent(item.id)}`)}
+        >
+          <ClipboardCheck className="h-3.5 w-3.5" />
+          {tr("批改作答", "Mark students' work")}
         </Button>
         <Button size="sm" variant="ghost" className="ml-auto gap-1.5 text-destructive hover:text-destructive" onClick={() => setConfirmDelete(true)}>
           <Trash2 className="h-3.5 w-3.5" />

@@ -54,6 +54,7 @@ import {
   X,
   PanelLeftClose,
   FileDown,
+  ClipboardCheck,
 } from "lucide-react";
 import { generationPrintHref, stashWorksheet } from "@/lib/bank/worksheet";
 import { ProblemExamples } from "./components/ProblemExamples";
@@ -416,6 +417,10 @@ export default function Home() {
                 <Link href="/bank" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "gap-1.5")}>
                   <Library className="h-3.5 w-3.5" />
                   <span className="hidden sm:inline">{tr("题库", "Bank")}</span>
+                </Link>
+                <Link href="/grading" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "gap-1.5")}>
+                  <ClipboardCheck className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">{tr("批改", "Marking")}</span>
                 </Link>
               </div>
             </div>
@@ -861,6 +866,17 @@ export default function Home() {
                           <FileDown className="h-3.5 w-3.5" />
                           {tr("导出 PDF", "Export PDF")}
                         </Button>
+                        {state.sessionId && (
+                          <Link
+                            href={`/grading?session=${encodeURIComponent(state.sessionId)}`}
+                            className={cn(buttonVariants({ variant: "outline", size: "sm" }), "h-7 gap-1.5 text-xs")}
+                            title={tr("上传学生对这道题的手写作答照片，用这个求解结果批改", "Upload photos of students' work on this problem; marked against this solution")}
+                            data-testid="mark-student-work"
+                          >
+                            <ClipboardCheck className="h-3.5 w-3.5" />
+                            {tr("批改学生作答", "Mark students' work")}
+                          </Link>
+                        )}
                         <Badge
                           variant={solvedProblemType === "theorem" ? "info" : "default"}
                         >
