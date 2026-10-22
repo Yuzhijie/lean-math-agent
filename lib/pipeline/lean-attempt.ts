@@ -198,6 +198,8 @@ export function proofHints(theoremType: string, opts: { tooMany?: boolean; huge?
       ].join("\n"),
     );
   }
+  const orders = !opts.huge ? orderConditions(t) : undefined;
+  if (orders) hints.push(orderHint(orders));
   if (/∣/.test(t) && /\(\s*\w+\s*:\s*(ℕ|ℤ|Nat|Int)\s*\)|∀\s*\w+\s*:\s*(ℕ|ℤ)/.test(t) && /↔|∃/.test(t)) {
     hints.push(
       [
@@ -252,6 +254,80 @@ function bigClosedExponent(t: string): string | undefined {
     if (v !== undefined && v > 256n && v < 2n ** 24n && (best === undefined || v > best)) best = v;
   }
   return best?.toString();
+}
+
+// ── "Smallest n with m ∣ a ^ n - 1": multiplicative orders ─────────────────
+
+export interface OrderCondition {
+  /** As written, e.g. "(3 : ℕ) ^ 5 ∣ (2 : ℕ) ^ n - 1". */
+  text: string;
+  modulus: number;
+  base: number;
+  /** The multiplicative order of base mod modulus: m ∣ a ^ n - 1 ⇔ order ∣ n. */
+  order: number;
+}
+
+const NUM = String.raw`\(?\s*(\d+)\s*(?::\s*(?:ℕ|ℤ|Nat|Int)\s*)?\)?`;
+const ORDER_ATOM = new RegExp(String.raw`(¬\s*\(*\s*)?\(?\s*${NUM}(?:\s*\^\s*(\d+))?\s*\)?\s*∣\s*\(?\s*${NUM}\s*\^\s*([a-z]\w*)\s*\)?\s*-\s*1\b`, "g");
+
+/** Multiplicative order of a mod m (a, m coprime), or undefined when too large to search. */
+export function multiplicativeOrder(a: number, m: number, cap = 2_000_000): number | undefined {
+  if (m < 2) return undefined;
+  const g = (x: number, y: number): number => (y ? g(y, x % y) : x);
+  if (g(a % m, m) !== 1) return undefined;
+  let x = a % m;
+  for (let k = 1; k <= cap; k++) {
+    if (x === 1) return k;
+    x = Number((BigInt(x) * BigInt(a)) % BigInt(m));
+  }
+  return undefined;
+}
+
+/**
+ * The positive conditions `m ∣ a ^ n - 1` (variable exponent) of a statement that also asks for the
+ * smallest such n (`→ B ≤ n`, `n ≥ B`, `IsLeast`). Brute force over all n < B times out when B is
+ * large; the orders make it a divisibility argument.
+ */
+export function orderConditions(t: string): OrderCondition[] | undefined {
+  if (!/→\s*\d+\s*≤\s*[a-z]\w*|[a-z]\w*\s*≥\s*\d+|IsLeast/.test(t)) return undefined;
+  const out: OrderCondition[] = [];
+  for (const m of t.matchAll(ORDER_ATOM)) {
+    if (m[1]) continue; // a negated condition (¬ p^(e+1) ∣ …) does not constrain n by itself
+    const modulus = Number(BigInt(m[2]) ** BigInt(m[3] ?? "1"));
+    const base = Number(m[4]);
+    if (!Number.isSafeInteger(modulus) || modulus > 10_000_000 || out.some((o) => o.modulus === modulus && o.base === base)) continue;
+    const order = multiplicativeOrder(base, modulus);
+    if (order) out.push({ text: m[0].trim(), modulus, base, order });
+  }
+  return out.length ? out : undefined;
+}
+
+function orderHint(orders: OrderCondition[]): string {
+  const g = (x: number, y: number): number => (y ? g(y, x % y) : x);
+  const l = orders.reduce((acc, o) => (acc / g(acc, o.order)) * o.order, 1);
+  return [
+    `"Smallest n" with \`m ∣ a ^ n - 1\` conditions: do NOT check every n below the bound (\`interval_cases\`, \`decide\` over n < B time out — "Lean REPL command timed out"). Use multiplicative orders: m ∣ a ^ n - 1 holds exactly when ord ∣ n. Here (computed):`,
+    ...orders.map((o) => `- \`${o.modulus} ∣ ${o.base} ^ n - 1\` ⇔ \`${o.order} ∣ n\` (${o.order} = order of ${o.base} mod ${o.modulus})`),
+    ...(orders.length > 1 ? [`- together: the lcm ${l} divides n, so n ≥ ${l}.`] : []),
+    "A proof that Lean accepts (adapt the numbers):",
+    "```lean",
+    "  have ord : ∀ a m k n : ℕ, 0 < a → 0 < k → a ^ k % m = 1 → (∀ r < k, a ^ r % m = 1 → r = 0) → m ∣ a ^ n - 1 → k ∣ n := by",
+    "    intro a m k n ha hk0 hk hmin h",
+    "    have h1 : a ^ n % m = 1 % m := ((Nat.modEq_iff_dvd' (Nat.one_le_pow _ _ ha)).mpr h).symm",
+    "    have hm : 1 % m = 1 := by rw [← hk, Nat.mod_mod]",
+    "    have h2 : a ^ n % m = a ^ (n % k) % m := by",
+    "      conv_lhs => rw [← Nat.div_add_mod n k, pow_add, pow_mul, Nat.mul_mod, Nat.pow_mod, hk, one_pow, hm, one_mul, Nat.mod_mod]",
+    "    exact Nat.dvd_of_mod_eq_zero (hmin _ (Nat.mod_lt _ hk0) (by rw [← h2, h1, hm]))",
+    "  -- closed facts about the answer (huge powers are fine for the kernel): one `by decide +kernel` per conjunct",
+    "  refine ⟨⟨by decide +kernel, by decide +kernel, …⟩, ?_⟩",
+    "  rintro n hn ⟨h3, -, h5, -, h7, -⟩",
+    "  have a := ord 2 243 162 n (by norm_num) (by norm_num) (by norm_num) (by decide +kernel) (by simpa using h3)",
+    "  -- … one per condition (b, c), then",
+    "  have hl := Nat.lcm_dvd (Nat.lcm_dvd a b) c",
+    "  norm_num at hl",
+    "  exact Nat.le_of_dvd hn hl",
+    "```",
+  ].join("\n");
 }
 
 /** The candidate that got furthest, for the failure report. */

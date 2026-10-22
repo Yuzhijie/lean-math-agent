@@ -25,7 +25,7 @@ vi.mock("@/lib/prover/context", () => ({ buildProverContext: m.buildProverContex
 vi.mock("@/lib/prover/replay", () => ({ replayRecalled: m.replayRecalled }));
 vi.mock("@/lib/lean/proof-memory", () => ({ rememberRepair: m.rememberRepair }));
 
-const { attemptLeanFormalization, leanAttemptRetryable, proofHints } = await import("@/lib/pipeline/lean-attempt");
+const { attemptLeanFormalization, leanAttemptRetryable, multiplicativeOrder, orderConditions, proofHints } = await import("@/lib/pipeline/lean-attempt");
 const { hugePower } = await import("@/lib/compute/nat-expr");
 
 const GCD = {
@@ -197,6 +197,25 @@ describe("hints for the prover and the sorry report", () => {
     expect(fermat).toContain("Smallest n");
     expect(proofHints(": 2 ^ 10 = 1024").join("\n")).not.toContain("above 256");
     expect(proofHints(": ∀ n : ℕ, n + 0 = n").join("\n")).not.toContain("finite types");
+  });
+
+  it("turns \"smallest n with m ∣ 2^n - 1\" into multiplicative orders instead of a search", () => {
+    const T =
+      ": let P : ℕ → Prop := fun n => ((3 : ℕ) ^ 5 ∣ (2 : ℕ) ^ n - 1 ∧ ¬((3 : ℕ) ^ 6 ∣ (2 : ℕ) ^ n - 1) ∧ (5 : ℕ) ^ 3 ∣ (2 : ℕ) ^ n - 1 ∧ ¬((5 : ℕ) ^ 4 ∣ (2 : ℕ) ^ n - 1) ∧ (7 : ℕ) ^ 2 ∣ (2 : ℕ) ^ n - 1 ∧ ¬((7 : ℕ) ^ 3 ∣ (2 : ℕ) ^ n - 1)); P 56700 ∧ ∀ n : ℕ, 0 < n → P n → 56700 ≤ n";
+    expect(orderConditions(T)?.map((o) => [o.modulus, o.base, o.order])).toEqual([
+      [243, 2, 162],
+      [125, 2, 100],
+      [49, 2, 21],
+    ]);
+    const h = proofHints(T).join("\n");
+    expect(h).toContain("lcm 56700");
+    expect(h).toContain("Nat.modEq_iff_dvd'");
+    expect(orderConditions(": ∀ n : ℕ, 0 < n → 49 ∣ 3 ^ n - 1 → 11 ∣ 3 ^ n - 1 → 210 ≤ n")?.map((o) => o.order)).toEqual([42, 5]);
+    // no minimality clause, or nothing of the form m ∣ a ^ n - 1: no hint
+    expect(orderConditions(": ∀ n : ℕ, 243 ∣ 2 ^ n - 1 → 162 ∣ n")).toBeUndefined();
+    expect(orderConditions(": ∀ n : ℕ, 0 < n → n ^ 2 ≥ 1 → 1 ≤ n")).toBeUndefined();
+    expect(multiplicativeOrder(2, 243)).toBe(162);
+    expect(multiplicativeOrder(2, 6)).toBeUndefined();
   });
 
   it("reports a proof left with sorry in words, and passes the hints on", async () => {
