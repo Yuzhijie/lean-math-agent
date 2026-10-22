@@ -83,6 +83,9 @@ describe("formatVerificationFeedback", () => {
     expect(summarizeFailure(result({ ok: true }))).toBe("ok");
     expect(summarizeFailure(result({ messages: [{ severity: "error", line: 7, column: 0, message: "boom\ndetails" }] }))).toBe("boom");
     expect(summarizeFailure(result({ rejected: "no" }))).toBe("no");
+    expect(summarizeFailure(result({ messages: [{ severity: "error", line: 7, column: 0, message: "Function expected at\n  ExactValuation\nbut this term has type\n  Prop" }] }))).toBe(
+      "Function expected at ExactValuation but this term has type Prop",
+    );
     // "unsolved goals" names the goal that was left.
     expect(summarizeFailure(result({ messages: [{ severity: "error", line: 7, column: 0, message: "unsolved goals\ncase mp\nn : ℕ\nh39 : n + 5 ∣ 39\n⊢   n = 8" }] }))).toBe("unsolved goals: ⊢ n = 8");
     expect(summarizeFailure(result({ log: "raw log" }))).toBe("raw log");

@@ -268,6 +268,9 @@ export interface OrderCondition {
 }
 
 const NUM = String.raw`\(?\s*(\d+)\s*(?::\s*(?:ℕ|ℤ|Nat|Int)\s*)?\)?`;
+/** `v (a ^ n - 1) e`-style valuation conditions: `padicValNat 3 (2 ^ n - 1) = 5`, or a helper such as `ExactValuation 3 (2 ^ m - 1) 5` (p ^ e ∣ …). */
+const PADIC_ATOM = new RegExp(String.raw`(¬\s*\(*\s*)?padicValNat\s+${NUM}\s+\(\s*${NUM}\s*\^\s*([a-z]\w*)\s*-\s*1\s*\)\s*(=|≥)\s*(\d+)`, "g");
+const HELPER_ATOM = new RegExp(String.raw`(¬\s*\(*\s*)?\b([A-Za-z_][\w']*)\s+${NUM}\s+\(\s*${NUM}\s*\^\s*([a-z]\w*)\s*-\s*1\s*\)\s+(\d+)`, "g");
 const ORDER_ATOM = new RegExp(String.raw`(¬\s*\(*\s*)?\(?\s*${NUM}(?:\s*\^\s*(\d+))?\s*\)?\s*∣\s*\(?\s*${NUM}\s*\^\s*([a-z]\w*)\s*\)?\s*-\s*1\b`, "g");
 
 /** Multiplicative order of a mod m (a, m coprime), or undefined when too large to search. */
@@ -289,15 +292,29 @@ export function multiplicativeOrder(a: number, m: number, cap = 2_000_000): numb
  * large; the orders make it a divisibility argument.
  */
 export function orderConditions(t: string): OrderCondition[] | undefined {
-  if (!/→\s*\d+\s*≤\s*[a-z]\w*|[a-z]\w*\s*≥\s*\d+|IsLeast/.test(t)) return undefined;
+  // "smallest": `→ B ≤ n`, `n ≥ B`, `IsLeast`, or `n < B → ¬ …`
+  if (!/→\s*\d+\s*≤\s*[a-z]\w*|[a-z]\w*\s*≥\s*\d+|IsLeast|[a-z]\w*\s*<\s*\d+\s*→/.test(t)) return undefined;
   const out: OrderCondition[] = [];
-  for (const m of t.matchAll(ORDER_ATOM)) {
-    if (m[1]) continue; // a negated condition (¬ p^(e+1) ∣ …) does not constrain n by itself
-    const modulus = Number(BigInt(m[2]) ** BigInt(m[3] ?? "1"));
-    const base = Number(m[4]);
-    if (!Number.isSafeInteger(modulus) || modulus > 10_000_000 || out.some((o) => o.modulus === modulus && o.base === base)) continue;
+  const add = (text: string, p: string, e: string | undefined, b: string) => {
+    const modulus = Number(BigInt(p) ** BigInt(e ?? "1"));
+    const base = Number(b);
+    if (!Number.isSafeInteger(modulus) || modulus > 10_000_000 || out.some((o) => o.modulus === modulus && o.base === base)) return;
     const order = multiplicativeOrder(base, modulus);
-    if (order) out.push({ text: m[0].trim(), modulus, base, order });
+    if (order) out.push({ text: text.trim(), modulus, base, order });
+  };
+  // a helper (let-defined) whose definition says p ^ e ∣ m
+  const helpers = new Set([...t.matchAll(/let\s+([A-Za-z_][\w']*)\s*:[^:=]*:=\s*fun\s+(\w+)\s+(\w+)\s+(\w+)\s*=>\s*\2\s*\^\s*\4\s*∣\s*\3/g)].map((m) => m[1]));
+  const atoms: { text: string; p: string; e?: string; base: string; negated: boolean }[] = [
+    ...[...t.matchAll(ORDER_ATOM)].map((m) => ({ text: m[0], p: m[2], e: m[3], base: m[4], negated: !!m[1] })),
+    ...[...t.matchAll(PADIC_ATOM)].map((m) => ({ text: m[0], p: m[2], e: m[6], base: m[3], negated: !!m[1] })),
+    ...[...t.matchAll(HELPER_ATOM)].filter((m) => helpers.has(m[2])).map((m) => ({ text: m[0], p: m[3], e: m[6], base: m[4], negated: !!m[1] })),
+  ];
+  // `¬ p ^ (e+1) ∣ …` next to `p ^ e ∣ …` is the "exactly e" half and does not constrain n; a negated
+  // conjunction (`n < B → ¬ (… ∧ …)`) does, through each of its conditions.
+  const positive = atoms.filter((a) => !a.negated);
+  for (const a of atoms) {
+    if (a.negated && positive.some((q) => q.base === a.base && q.p === a.p)) continue;
+    add(a.text, a.p, a.e, a.base);
   }
   return out.length ? out : undefined;
 }
@@ -320,13 +337,14 @@ function orderHint(orders: OrderCondition[]): string {
     "    exact Nat.dvd_of_mod_eq_zero (hmin _ (Nat.mod_lt _ hk0) (by rw [← h2, h1, hm]))",
     "  -- closed facts about the answer (huge powers are fine for the kernel): one `by decide +kernel` per conjunct",
     "  refine ⟨⟨by decide +kernel, by decide +kernel, …⟩, ?_⟩",
-    "  rintro n hn ⟨h3, -, h5, -, h7, -⟩",
+    "  rintro n hn ⟨h3, -, h5, -, h7, -⟩   -- with a helper `ExactValuation p m e := p ^ e ∣ m ∧ …`: `rintro n hn hlt ⟨⟨h3, -⟩, ⟨h5, -⟩, ⟨h7, -⟩⟩`",
     "  have a := ord 2 243 162 n (by norm_num) (by norm_num) (by norm_num) (by decide +kernel) (by simpa using h3)",
     "  -- … one per condition (b, c), then",
     "  have hl := Nat.lcm_dvd (Nat.lcm_dvd a b) c",
-    "  norm_num at hl",
-    "  exact Nat.le_of_dvd hn hl",
+    "  rw [show Nat.lcm (Nat.lcm 162 100) 21 = 56700 by norm_num] at hl",
+    "  exact Nat.le_of_dvd hn hl   -- for `n < 56700 → ¬ …`: exact absurd (Nat.le_of_dvd hn hl) (Nat.not_le.mpr hlt)",
     "```",
+    "Do not finish with `omega` or `simp_all` while `let` definitions about these huge powers are in context: they unfold them and run out of heartbeats.",
   ].join("\n");
 }
 

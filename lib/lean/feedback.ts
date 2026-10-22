@@ -108,6 +108,11 @@ export function summarizeFailure(result: LeanVerifyResult, maxChars = 200): stri
     const goal = lines.find((l) => l.trim().startsWith("⊢"));
     if (goal) return truncate(`${lines[0]}: ${goal.trim().replace(/\s+/g, " ")}`, maxChars);
   }
+  // "Function expected at", "type mismatch", "application type mismatch": the first line ends
+  // where the term it is about begins — keep what follows (on one line).
+  if (lines.length > 1 && /(\bat|:)\s*$|^(Function expected|type mismatch|application type mismatch)\b/.test(lines[0])) {
+    return truncate(lines.map((l) => l.trim()).filter(Boolean).join(" ").replace(/\s+/g, " "), maxChars);
+  }
   return truncate(lines[0], maxChars);
 }
 

@@ -214,6 +214,16 @@ describe("hints for the prover and the sorry report", () => {
     // no minimality clause, or nothing of the form m ∣ a ^ n - 1: no hint
     expect(orderConditions(": ∀ n : ℕ, 243 ∣ 2 ^ n - 1 → 162 ∣ n")).toBeUndefined();
     expect(orderConditions(": ∀ n : ℕ, 0 < n → n ^ 2 ≥ 1 → 1 ≤ n")).toBeUndefined();
+    // the same problem formalized with a valuation helper and "m < B → ¬ …"
+    const T2 =
+      ": (let ExactValuation : ℕ → ℕ → ℕ → Prop := fun p m e => p ^ e ∣ m ∧ ¬ (p ^ (e + 1) ∣ m); ExactValuation 3 (2 ^ 56700 - 1) 5 ∧ ExactValuation 5 (2 ^ 56700 - 1) 3 ∧ ExactValuation 7 (2 ^ 56700 - 1) 2 ∧ ∀ m : ℕ, 0 < m → m < 56700 → ¬ (ExactValuation 3 (2 ^ m - 1) 5 ∧ ExactValuation 5 (2 ^ m - 1) 3 ∧ ExactValuation 7 (2 ^ m - 1) 2))";
+    expect(orderConditions(T2)?.map((o) => [o.modulus, o.order])).toEqual([
+      [243, 162],
+      [125, 100],
+      [49, 21],
+    ]);
+    expect(proofHints(T2).join("\n")).toContain("Nat.not_le.mpr hlt");
+    expect(orderConditions(": IsLeast {n : ℕ | 0 < n ∧ padicValNat 3 (2 ^ n - 1) = 5} 162")?.map((o) => o.order)).toEqual([162]);
     expect(multiplicativeOrder(2, 243)).toBe(162);
     expect(multiplicativeOrder(2, 6)).toBeUndefined();
   });
