@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { bankRoute, jsonBody } from "@/lib/bank/http";
 import { learningStats } from "@/lib/grading/stats";
-import { accessToMember, removeMember, renameMember, submissionsOf, unlinkMember } from "@/lib/grading/store";
-import { submissionSummary } from "@/lib/grading/view";
+import { accessToMember, getMemberDiagnosis, papersOf, removeMember, renameMember, submissionsOf, unlinkMember } from "@/lib/grading/store";
+import { forStudent, paperSummary, submissionSummary } from "@/lib/grading/view";
 
 type P = { id: string };
 
@@ -15,7 +15,10 @@ export const GET = bankRoute<P>(async ({ owner, params }) => {
     teacher: cls.name,
     member: { id: member.id, name: member.name, class_id: member.class_id, linked: !!member.user_id },
     stats: learningStats(subs),
-    submissions: subs.map(submissionSummary),
+    // Single pieces of work here; questions of a paper are listed with their paper.
+    submissions: subs.filter((s) => !s.paper_id).map(submissionSummary),
+    papers: papersOf(member.id).map(paperSummary),
+    diagnosis: ((d) => (d && role === "student" ? forStudent(d) : d) ?? null)(getMemberDiagnosis(member.id)),
   };
 });
 

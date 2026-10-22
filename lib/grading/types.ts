@@ -99,9 +99,67 @@ export const submissionSchema = z.object({
   teacher: z.object({ verdict: z.enum(VERDICTS).optional(), note: z.string().max(2000).optional(), at: z.number() }).optional(),
   status: z.enum(["marked", "failed"]),
   error: z.string().optional(),
+  /** Part of a whole paper (答卷): the paper and the question number on it; the photos are the paper's. */
+  paper_id: z.string().optional(),
+  question_no: z.string().optional(),
+  /** The printed question could not be read from the paper (the problem text is a placeholder). */
+  question_unread: z.boolean().optional(),
   created_at: z.number(),
 });
 export type Submission = z.infer<typeof submissionSchema>;
+
+// ── Diagnosis: approach, mastery of skills, what to practise next ──
+
+export const MASTERY_LEVELS = ["mastered", "developing", "weak", "not_yet"] as const;
+export type MasteryLevel = (typeof MASTERY_LEVELS)[number];
+
+export const diagnosisSchema = z.object({
+  /** How the student goes about problems (habits, strategies) — across the work looked at. */
+  approach: z.string(),
+  strengths: z.array(z.string()),
+  weaknesses: z.array(z.string()),
+  /** Per skill: attempts and fully correct work counted by the program, level from fixed rules. */
+  mastery: z.array(
+    z.object({ knowledge_point: z.string(), attempts: z.number(), correct: z.number(), level: z.enum(MASTERY_LEVELS), note: z.string().optional() }),
+  ),
+  /** What to test next, most important first. */
+  next: z.array(
+    z.object({
+      question_type: z.string(),
+      knowledge_points: z.array(z.string()),
+      difficulty: z.number().int().min(1).max(5),
+      count: z.number().int().min(1).max(10),
+      reason: z.string(),
+      /** Where the questions can be generated: a bank with matching questions, else the built-in generator. */
+      bank: z.object({ bank_id: z.string(), bank_name: z.string(), knowledge_point: z.string(), matched: z.number() }).optional(),
+      builtin: z.object({ grade_level: z.string(), difficulty: z.string(), domain: z.string() }).optional(),
+    }),
+  ),
+  summary: z.string(),
+  /** Marked pieces of work the diagnosis is based on. */
+  based_on: z.number(),
+  created_at: z.number(),
+});
+export type Diagnosis = z.infer<typeof diagnosisSchema>;
+
+/** A whole paper (答卷): photos of every page, one submission per question found on it, and a diagnosis. */
+export const paperSchema = z.object({
+  id: z.string(),
+  class_id: z.string(),
+  member_id: z.string(),
+  submitted_by: z.string(),
+  title: z.string().max(200),
+  images: z.array(z.string()),
+  /** Where the questions and answers came from: a printed bank worksheet, a typed answer key, or neither. */
+  source: z.object({ bank_id: z.string().optional(), generation_id: z.string().optional(), answer_key: z.string().max(5000).optional() }),
+  status: z.enum(["marked", "partial", "failed"]),
+  error: z.string().optional(),
+  note: z.string().optional(),
+  submission_ids: z.array(z.string()),
+  diagnosis: diagnosisSchema.optional(),
+  created_at: z.number(),
+});
+export type Paper = z.infer<typeof paperSchema>;
 
 const SCORE_BAND: Record<Verdict, [number, number]> = {
   correct: [90, 100],

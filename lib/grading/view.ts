@@ -1,5 +1,5 @@
 /** What lists show of a submission (the full record is fetched when one is opened). */
-import { effectiveScore, effectiveVerdict, type Submission } from "./types";
+import { effectiveScore, effectiveVerdict, type Diagnosis, type Paper, type Submission } from "./types";
 
 export function submissionSummary(s: Submission) {
   return {
@@ -30,4 +30,23 @@ export function publicSubmission(s: Submission, role: "teacher" | "student") {
   void _b;
   void _i;
   return { ...rest, problem };
+}
+
+/**
+ * A paper as the API returns it: no uploader id; for a student, no teacher bank ids or answer key,
+ * and the recommendations without the teacher's bank (a student cannot generate from it).
+ */
+export function publicPaper(p: Paper, role: "teacher" | "student") {
+  const { submitted_by: _u, source, ...rest } = p;
+  void _u;
+  if (role === "teacher") return { ...rest, source };
+  return { ...rest, source: {}, ...(p.diagnosis ? { diagnosis: forStudent(p.diagnosis) } : {}) };
+}
+
+export function forStudent(d: Diagnosis): Diagnosis {
+  return { ...d, next: d.next.map(({ bank: _b, ...n }) => (void _b, n)) };
+}
+
+export function paperSummary(p: Paper) {
+  return { id: p.id, title: p.title, created_at: p.created_at, status: p.status, questions: p.submission_ids.length, summary: p.diagnosis?.summary ?? null };
 }

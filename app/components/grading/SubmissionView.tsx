@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 import { effectiveScore, VERDICTS } from "@/lib/grading/types";
 import { MathText } from "../MathText";
 import { ErrorNote, FieldLabel, NativeSelect } from "../bank/ui";
-import { api, errMsg, imageUrl, type SubmissionDetail } from "./api";
+import { api, errMsg, imageUrl, paperImageUrl, type SubmissionDetail } from "./api";
 import { errorTypeLabel, referenceSourceLabel, verdictLabel, verdictVariant } from "./labels";
 
 const STEP_STYLE = {
@@ -24,6 +24,9 @@ const STEP_STYLE = {
 export function SubmissionView({ detail, onChanged, onDeleted }: { detail: SubmissionDetail; onChanged: (d: SubmissionDetail) => void; onDeleted: () => void }) {
   const { tr } = useI18n();
   const { submission: s, role, member } = detail;
+  // A question of a whole paper shows the paper's pages.
+  const photos = detail.paper ? detail.paper.images : s.images;
+  const photoUrl = (name: string) => (detail.paper ? paperImageUrl(detail.paper.id, name) : imageUrl(s.id, name));
   const mk = s.marking;
   const verdict = s.teacher?.verdict ?? mk?.verdict;
   const [note, setNote] = useState(s.teacher?.note ?? "");
@@ -110,12 +113,12 @@ export function SubmissionView({ detail, onChanged, onDeleted }: { detail: Submi
       <div className="grid gap-4 lg:grid-cols-2">
         {/* Photos */}
         <div className="space-y-2">
-          <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">{tr("作答照片", "Photos")}</p>
+          <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">{detail.paper ? tr(`答卷照片（第 ${s.question_no ?? "?"} 题在其中）`, `Paper pages (question ${s.question_no ?? "?"} is on them)`) : tr("作答照片", "Photos")}</p>
           <div className="grid grid-cols-2 gap-2">
-            {s.images.map((name) => (
+            {photos.map((name) => (
               <button key={name} type="button" onClick={() => setZoom(name)} className="overflow-hidden rounded border border-border/60">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={imageUrl(s.id, name)} alt={name} className="w-full object-contain" />
+                <img src={photoUrl(name)} alt={name} className="w-full object-contain" />
               </button>
             ))}
           </div>
@@ -253,7 +256,7 @@ export function SubmissionView({ detail, onChanged, onDeleted }: { detail: Submi
       {zoom && (
         <button type="button" className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" onClick={() => setZoom(null)} aria-label={tr("关闭", "Close")}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={imageUrl(s.id, zoom)} alt={zoom} className="max-h-full max-w-full object-contain" />
+          <img src={photoUrl(zoom)} alt={zoom} className="max-h-full max-w-full object-contain" />
         </button>
       )}
     </div>

@@ -54,9 +54,9 @@ export interface WorkImage {
 }
 
 /** Checks and prepares the photos (format, size, orientation); returns data URLs for the model. */
-export async function prepareWorkImages(images: WorkImage[]): Promise<{ urls: string[]; files: { data: Buffer; ext: string }[] }> {
+export async function prepareWorkImages(images: WorkImage[], max = MAX_WORK_IMAGES): Promise<{ urls: string[]; files: { data: Buffer; ext: string }[] }> {
   if (!images.length) throw new MarkingError(lt("请至少上传一张作答照片", "Upload at least one photo of the work"), 400);
-  if (images.length > MAX_WORK_IMAGES) throw new MarkingError(lt(`最多 ${MAX_WORK_IMAGES} 张照片`, `At most ${MAX_WORK_IMAGES} photos`), 400);
+  if (images.length > max) throw new MarkingError(lt(`最多 ${max} 张照片`, `At most ${max} photos`), 400);
   const urls: string[] = [];
   const files: { data: Buffer; ext: string }[] = [];
   for (const [i, img] of images.entries()) {

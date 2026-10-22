@@ -15,13 +15,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { BankError } from "../bank/store";
 import { lt } from "../llm/output-locale";
-import { classSchema, memberSchema, submissionSchema, type GradingClass, type Member, type Submission } from "./types";
+import { z } from "zod";
+import { classSchema, diagnosisSchema, memberSchema, paperSchema, submissionSchema, type Diagnosis, type GradingClass, type Member, type Paper, type Submission } from "./types";
+
+/** A student's latest diagnosis over all their marked work (id = the member id). */
+const memberDiagnosisSchema = z.object({ id: z.string(), diagnosis: diagnosisSchema });
+type MemberDiagnosis = z.infer<typeof memberDiagnosisSchema>;
 
 export { BankError as GradingError };
 
-type Kind = "class" | "member" | "submission";
-const SCHEMAS = { class: classSchema, member: memberSchema, submission: submissionSchema };
-type Docs = { class: GradingClass; member: Member; submission: Submission };
+type Kind = "class" | "member" | "submission" | "paper" | "diagnosis";
+const SCHEMAS = { class: classSchema, member: memberSchema, submission: submissionSchema, paper: paperSchema, diagnosis: memberDiagnosisSchema };
+type Docs = { class: GradingClass; member: Member; submission: Submission; paper: Paper; diagnosis: MemberDiagnosis };
 
 export function gradingRoot(): string {
   return process.env.GRADING_STORE_PATH ?? path.join(".data", "grading");
@@ -97,7 +102,7 @@ function db(): Store {
   const root = gradingRoot();
   if (store?.root === root) return store;
   const backend = open(root);
-  const docs = { class: new Map(), member: new Map(), submission: new Map() } as Store["docs"];
+  const docs = { class: new Map(), member: new Map(), submission: new Map(), paper: new Map(), diagnosis: new Map() } as Store["docs"];
   for (const r of backend.all()) {
     const parsed = SCHEMAS[r.kind]?.safeParse(r.data);
     if (parsed?.success) (docs[r.kind] as Map<string, unknown>).set((parsed.data as { id: string }).id, parsed.data);
@@ -180,8 +185,12 @@ export function regenerateJoinCode(owner: string, id: string): GradingClass {
 /** Deletes the class with its roster, submissions and photos. */
 export function deleteClass(owner: string, id: string): void {
   teacherClass(owner, id);
+  for (const p of [...db().docs.paper.values()].filter((x) => x.class_id === id)) deletePaperDoc(p);
   for (const s of [...db().docs.submission.values()].filter((x) => x.class_id === id)) deleteSubmissionDoc(s);
-  for (const m of [...db().docs.member.values()].filter((x) => x.class_id === id)) remove("member", m.id);
+  for (const m of [...db().docs.member.values()].filter((x) => x.class_id === id)) {
+    if (db().docs.diagnosis.has(m.id)) remove("diagnosis", m.id);
+    remove("member", m.id);
+  }
   remove("class", id);
 }
 
@@ -200,6 +209,7 @@ export function teacherGroup(owner: string): GradingClass | undefined {
   for (const old of rest) {
     for (const m of [...d.docs.member.values()].filter((x) => x.class_id === old.id)) put("member", { ...m, class_id: keep.id });
     for (const sub of [...d.docs.submission.values()].filter((x) => x.class_id === old.id)) put("submission", { ...sub, class_id: keep.id });
+    for (const p of [...d.docs.paper.values()].filter((x) => x.class_id === old.id)) put("paper", { ...p, class_id: keep.id });
     remove("class", old.id);
   }
   return keep;
@@ -255,6 +265,8 @@ export function removeMember(owner: string, memberId: string): void {
   const m = getMember(memberId);
   teacherClass(owner, m.class_id);
   for (const s of [...db().docs.submission.values()].filter((x) => x.member_id === memberId)) deleteSubmissionDoc(s);
+  for (const p of [...db().docs.paper.values()].filter((x) => x.member_id === memberId)) deletePaperDoc(p);
+  if (db().docs.diagnosis.has(memberId)) remove("diagnosis", memberId);
   remove("member", memberId);
 }
 
@@ -366,6 +378,7 @@ export function deleteSubmission(userId: string, id: string): void {
     throw new BankError(lt("老师上传的作答只能由老师删除", "Work your teacher uploaded can only be deleted by the teacher"), 403);
   }
   deleteSubmissionDoc(submission);
+  if (submission.paper_id) refreshPaper(submission.paper_id);
 }
 
 /**
@@ -387,5 +400,123 @@ export function saveMarkingResult(
   }
   const current = d.docs.submission.get(draft.id) ?? (opts.isNew ? draft : undefined);
   if (!current) return undefined; // deleted while it was being marked again
-  return put("submission", { ...current, ...result });
+  const saved = put("submission", { ...current, ...result });
+  if (saved.paper_id && !opts.isNew) refreshPaper(saved.paper_id);
+  return saved;
+}
+
+// ── Papers (答卷) and diagnoses ──────────────────────────────────────
+
+function paperDir(paperId: string): string {
+  return path.join(gradingRoot(), "papers", paperId);
+}
+
+export function newPaperId(): string {
+  return "p" + randomUUID().replace(/-/g, "").slice(0, 15);
+}
+
+/** Saves the page photos of a paper; returns their file names. */
+export function savePaperImages(paperId: string, images: { data: Buffer; ext: string }[]): string[] {
+  if (!SAFE_ID.test(paperId)) throw notFound("submission");
+  const dir = paperDir(paperId);
+  fs.mkdirSync(dir, { recursive: true });
+  return images.map((img, i) => {
+    const name = `${i + 1}.${img.ext.replace(/[^a-z0-9]/gi, "") || "jpg"}`;
+    fs.writeFileSync(path.join(dir, name), img.data);
+    return name;
+  });
+}
+
+export function putPaper(p: Paper): Paper {
+  return put("paper", p);
+}
+
+export function getPaper(id: string): Paper {
+  if (!SAFE_ID.test(id)) throw notFound("submission");
+  const p = db().docs.paper.get(id);
+  if (!p) throw notFound("submission");
+  return p;
+}
+
+/** The paper if the caller teaches the student or is the student. */
+export function visiblePaper(userId: string, id: string): { paper: Paper; role: "teacher" | "student" } {
+  const paper = getPaper(id);
+  const { role } = accessToMember(userId, paper.member_id);
+  return { paper, role };
+}
+
+export function readPaperImage(userId: string, id: string, name: string): Buffer {
+  const { paper } = visiblePaper(userId, id);
+  if (!paper.images.includes(name)) throw notFound("image");
+  return fs.readFileSync(path.join(paperDir(id), name));
+}
+
+export function papersOf(memberId: string): Paper[] {
+  return [...db().docs.paper.values()].filter((p) => p.member_id === memberId).sort((a, b) => b.created_at - a.created_at);
+}
+
+function deletePaperDoc(p: Paper): void {
+  for (const id of p.submission_ids) {
+    const s = db().docs.submission.get(id);
+    if (s) deleteSubmissionDoc(s);
+  }
+  fs.rmSync(paperDir(p.id), { recursive: true, force: true });
+  remove("paper", p.id);
+}
+
+/** Teachers may delete any paper of their students; students only papers they uploaded. */
+export function deletePaper(userId: string, id: string): void {
+  const { paper, role } = visiblePaper(userId, id);
+  if (role === "student" && paper.submitted_by !== userId) {
+    throw new BankError(lt("老师上传的答卷只能由老师删除", "A paper your teacher uploaded can only be deleted by the teacher"), 403);
+  }
+  deletePaperDoc(paper);
+}
+
+/** Writes a paper's (long) marking result unless the paper or its student was removed meanwhile. */
+export function savePaperResult(paper: Paper, opts: { isNew?: boolean } = {}): Paper | undefined {
+  const d = db();
+  if (!d.docs.member.has(paper.member_id) || !d.docs.class.has(paper.class_id) || (!opts.isNew && !d.docs.paper.has(paper.id))) {
+    for (const id of paper.submission_ids) {
+      const s = d.docs.submission.get(id);
+      if (s) deleteSubmissionDoc(s);
+    }
+    fs.rmSync(paperDir(paper.id), { recursive: true, force: true });
+    return undefined;
+  }
+  return put("paper", paper);
+}
+
+/**
+ * After one of a paper's questions was marked again or deleted: drops questions that are gone and
+ * sets the status from the rest (a paper whose questions were all deleted is deleted).
+ */
+export function refreshPaper(paperId: string): Paper | undefined {
+  const d = db();
+  const p = d.docs.paper.get(paperId);
+  if (!p) return undefined;
+  const subs = p.submission_ids.map((id) => d.docs.submission.get(id)).filter((s): s is Submission => !!s);
+  if (!subs.length) {
+    deletePaperDoc(p);
+    return undefined;
+  }
+  const failed = subs.filter((s) => s.status === "failed").length;
+  const status = failed === subs.length ? "failed" : failed ? "partial" : "marked";
+  if (status === p.status && subs.length === p.submission_ids.length) return p;
+  return put("paper", { ...p, status, submission_ids: subs.map((s) => s.id), ...(status !== "failed" ? { error: undefined } : {}) });
+}
+
+/** A paper run that died before its result was stored: its photos go. */
+export function discardPaperDraft(paperId: string): void {
+  if (!SAFE_ID.test(paperId) || db().docs.paper.has(paperId)) return;
+  fs.rmSync(paperDir(paperId), { recursive: true, force: true });
+}
+
+export function getMemberDiagnosis(memberId: string): Diagnosis | undefined {
+  return db().docs.diagnosis.get(memberId)?.diagnosis;
+}
+
+export function putMemberDiagnosis(memberId: string, diagnosis: Diagnosis): Diagnosis | undefined {
+  if (!db().docs.member.has(memberId)) return undefined;
+  return put("diagnosis", { id: memberId, diagnosis }).diagnosis;
 }

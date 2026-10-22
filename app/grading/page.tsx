@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, ClipboardCheck, Copy, GraduationCap, Plus, RefreshCw, Trash2, UserPlus, Users } from "lucide-react";
+import { ArrowLeft, ClipboardCheck, Copy, FileStack, GraduationCap, Loader2, Plus, RefreshCw, Sparkles, Trash2, UserPlus, Users } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,8 +12,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { LocaleSwitcher } from "../components/LocaleSwitcher";
+import { MathText } from "../components/MathText";
 import { ErrorNote, FieldLabel } from "../components/bank/ui";
-import { api, errMsg, type MeResponse, type MemberDetail, type ProblemPrefill, type SubmissionDetail, type SubmissionSummary } from "../components/grading/api";
+import { api, errMsg, paperImageUrl, type Diagnosis, type MeResponse, type MemberDetail, type PaperDetail, type PaperSummary, type ProblemPrefill, type SubmissionDetail, type SubmissionSummary } from "../components/grading/api";
+import { DiagnosisView } from "../components/grading/DiagnosisView";
+import { SubmitPaper } from "../components/grading/SubmitPaper";
 import { errorTypeLabel, pct, verdictLabel, verdictVariant } from "../components/grading/labels";
 import { StatsPanel } from "../components/grading/StatsPanel";
 import { SubmissionView } from "../components/grading/SubmissionView";
@@ -32,7 +35,9 @@ export default function GradingPage() {
  * or joining with the teacher's invite code), uploads work for a student and sees each student's
  * and all students' learning record; a student joins a teacher with the code, uploads their own
  * work and sees their marking and record. There is no class level.
- * URL: ?member=<id> | ?submission=<id>; a problem to mark can be passed as ?session=<id>,
+ * A whole answered paper (答卷) is split into questions, each marked, then diagnosed (approach,
+ * mastery per skill, what to test next with one-click practice).
+ * URL: ?member=<id> | ?submission=<id> | ?paper=<id>; a problem to mark can be passed as ?session=<id>,
  * ?bank=<id>&item=<id> or ?problem=<text> (from the solver and the bank).
  */
 function Grading() {
@@ -41,6 +46,7 @@ function Grading() {
   const params = useSearchParams();
   const memberId = params.get("member");
   const submissionId = params.get("submission");
+  const paperId = params.get("paper");
   const prefill = useMemo<ProblemPrefill | undefined>(() => {
     const p: ProblemPrefill = {
       session_id: params.get("session") ?? undefined,
@@ -76,7 +82,7 @@ function Grading() {
     [router, params, prefill],
   );
   const refresh = () => setReload((n) => n + 1);
-  const opened = !!(memberId || submissionId);
+  const opened = !!(memberId || submissionId || paperId);
 
   return (
     <div className="relative z-10 min-h-screen">
@@ -172,11 +178,13 @@ function Grading() {
             </Link>
           )}
           {submissionId ? (
-            <SubmissionPane key={submissionId} id={submissionId} onBack={(m) => go(m ? { member: m } : {})} onChanged={refresh} />
+            <SubmissionPane key={submissionId} id={submissionId} onBack={(m) => go(m ? { member: m } : {})} onOpenPaper={(id) => go({ paper: id })} onChanged={refresh} />
+          ) : paperId ? (
+            <PaperPane key={paperId} id={paperId} onBack={(m) => go({ member: m })} onOpen={(id) => go({ submission: id })} onChanged={refresh} />
           ) : memberId ? (
-            <MemberPane key={memberId} id={memberId} prefill={prefill} onOpen={(id) => go({ submission: id })} onChanged={refresh} onRemoved={() => (refresh(), go({}))} />
+            <MemberPane key={memberId} id={memberId} prefill={prefill} onOpen={(id) => go({ submission: id })} onOpenPaper={(id) => go({ paper: id })} onChanged={refresh} onRemoved={() => (refresh(), go({}))} />
           ) : (
-            <Overview me={me} prefill={prefill} onOpenMember={(id) => go({ member: id })} onOpen={(id) => go({ submission: id })} />
+            <Overview me={me} prefill={prefill} onOpenMember={(id) => go({ member: id })} onOpen={(id) => go({ submission: id })} onOpenPaper={(id) => go({ paper: id })} />
           )}
         </section>
       </main>
@@ -340,7 +348,19 @@ function JoinTeacher({ onJoined }: { onJoined: (memberId: string) => void }) {
 // ── Main panes ───────────────────────────────────────────────────────
 
 /** No student opened: mark work (any of my students), my students at a glance, all students' record. */
-function Overview({ me, prefill, onOpenMember, onOpen }: { me: MeResponse | null; prefill?: ProblemPrefill; onOpenMember: (id: string) => void; onOpen: (id: string) => void }) {
+function Overview({
+  me,
+  prefill,
+  onOpenMember,
+  onOpen,
+  onOpenPaper,
+}: {
+  me: MeResponse | null;
+  prefill?: ProblemPrefill;
+  onOpenMember: (id: string) => void;
+  onOpen: (id: string) => void;
+  onOpenPaper: (id: string) => void;
+}) {
   const { tr } = useI18n();
   const students = me?.teacher?.students ?? [];
   const [tab, setTab] = useState<"mark" | "students" | "stats">(prefill || !students.some((s) => s.stats.marked) ? "mark" : "students");
@@ -357,6 +377,7 @@ function Overview({ me, prefill, onOpenMember, onOpen }: { me: MeResponse | null
         <p>{tr("老师：在左边“添加学生”，或点“邀请学生加入”把邀请码发给学生；然后选一个学生、上传作答照片即可批改。", "Teachers: “Add students” on the left, or share your invite code with “Invite students”; then pick a student and upload photos of their work.")}</p>
         <p>{tr("学生：在“我的老师”里输入老师给的邀请码，就可以自己上传作答、看批改和自己的学情。", "Students: enter your teacher's invite code under “My teachers” to upload your own work and see the marking and your record.")}</p>
         <p>{tr("系统会逐行读出解题过程和最终答案：答案先由程序比对，再由模型逐步判断思路，指出第一个出错的步骤、错误类型，并给出不泄露答案的提示。", "The working and the final answer are read line by line: the answer is compared by the program first, then each step is judged — the first wrong step, the kind of mistake, and a hint that does not give the answer away.")}</p>
+        <p>{tr("也可以上传整张答卷（多页照片）：系统按题号拆开逐题批改，再给出整体的解题思路分析、各知识点掌握程度和下一步该测的题型，并能一键出练习题。", "You can also upload a whole answered paper (several page photos): it is split by question number and each question marked, then you get an analysis of how the student works, mastery per skill and what to test next — with one-click practice.")}</p>
         <p>{tr("在求解页解完一道题后，点“批改学生作答”就能用求解结果作参考答案。", "After solving a problem on the solver page, “Mark students' work” uses the result as the reference answer.")}</p>
       </div>
     );
@@ -376,7 +397,7 @@ function Overview({ me, prefill, onOpenMember, onOpen }: { me: MeResponse | null
         ))}
       </div>
 
-      {tab === "mark" && <SubmitWork students={choices} isTeacher={students.length > 0} prefill={prefill} onDone={(s) => onOpen(s.id)} />}
+      {tab === "mark" && <MarkForm students={choices} isTeacher={students.length > 0} prefill={prefill} onDone={onOpen} onPaperDone={onOpenPaper} />}
 
       {tab === "students" && (
         <div className="overflow-x-auto rounded-md border border-border/60">
@@ -423,12 +444,14 @@ function MemberPane({
   id,
   prefill,
   onOpen,
+  onOpenPaper,
   onChanged,
   onRemoved,
 }: {
   id: string;
   prefill?: ProblemPrefill;
   onOpen: (id: string) => void;
+  onOpenPaper: (id: string) => void;
   onChanged: () => void;
   onRemoved: () => void;
 }) {
@@ -487,17 +510,20 @@ function MemberPane({
       <div className="grid gap-5 xl:grid-cols-2">
         <div className="space-y-2 rounded-md border border-border/60 p-4">
           <h3 className="text-sm font-semibold">{d.role === "student" ? tr("提交我的作答", "Submit my work") : tr(`批改 ${d.member.name} 的作答`, `Mark ${d.member.name}'s work`)}</h3>
-          <SubmitWork
+          <MarkForm
             students={[{ id: d.member.id, label: d.member.name }]}
             isTeacher={d.role === "teacher"}
             prefill={prefill}
-            onDone={(s) => (onChanged(), onOpen(s.id))}
+            onDone={(sid) => (onChanged(), onOpen(sid))}
+            onPaperDone={(pid) => (onChanged(), onOpenPaper(pid))}
           />
         </div>
         <div className="rounded-md border border-border/60 p-4">
           <StatsPanel stats={d.stats} title={tr("学情", "Learning record")} />
         </div>
       </div>
+      <MemberDiagnosis key={d.diagnosis?.created_at ?? 0} memberId={d.member.id} role={d.role} initial={d.diagnosis} marked={d.stats.marked} />
+      <PaperList items={d.papers} onOpen={onOpenPaper} />
       <SubmissionList items={d.submissions} onOpen={onOpen} />
     </div>
   );
@@ -524,7 +550,7 @@ function SubmissionList({ items, onOpen }: { items: SubmissionSummary[]; onOpen:
   );
 }
 
-function SubmissionPane({ id, onBack, onChanged }: { id: string; onBack: (memberId?: string) => void; onChanged: () => void }) {
+function SubmissionPane({ id, onBack, onOpenPaper, onChanged }: { id: string; onBack: (memberId?: string) => void; onOpenPaper: (paperId: string) => void; onChanged: () => void }) {
   const { tr } = useI18n();
   const [d, setD] = useState<SubmissionDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -540,11 +566,251 @@ function SubmissionPane({ id, onBack, onChanged }: { id: string; onBack: (member
   if (!d) return error ? <ErrorNote message={error} /> : <Skeleton className="h-64" />;
   return (
     <div className="space-y-3">
-      <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => onBack(d.member.id)}>
-        <ArrowLeft className="h-3.5 w-3.5" />
-        {tr(`${d.member.name} 的学情`, `${d.member.name}'s record`)}
-      </Button>
+      <div className="flex flex-wrap gap-1">
+        <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => onBack(d.member.id)}>
+          <ArrowLeft className="h-3.5 w-3.5" />
+          {tr(`${d.member.name} 的学情`, `${d.member.name}'s record`)}
+        </Button>
+        {d.paper && (
+          <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => onOpenPaper(d.paper!.id)}>
+            <FileStack className="h-3.5 w-3.5" />
+            {tr(`整张答卷：${d.paper.title}`, `Whole paper: ${d.paper.title}`)}
+          </Button>
+        )}
+      </div>
       <SubmissionView key={d.submission.id} detail={d} onChanged={(x) => (setD(x), onChanged())} onDeleted={() => (onChanged(), onBack(d.member.id))} />
+    </div>
+  );
+}
+
+// ── Whole papers and diagnosis ───────────────────────────────────────
+
+/** One question, or a whole answered paper. */
+function MarkForm({
+  students,
+  isTeacher,
+  prefill,
+  onDone,
+  onPaperDone,
+}: {
+  students: { id: string; label: string }[];
+  isTeacher: boolean;
+  prefill?: ProblemPrefill;
+  onDone: (submissionId: string) => void;
+  onPaperDone: (paperId: string) => void;
+}) {
+  const { tr } = useI18n();
+  const [mode, setMode] = useState<"one" | "paper">("one");
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="space-y-3">
+      <div className="inline-flex rounded-md border border-border/60 p-0.5 text-xs">
+        {(
+          [
+            ["one", tr("单题", "One question")],
+            ["paper", tr("整张答卷", "Whole paper")],
+          ] as const
+        ).map(([k, label]) => (
+          <button key={k} type="button" disabled={busy} onClick={() => setMode(k)} className={cn("rounded px-3 py-1 disabled:cursor-not-allowed", mode === k ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground")}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {mode === "one" ? (
+        <SubmitWork students={students} isTeacher={isTeacher} prefill={prefill} onDone={(s) => onDone(s.id)} />
+      ) : (
+        <SubmitPaper students={students} isTeacher={isTeacher} onDone={onPaperDone} onBusy={setBusy} />
+      )}
+    </div>
+  );
+}
+
+function PaperList({ items, onOpen }: { items: PaperSummary[]; onOpen: (id: string) => void }) {
+  const { tr } = useI18n();
+  if (!items.length) return null;
+  return (
+    <div className="space-y-1.5">
+      <h3 className="text-sm font-semibold">{tr("答卷", "Papers")}</h3>
+      {items.map((p) => (
+        <button key={p.id} type="button" onClick={() => onOpen(p.id)} className="flex w-full items-center gap-3 rounded-md border border-border/60 px-3 py-2 text-left text-sm hover:bg-muted/30">
+          <FileStack className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className="shrink-0 font-medium">{p.title}</span>
+          {p.status !== "marked" && <Badge variant={p.status === "failed" ? "secondary" : "warning"}>{p.status === "failed" ? tr("批改失败", "Failed") : tr("部分完成", "Partly marked")}</Badge>}
+          <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{p.summary ?? ""}</span>
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{tr(`${p.questions} 题`, `${p.questions} q`)}</span>
+          <span className="shrink-0 text-xs text-muted-foreground">{new Date(p.created_at).toLocaleDateString()}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** The student's learning diagnosis over all their marked work (run on demand; kept until rerun). */
+function MemberDiagnosis({ memberId, role, initial, marked }: { memberId: string; role: "teacher" | "student"; initial: Diagnosis | null; marked: number }) {
+  const { tr } = useI18n();
+  const [d, setD] = useState<Diagnosis | null>(initial);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const run = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      const r = await api<{ diagnosis: Diagnosis }>(`/api/grading/members/${memberId}/diagnosis`, { method: "POST" });
+      setD(r.diagnosis);
+    } catch (e) {
+      setError(errMsg(e, tr("诊断失败", "Diagnosis failed")));
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (!marked && !d) return null;
+  return (
+    <div className="space-y-3 rounded-md border border-border/60 p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="text-sm font-semibold">{tr("学习诊断", "Learning diagnosis")}</h3>
+        <span className="text-[11px] text-muted-foreground">{tr("解题思路 · 知识点掌握 · 下一步测试", "Approach · mastery · what to test next")}</span>
+        <Button size="sm" variant={d ? "ghost" : "default"} className="ml-auto h-7 gap-1.5 text-xs" disabled={busy} onClick={() => void run()}>
+          {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+          {busy ? tr("分析中…", "Analysing…") : d ? tr("按最新作答重新诊断", "Diagnose again with the latest work") : tr("生成学习诊断", "Diagnose")}
+        </Button>
+      </div>
+      <ErrorNote message={error} onDismiss={() => setError(null)} />
+      {d ? <DiagnosisView diagnosis={d} role={role} /> : <p className="text-xs text-muted-foreground">{tr("根据最近批改的作答（最多 40 题）分析这名学生。", "Analyses the student from their latest marked work (up to 40 questions).")}</p>}
+    </div>
+  );
+}
+
+function PaperPane({ id, onBack, onOpen, onChanged }: { id: string; onBack: (memberId: string) => void; onOpen: (submissionId: string) => void; onChanged: () => void }) {
+  const { tr } = useI18n();
+  const [d, setD] = useState<PaperDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let off = false;
+    api<PaperDetail>(`/api/grading/papers/${id}`)
+      .then((r) => !off && setD(r))
+      .catch((e) => !off && setError(errMsg(e, tr("读取失败", "Could not load"))));
+    return () => {
+      off = true;
+    };
+  }, [id, tr]);
+  if (!d) return error ? <ErrorNote message={error} /> : <Skeleton className="h-64" />;
+  const p = d.paper;
+  const total = d.questions.reduce((a, q) => a + (q.score ?? 0), 0);
+  const scored = d.questions.filter((q) => q.score !== null).length;
+
+  const rediagnose = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      const r = await api<{ paper: PaperDetail["paper"] }>(`/api/grading/papers/${id}/diagnosis`, { method: "POST" });
+      setD({ ...d, paper: r.paper });
+    } catch (e) {
+      setError(errMsg(e, tr("诊断失败", "Diagnosis failed")));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const remove = async () => {
+    if (!window.confirm(tr("删除这张答卷和其中每道题的批改？", "Delete this paper and the marking of all its questions?"))) return;
+    try {
+      await api(`/api/grading/papers/${id}`, { method: "DELETE" });
+      onChanged();
+      onBack(d.member.id);
+    } catch (e) {
+      setError(errMsg(e, tr("删除失败", "Deleting failed")));
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => onBack(d.member.id)}>
+          <ArrowLeft className="h-3.5 w-3.5" />
+          {tr(`${d.member.name} 的学情`, `${d.member.name}'s record`)}
+        </Button>
+        {(d.role === "teacher" || d.own) && (
+          <Button variant="ghost" size="sm" className="ml-auto h-7 gap-1 text-xs text-destructive" onClick={() => void remove()}>
+            <Trash2 className="h-3 w-3" />
+            {tr("删除答卷", "Delete paper")}
+          </Button>
+        )}
+      </div>
+      <div className="flex flex-wrap items-baseline gap-2">
+        <h2 className="text-lg font-semibold">{p.title}</h2>
+        <span className="text-sm text-muted-foreground">
+          {d.member.name} · {new Date(p.created_at).toLocaleString()}
+        </span>
+        {p.status !== "marked" && <Badge variant={p.status === "failed" ? "destructive" : "warning"}>{p.status === "failed" ? tr("批改失败", "Failed") : tr("部分题目未能批改", "Some questions could not be marked")}</Badge>}
+      </div>
+      {p.error && <p className="text-sm text-destructive">{p.error}</p>}
+      {p.note && <p className="rounded-md bg-warning/10 px-3 py-2 text-xs">{tr("读卷备注：", "Note from reading: ")}{p.note}</p>}
+      <ErrorNote message={error} onDismiss={() => setError(null)} />
+
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {p.images.map((name, i) => (
+          <a key={name} href={paperImageUrl(p.id, name)} target="_blank" rel="noreferrer" className="shrink-0">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={paperImageUrl(p.id, name)} alt={tr(`第 ${i + 1} 页`, `Page ${i + 1}`)} className="h-40 rounded border border-border/60 object-cover" />
+          </a>
+        ))}
+      </div>
+
+      {d.questions.length > 0 && (
+        <div className="space-y-1">
+          <h3 className="text-sm font-semibold">
+            {tr(`逐题批改（${d.questions.length} 题）`, `Question by question (${d.questions.length})`)}
+            {scored > 0 && <span className="ml-2 text-xs font-normal text-muted-foreground">{tr(`均分 ${Math.round(total / scored)}`, `mean ${Math.round(total / scored)}`)}</span>}
+          </h3>
+          <div className="overflow-x-auto rounded-md border border-border/60">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/30 text-[11px] uppercase tracking-wider text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-1.5 text-left">{tr("题号", "No.")}</th>
+                  <th className="px-3 py-1.5 text-left">{tr("结果", "Result")}</th>
+                  <th className="px-3 py-1.5 text-right">{tr("得分", "Score")}</th>
+                  <th className="px-3 py-1.5 text-left">{tr("学生答案", "Student's answer")}</th>
+                  <th className="px-3 py-1.5 text-left">{tr("题目", "Question")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {d.questions.map((q) => (
+                  <tr key={q.id} className="cursor-pointer border-t border-border/40 hover:bg-muted/30" onClick={() => onOpen(q.id)}>
+                    <td className="px-3 py-1.5 tabular-nums">{q.question_no ?? ""}</td>
+                    <td className="px-3 py-1.5">
+                      <span className="flex flex-wrap gap-1">
+                        <Badge variant={q.status === "failed" ? "secondary" : verdictVariant(q.verdict)}>{q.status === "failed" ? tr("批改失败", "Failed") : verdictLabel(q.verdict, tr)}</Badge>
+                        {q.needs_review && <Badge variant="warning">{tr("需确认", "Check")}</Badge>}
+                      </span>
+                    </td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{q.score ?? "—"}</td>
+                    <td className="max-w-[10rem] truncate px-3 py-1.5">{q.final_answer ? <MathText text={q.final_answer} /> : "—"}</td>
+                    <td className="max-w-[20rem] truncate px-3 py-1.5 text-xs text-muted-foreground">
+                      <MathText text={q.problem} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {d.questions.some((q) => q.reference_source === "model") && (
+            <p className="text-[11px] text-muted-foreground">{tr("没有给答案的题由模型先解题作为参考答案，标“需确认”的请老师看一下。", "Questions without a given answer were solved by the model first; please check those marked “Check”.")}</p>
+          )}
+        </div>
+      )}
+
+      <div className="space-y-3 rounded-md border border-border/60 p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="text-sm font-semibold">{tr("这张答卷的诊断", "Diagnosis of this paper")}</h3>
+          {d.role === "teacher" && scored > 0 && (
+            <Button size="sm" variant="ghost" className="ml-auto h-7 gap-1.5 text-xs" disabled={busy} onClick={() => void rediagnose()}>
+              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+              {busy ? tr("分析中…", "Analysing…") : tr("重新分析（含老师的改判）", "Analyse again (with your corrections)")}
+            </Button>
+          )}
+        </div>
+        {p.diagnosis ? <DiagnosisView diagnosis={p.diagnosis} role={d.role} /> : <p className="text-xs text-muted-foreground">{tr("还没有诊断。", "No diagnosis yet.")}</p>}
+      </div>
     </div>
   );
 }

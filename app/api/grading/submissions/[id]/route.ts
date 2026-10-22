@@ -2,7 +2,7 @@ import { z } from "zod";
 import { bankRoute, jsonBody } from "@/lib/bank/http";
 import { BankError } from "@/lib/bank/store";
 import { lt } from "@/lib/llm/output-locale";
-import { deleteSubmission, getMember, putSubmission, visibleSubmission } from "@/lib/grading/store";
+import { deleteSubmission, getMember, getPaper, putSubmission, visibleSubmission } from "@/lib/grading/store";
 import { VERDICTS } from "@/lib/grading/types";
 import { publicSubmission } from "@/lib/grading/view";
 
@@ -12,7 +12,16 @@ type P = { id: string };
 export const GET = bankRoute<P>(async ({ owner, params }) => {
   const { submission, role } = visibleSubmission(owner, params.id);
   const member = getMember(submission.member_id);
-  return { role, member: { id: member.id, name: member.name }, submission: publicSubmission(submission, role), own: submission.submitted_by === owner };
+  let paper: { id: string; title: string; images: string[] } | undefined;
+  if (submission.paper_id) {
+    try {
+      const p = getPaper(submission.paper_id);
+      paper = { id: p.id, title: p.title, images: p.images };
+    } catch {
+      paper = undefined;
+    }
+  }
+  return { role, member: { id: member.id, name: member.name }, submission: publicSubmission(submission, role), own: submission.submitted_by === owner, ...(paper ? { paper } : {}) };
 });
 
 const patchSchema = z.object({ verdict: z.enum(VERDICTS).nullable().optional(), note: z.string().max(2000).optional() });

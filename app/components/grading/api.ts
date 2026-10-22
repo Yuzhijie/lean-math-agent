@@ -1,7 +1,7 @@
 /** Client-side types and calls for /api/grading. */
-import type { Member, Submission, Verdict } from "@/lib/grading/types";
+import type { Diagnosis, Member, Paper, Submission, Verdict } from "@/lib/grading/types";
 import type { LearningStats } from "@/lib/grading/stats";
-export type { Member, Submission, Verdict, LearningStats };
+export type { Diagnosis, Member, Paper, Submission, Verdict, LearningStats };
 export { api, errMsg } from "../bank/api";
 
 export type StudentRow = Omit<Member, "user_id"> & { linked: boolean; stats: LearningStats };
@@ -27,16 +27,39 @@ export interface SubmissionSummary {
   knowledge_points: string[];
 }
 
+export interface PaperSummary {
+  id: string;
+  title: string;
+  created_at: number;
+  status: Paper["status"];
+  questions: number;
+  summary: string | null;
+}
+
 export interface MemberDetail {
   role: "teacher" | "student";
   teacher: string;
   member: { id: string; name: string; class_id: string; linked: boolean };
   stats: LearningStats;
   submissions: SubmissionSummary[];
+  papers: PaperSummary[];
+  diagnosis: Diagnosis | null;
 }
+
+export interface PaperDetail {
+  role: "teacher" | "student";
+  own: boolean;
+  member: { id: string; name: string };
+  paper: Omit<Paper, "submitted_by">;
+  questions: (SubmissionSummary & { question_no: string | null; reference_source: string })[];
+}
+
+export const paperImageUrl = (paperId: string, name: string) => `/api/grading/papers/${encodeURIComponent(paperId)}/images/${encodeURIComponent(name)}`;
 
 export interface SubmissionDetail {
   role: "teacher" | "student";
+  /** The paper this question is on (its page photos are the work's photos). */
+  paper?: { id: string; title: string; images: string[] };
   /** The caller uploaded it (a student may delete only their own uploads). */
   own?: boolean;
   member: { id: string; name: string };
