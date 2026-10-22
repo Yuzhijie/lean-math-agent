@@ -72,7 +72,7 @@ export const POST = bankRoute(
     try {
       const r = await markWork({ problem: problem.text, figure: problem.figure, imageUrls: prepared.urls, reference });
       const saved = saveMarkingResult(base, { reference: r.reference, reading: r.reading, marking: r.marking, status: "marked" }, { isNew: true });
-      if (!saved) throw new BankError(lt("学生或班级在批改时被删除了", "The student or class was deleted while marking"), 410);
+      if (!saved) throw new BankError(lt("这个学生在批改时被移除了", "The student was removed while marking"), 410);
       return { submission: publicSubmission(saved, role) };
     } catch (e) {
       console.error("[grading]", e);

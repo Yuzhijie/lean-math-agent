@@ -12,7 +12,7 @@ export const GET = bankRoute<P>(async ({ owner, params }) => {
   const subs = submissionsOf(member.id);
   return {
     role,
-    class: { id: cls.id, name: cls.name },
+    teacher: cls.name,
     member: { id: member.id, name: member.name, class_id: member.class_id, linked: !!member.user_id },
     stats: learningStats(subs),
     submissions: subs.map(submissionSummary),

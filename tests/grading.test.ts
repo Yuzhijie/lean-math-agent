@@ -208,6 +208,23 @@ describe("classes, roster, joining and access", () => {
     expect(() => store.getSubmission("s1x")).toThrow();
   });
 
+  it("keeps one student list per teacher, folding older classes into it", () => {
+    expect(store.teacherGroup("t2")).toBeUndefined();
+    const a = store.createClass("t2", "老师甲");
+    const b = store.createClass("t2", "第二个班");
+    const x = store.addMember("t2", a.id, "甲");
+    const y = store.addMember("t2", b.id, "乙");
+    store.putSubmission({ id: "sub-b", class_id: b.id, member_id: y.id, submitted_by: "t2", problem: { text: "p" }, reference: { source: "none" }, images: [], status: "failed", created_at: 1 });
+    const g = store.teacherGroup("t2")!;
+    expect(g.id).toBe(a.id);
+    expect(store.classesTaughtBy("t2")).toHaveLength(1);
+    expect(store.membersOf(g.id).map((m) => m.id).sort()).toEqual([x.id, y.id].sort());
+    expect(store.getSubmission("sub-b").class_id).toBe(a.id);
+    expect(store.classByCode(b.join_code)).toBeUndefined();
+    expect(store.ensureTeacherGroup("t2", "x").id).toBe(a.id);
+    expect(store.ensureTeacherGroup("t3", "王老师").name).toBe("王老师");
+  });
+
   it("works without SQLite (JSONL fallback)", () => {
     process.env.GRADING_STORE_BACKEND = "jsonl";
     try {

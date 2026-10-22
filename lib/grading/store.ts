@@ -127,7 +127,7 @@ function remove(kind: Kind, id: string): void {
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const WHAT: Record<string, [string, string]> = {
-  class: ["班级", "class"],
+  class: ["老师", "teacher"],
   student: ["学生", "student"],
   submission: ["作答", "submission"],
   image: ["照片", "photo"],
@@ -185,6 +185,31 @@ export function deleteClass(owner: string, id: string): void {
   remove("class", id);
 }
 
+// ── A teacher's students (one group per teacher; there is no class level in the UI) ──
+
+/**
+ * The teacher's student group, if any. Data from when teachers could keep several classes is
+ * folded into the oldest one the first time it is read: rosters and work move over, the other
+ * classes (and their join codes) go away.
+ */
+export function teacherGroup(owner: string): GradingClass | undefined {
+  const all = classesTaughtBy(owner);
+  if (all.length <= 1) return all[0];
+  const [keep, ...rest] = all;
+  const d = db();
+  for (const old of rest) {
+    for (const m of [...d.docs.member.values()].filter((x) => x.class_id === old.id)) put("member", { ...m, class_id: keep.id });
+    for (const sub of [...d.docs.submission.values()].filter((x) => x.class_id === old.id)) put("submission", { ...sub, class_id: keep.id });
+    remove("class", old.id);
+  }
+  return keep;
+}
+
+/** The teacher's group, created on first use (`name` is how students see the teacher). */
+export function ensureTeacherGroup(owner: string, name: string): GradingClass {
+  return teacherGroup(owner) ?? createClass(owner, name);
+}
+
 export function classByCode(code: string): GradingClass | undefined {
   const c = code.trim().toUpperCase();
   return [...db().docs.class.values()].find((x) => x.join_code === c);
@@ -239,7 +264,7 @@ export function removeMember(owner: string, memberId: string): void {
  */
 export function joinClass(userId: string, code: string, opts: { memberId?: string; name?: string }): { cls: GradingClass; member: Member } {
   const cls = classByCode(code);
-  if (!cls) throw new BankError(lt("没有这个班级码", "No class has this code"), 404);
+  if (!cls) throw new BankError(lt("没有这个邀请码", "No teacher has this invite code"), 404);
   const mine = membersOf(cls.id).find((m) => m.user_id === userId);
   if (mine) return { cls, member: mine };
   if (opts.memberId) {

@@ -160,7 +160,7 @@ export function SubmitWork({
         <div className="space-y-1">
           <FieldLabel>{tr("学生", "Student")}</FieldLabel>
           <NativeSelect value={memberId} onChange={setMemberId} ariaLabel={tr("学生", "Student")}>
-            <option value="">{students.length ? tr("选择学生…", "Choose a student…") : tr("班级里还没有学生", "No students in this class yet")}</option>
+            <option value="">{students.length ? tr("选择学生…", "Choose a student…") : tr("还没有学生", "No students yet")}</option>
             {students.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.label}
