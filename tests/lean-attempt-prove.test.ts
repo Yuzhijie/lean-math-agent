@@ -25,7 +25,7 @@ vi.mock("@/lib/prover/context", () => ({ buildProverContext: m.buildProverContex
 vi.mock("@/lib/prover/replay", () => ({ replayRecalled: m.replayRecalled }));
 vi.mock("@/lib/lean/proof-memory", () => ({ rememberRepair: m.rememberRepair }));
 
-const { attemptLeanFormalization, leanAttemptRetryable, multiplicativeOrder, orderConditions, proofHints } = await import("@/lib/pipeline/lean-attempt");
+const { attemptLeanFormalization, leanAttemptRetryable, multiplicativeOrder, orderConditions, primePowers, proofHints } = await import("@/lib/pipeline/lean-attempt");
 const { hugePower } = await import("@/lib/compute/nat-expr");
 
 const GCD = {
@@ -224,6 +224,16 @@ describe("hints for the prover and the sorry report", () => {
     ]);
     expect(proofHints(T2).join("\n")).toContain("Nat.not_le.mpr hlt");
     expect(orderConditions(": IsLeast {n : ℕ | 0 < n ∧ padicValNat 3 (2 ^ n - 1) = 5} 162")?.map((o) => o.order)).toEqual([162]);
+    // a product modulus is split into prime powers (Lean-checked: 81 → 54, 25 → 20, 127 → 7, lcm 3780)
+    const T3 = ": (3 ^ 4 * 5 ^ 2 * 127 : ℕ) ∣ (2 ^ 3780 - 1) ∧ ∀ m : ℕ, 0 < m → (3 ^ 4 * 5 ^ 2 * 127 : ℕ) ∣ (2 ^ m - 1) → 3780 ≤ m";
+    expect(orderConditions(T3)?.map((o) => [o.modulus, o.order, o.partOf])).toEqual([
+      [81, 54, "257175"],
+      [25, 20, "257175"],
+      [127, 7, "257175"],
+    ]);
+    expect(proofHints(T3).join("\n")).toContain("lcm 3780");
+    expect(orderConditions(": ∀ n : ℕ, 0 < n → 257175 ∣ 2 ^ n - 1 → 3780 ≤ n")?.map((o) => o.order)).toEqual([54, 20, 7]);
+    expect(primePowers(257175n)).toEqual([81n, 25n, 127n]);
     expect(multiplicativeOrder(2, 243)).toBe(162);
     expect(multiplicativeOrder(2, 6)).toBeUndefined();
   });

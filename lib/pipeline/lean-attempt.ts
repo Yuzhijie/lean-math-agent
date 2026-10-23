@@ -265,12 +265,44 @@ export interface OrderCondition {
   base: number;
   /** The multiplicative order of base mod modulus: m ∣ a ^ n - 1 ⇔ order ∣ n. */
   order: number;
+  /** A prime-power part of a composite modulus as written (`257175` for 81, 25, 127). */
+  partOf?: string;
 }
 
 const NUM = String.raw`\(?\s*(\d+)\s*(?::\s*(?:ℕ|ℤ|Nat|Int)\s*)?\)?`;
 /** `v (a ^ n - 1) e`-style valuation conditions: `padicValNat 3 (2 ^ n - 1) = 5`, or a helper such as `ExactValuation 3 (2 ^ m - 1) 5` (p ^ e ∣ …). */
 const PADIC_ATOM = new RegExp(String.raw`(¬\s*\(*\s*)?padicValNat\s+${NUM}\s+\(\s*${NUM}\s*\^\s*([a-z]\w*)\s*-\s*1\s*\)\s*(=|≥)\s*(\d+)`, "g");
 const HELPER_ATOM = new RegExp(String.raw`(¬\s*\(*\s*)?\b([A-Za-z_][\w']*)\s+${NUM}\s+\(\s*${NUM}\s*\^\s*([a-z]\w*)\s*-\s*1\s*\)\s+(\d+)`, "g");
+/** A product modulus `(3 ^ 4 * 5 ^ 2 * 127 : ℕ) ∣ 2 ^ m - 1` (parenthesised or not). */
+const FACTOR = String.raw`\d+(?:\s*\^\s*\d+)?`;
+const PRODUCT_ATOM = new RegExp(String.raw`(¬\s*\(*\s*)?\(?\s*(${FACTOR}(?:\s*\*\s*${FACTOR})+)\s*(?::\s*(?:ℕ|ℤ|Nat|Int)\s*)?\)?\s*∣\s*\(?\s*${NUM}\s*\^\s*([a-z]\w*)\s*\)?\s*-\s*1\b`, "g");
+
+/** Value of `3 ^ 4 * 5 ^ 2 * 127`. */
+function productValue(expr: string): bigint {
+  return expr
+    .split("*")
+    .map((f) => f.split("^").map((x) => BigInt(x.trim())))
+    .reduce((acc, [b, e]) => acc * b ** (e ?? 1n), 1n);
+}
+
+/** Prime-power factors of n (trial division; undefined when a factor above 10^6 is left over). */
+export function primePowers(n: bigint): bigint[] | undefined {
+  const out: bigint[] = [];
+  let m = n;
+  for (let p = 2n; p * p <= m; p++) {
+    if (p > 1_000_000n) return undefined;
+    if (m % p) continue;
+    let q = 1n;
+    while (m % p === 0n) {
+      m /= p;
+      q *= p;
+    }
+    out.push(q);
+  }
+  if (m > 1n) out.push(m);
+  return out;
+}
+
 const ORDER_ATOM = new RegExp(String.raw`(¬\s*\(*\s*)?\(?\s*${NUM}(?:\s*\^\s*(\d+))?\s*\)?\s*∣\s*\(?\s*${NUM}\s*\^\s*([a-z]\w*)\s*\)?\s*-\s*1\b`, "g");
 
 /** Multiplicative order of a mod m (a, m coprime), or undefined when too large to search. */
@@ -295,26 +327,38 @@ export function orderConditions(t: string): OrderCondition[] | undefined {
   // "smallest": `→ B ≤ n`, `n ≥ B`, `IsLeast`, or `n < B → ¬ …`
   if (!/→\s*\d+\s*≤\s*[a-z]\w*|[a-z]\w*\s*≥\s*\d+|IsLeast|[a-z]\w*\s*<\s*\d+\s*→/.test(t)) return undefined;
   const out: OrderCondition[] = [];
-  const add = (text: string, p: string, e: string | undefined, b: string) => {
-    const modulus = Number(BigInt(p) ** BigInt(e ?? "1"));
+  // A composite modulus is split into prime powers: their orders are small, while the order mod
+  // the whole number can be large enough that `decide` over r < k hits Lean's recursion limit.
+  const add = (text: string, value: bigint, b: string) => {
     const base = Number(b);
-    if (!Number.isSafeInteger(modulus) || modulus > 10_000_000 || out.some((o) => o.modulus === modulus && o.base === base)) return;
-    const order = multiplicativeOrder(base, modulus);
-    if (order) out.push({ text: text.trim(), modulus, base, order });
+    const parts = primePowers(value);
+    if (!parts?.length) return;
+    for (const q of parts) {
+      const modulus = Number(q);
+      if (!Number.isSafeInteger(modulus) || modulus > 10_000_000 || out.some((o) => o.modulus === modulus && o.base === base)) continue;
+      const order = multiplicativeOrder(base, modulus);
+      if (order) out.push({ text: text.trim(), modulus, base, order, ...(parts.length > 1 ? { partOf: value.toString() } : {}) });
+    }
   };
   // a helper (let-defined) whose definition says p ^ e ∣ m
   const helpers = new Set([...t.matchAll(/let\s+([A-Za-z_][\w']*)\s*:[^:=]*:=\s*fun\s+(\w+)\s+(\w+)\s+(\w+)\s*=>\s*\2\s*\^\s*\4\s*∣\s*\3/g)].map((m) => m[1]));
-  const atoms: { text: string; p: string; e?: string; base: string; negated: boolean }[] = [
+  const atoms: { text: string; p: string; e?: string; base: string; negated: boolean; value?: bigint }[] = [
+    ...[...t.matchAll(PRODUCT_ATOM)].map((m) => ({ text: m[0], p: m[2], value: productValue(m[2]), base: m[3], negated: !!m[1] })),
     ...[...t.matchAll(ORDER_ATOM)].map((m) => ({ text: m[0], p: m[2], e: m[3], base: m[4], negated: !!m[1] })),
     ...[...t.matchAll(PADIC_ATOM)].map((m) => ({ text: m[0], p: m[2], e: m[6], base: m[3], negated: !!m[1] })),
     ...[...t.matchAll(HELPER_ATOM)].filter((m) => helpers.has(m[2])).map((m) => ({ text: m[0], p: m[3], e: m[6], base: m[4], negated: !!m[1] })),
   ];
+  // ORDER_ATOM also matches the last factor of a product (`127 ∣ 2 ^ m - 1` inside `3 ^ 4 * 5 ^ 2 * 127 ∣ …`).
+  const productTexts = atoms.filter((a) => a.value !== undefined).map((a) => a.text);
+  for (let i = atoms.length - 1; i >= 0; i--) {
+    if (atoms[i].value === undefined && productTexts.some((p) => p !== atoms[i].text && p.includes(atoms[i].text.trim()))) atoms.splice(i, 1);
+  }
   // `¬ p ^ (e+1) ∣ …` next to `p ^ e ∣ …` is the "exactly e" half and does not constrain n; a negated
   // conjunction (`n < B → ¬ (… ∧ …)`) does, through each of its conditions.
   const positive = atoms.filter((a) => !a.negated);
   for (const a of atoms) {
     if (a.negated && positive.some((q) => q.base === a.base && q.p === a.p)) continue;
-    add(a.text, a.p, a.e, a.base);
+    add(a.text, a.value ?? BigInt(a.p) ** BigInt(a.e ?? "1"), a.base);
   }
   return out.length ? out : undefined;
 }
@@ -324,7 +368,14 @@ function orderHint(orders: OrderCondition[]): string {
   const l = orders.reduce((acc, o) => (acc / g(acc, o.order)) * o.order, 1);
   return [
     `"Smallest n" with \`m ∣ a ^ n - 1\` conditions: do NOT check every n below the bound (\`interval_cases\`, \`decide\` over n < B time out — "Lean REPL command timed out"). Use multiplicative orders: m ∣ a ^ n - 1 holds exactly when ord ∣ n. Here (computed):`,
-    ...orders.map((o) => `- \`${o.modulus} ∣ ${o.base} ^ n - 1\` ⇔ \`${o.order} ∣ n\` (${o.order} = order of ${o.base} mod ${o.modulus})`),
+    ...orders.map(
+      (o) =>
+        `- \`${o.modulus} ∣ ${o.base} ^ n - 1\` ⇔ \`${o.order} ∣ n\` (${o.order} = order of ${o.base} mod ${o.modulus})` +
+        (o.partOf ? ` — a part of ${o.partOf}: get it with \`Nat.dvd_trans (by norm_num) h\` from \`h : … ∣ ${o.base} ^ n - 1\`` : ""),
+    ),
+    ...(orders.some((o) => o.partOf)
+      ? ["- a composite modulus: work with each prime-power part as above, never with the order mod the whole number (`decide` over r < k with k in the thousands hits \"maximum recursion depth\")."]
+      : []),
     ...(orders.length > 1 ? [`- together: the lcm ${l} divides n, so n ≥ ${l}.`] : []),
     "A proof that Lean accepts (adapt the numbers):",
     "```lean",
