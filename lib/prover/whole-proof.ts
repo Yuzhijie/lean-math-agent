@@ -24,7 +24,7 @@ import { mainAssignmentIndex, sanitizeLeanBody } from "../lean/sanitize";
 import { formatSuggestions, librarySearchSuggestions } from "../lean/suggest";
 import { CostCapError, LlmError, sampleText, type ChatMessage } from "../llm/client";
 import { WHOLE_PROOF_SYSTEM, nativeProverPrompt, nativeProverRepairPrompt, wholeProofRepairMessage, wholeProofUserMessage } from "../llm/prompts";
-import { nativeProverSettings, proverPromptStyle } from "../llm/config";
+import { nativeProverSettings, proverModelName, proverPromptStyle } from "../llm/config";
 import { costCapReached, expectedLatencyMs, scopeCostCap } from "../llm/usage-tracker";
 import { lt } from "../llm/output-locale";
 
@@ -49,6 +49,12 @@ export interface WholeProofConfig {
    */
   earlyStop: boolean;
   useMathlib: boolean;
+  /**
+   * Keep every model call inside `timeBudgetMs`, the first one included. Off for the theorem's own
+   * whole-proof stage (a native prover's first call gets LLM_PROVER_TIMEOUT_MS); on for a sketch
+   * hole, whose budget is a minute — a local prover there once waited 15 minutes per hole.
+   */
+  strictBudget?: boolean;
 }
 
 export function loadWholeProofConfig(overrides: Partial<WholeProofConfig> = {}): WholeProofConfig {
@@ -65,6 +71,7 @@ export function loadWholeProofConfig(overrides: Partial<WholeProofConfig> = {}):
     suggest: overrides.suggest ?? process.env.WHOLE_PROOF_SUGGEST !== "false",
     earlyStop: overrides.earlyStop ?? process.env.PROOF_EARLY_STOP === "true",
     useMathlib: overrides.useMathlib ?? true,
+    strictBudget: overrides.strictBudget ?? false,
   };
 }
 
@@ -215,7 +222,26 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
     roundsRun = round + 1;
 
     // ── Sample ────────────────────────────────────────────────────
-    progress({ round, status: "sampling", detail: lt(`采样 ${cfg.samples} 个完整证明…`, `Sampling ${cfg.samples} whole proofs…`) });
+    let timeoutMs = nativeSettings
+      ? round === 0
+        ? nativeSettings.timeoutMs
+        : Math.max(60_000, Math.min(timeLeft(), nativeSettings.timeoutMs))
+      : round === 0
+        ? undefined
+        : Math.max(30_000, Math.min(timeLeft(), 180_000));
+    if (cfg.strictBudget) timeoutMs = Math.max(30_000, Math.min(timeoutMs ?? Infinity, timeLeft()));
+    const waitMin = timeoutMs !== undefined ? Math.round(timeoutMs / 60_000) : 0;
+    progress({
+      round,
+      status: "sampling",
+      detail:
+        nativeSettings && waitMin >= 2
+          ? lt(
+              `证明模型 ${proverModelName()} 生成 ${cfg.samples} 个完整证明（本地模型较慢，最长等 ${waitMin} 分钟）…`,
+              `Prover ${proverModelName()} writing ${cfg.samples} whole proofs (a local model is slow; waiting up to ${waitMin} min)…`,
+            )
+          : lt(`采样 ${cfg.samples} 个完整证明…`, `Sampling ${cfg.samples} whole proofs…`),
+    });
     let samples: string[];
     try {
       samples = await sampleText({
@@ -224,13 +250,7 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
         role: "prover",
         temperature: nativeSettings?.temperature ?? cfg.temperature,
         maxTokens: nativeSettings ? Math.max(cfg.maxTokens, nativeSettings.maxTokens) : cfg.maxTokens,
-        timeoutMs: nativeSettings
-          ? round === 0
-            ? nativeSettings.timeoutMs
-            : Math.max(60_000, Math.min(timeLeft(), nativeSettings.timeoutMs))
-          : round === 0
-            ? undefined
-            : Math.max(30_000, Math.min(timeLeft(), 180_000)),
+        timeoutMs,
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

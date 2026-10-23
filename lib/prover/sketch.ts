@@ -321,7 +321,7 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
                 theoremType: lemma.statement,
                 problemText: args.problemText,
                 opens: args.opens,
-                config: { samples: cfg.samples, rounds: 1, timeBudgetMs: budget, useMathlib: cfg.useMathlib, suggest: false },
+                config: { samples: cfg.samples, rounds: 1, timeBudgetMs: budget, useMathlib: cfg.useMathlib, suggest: false, strictBudget: true },
               });
               llmCalls += pr.samples;
               if (pr.ok && pr.tactics) {

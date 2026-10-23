@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { _resetJobsForTests, CancelledError, cancelJob, currentSignal, listJobs, runJob, throwIfCancelled, TooManyJobsError } from "@/lib/jobs";
+import { _resetJobsForTests, CancelledError, cancelJob, currentSignal, listJobs, runJob, solveTimeLimitMs, throwIfCancelled, TimeLimitError, TooManyJobsError } from "@/lib/jobs";
 
 beforeEach(() => {
   _resetJobsForTests();
@@ -109,5 +109,25 @@ describe("the LLM client and Lean honour a cancel", () => {
     await expect(r).rejects.toBeInstanceOf(CancelledError);
     expect(fetchMock).toHaveBeenCalledTimes(1); // no retry, no fallback after the cancel
     vi.unstubAllGlobals();
+  });
+});
+
+describe("solve time limit", () => {
+  it("stops a running job after its limit with TimeLimitError (a CancelledError)", async () => {
+    const g = gate();
+    const r = runJob({ owner: "u1", kind: "solve", timeLimitMs: 20 }, g.body);
+    const e = await r.catch((x) => x);
+    expect(e).toBeInstanceOf(TimeLimitError);
+    expect(e).toBeInstanceOf(CancelledError);
+    expect(listJobs("u1")[0].state).toBe("cancelled");
+  });
+
+  it("reads SOLVE_TIME_LIMIT_MIN (default 40, 0 = none)", () => {
+    expect(solveTimeLimitMs()).toBe(40 * 60_000);
+    process.env.SOLVE_TIME_LIMIT_MIN = "0";
+    expect(solveTimeLimitMs()).toBeUndefined();
+    process.env.SOLVE_TIME_LIMIT_MIN = "90";
+    expect(solveTimeLimitMs()).toBe(90 * 60_000);
+    delete process.env.SOLVE_TIME_LIMIT_MIN;
   });
 });

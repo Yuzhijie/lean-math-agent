@@ -314,6 +314,11 @@ export function proverPromptStyle(): ProverPromptStyle {
   return first && /prover/i.test(first) ? "native" : "chat";
 }
 
+/** The first configured prover model's name (for progress messages), else "prover". */
+export function proverModelName(): string {
+  return parseFallbackModels(process.env.LLM_PROVER_MODEL ?? process.env.LLM_PROVER_MODELS)[0] ?? "prover";
+}
+
 /** Settings for native prover calls: long chain-of-thought output needs room and time. */
 export function nativeProverSettings(): { maxTokens: number; timeoutMs: number; temperature?: number } {
   const num = (name: string) => {

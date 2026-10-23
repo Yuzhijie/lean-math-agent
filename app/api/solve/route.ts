@@ -2,7 +2,8 @@ import { getSessionForRequest, createSessionForRequest } from "@/lib/session-acc
 import { NextResponse } from "next/server";
 import { updateSession, saveSessionToDisk } from "@/lib/session-store";
 import { LlmError } from "@/lib/llm/client";
-import { CancelledError, runJob, TooManyJobsError } from "@/lib/jobs";
+import { CancelledError, runJob, solveTimeLimitMs, TimeLimitError, TooManyJobsError } from "@/lib/jobs";
+import { timeLimitMessage } from "@/lib/pipeline/time-limit";
 import { admitSolve, recordSpend, runCostCap } from "@/lib/quota";
 import { withUsageScope } from "@/lib/llm/usage-tracker";
 import { classifyProblem } from "@/lib/llm/classify-problem";
@@ -76,9 +77,13 @@ async function handlePOST(req: Request) {
 
   // A job like the streaming route's: queued behind running solves, cancelled when the client goes away.
   try {
-    return await runJob({ owner, kind: "solve", sessionId: sess.id, signal: req.signal, maxActive: admit.concurrent }, () => solveIn(sess));
+    return await runJob({ owner, kind: "solve", sessionId: sess.id, signal: req.signal, maxActive: admit.concurrent, timeLimitMs: solveTimeLimitMs() }, () => solveIn(sess));
   } catch (e) {
     if (e instanceof TooManyJobsError) return NextResponse.json({ error: e.message, session_id: sess.id }, { status: 429 });
+    if (e instanceof TimeLimitError) {
+      updateSession(sess.id, { pipeline_stage: "cancelled" });
+      return NextResponse.json({ error: "time_limit", detail: timeLimitMessage(e), session_id: sess.id }, { status: 504 });
+    }
     if (e instanceof CancelledError) {
       updateSession(sess.id, { pipeline_stage: "cancelled" });
       return NextResponse.json({ error: "cancelled", session_id: sess.id }, { status: 499 });

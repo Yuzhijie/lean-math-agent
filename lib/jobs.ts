@@ -20,6 +20,21 @@ export class CancelledError extends Error {
   }
 }
 
+/** The job ran longer than its time limit (SOLVE_TIME_LIMIT_MIN) and was stopped. */
+export class TimeLimitError extends CancelledError {
+  constructor(public readonly limitMs: number) {
+    super(`time limit of ${Math.round(limitMs / 60_000)} min reached`);
+    this.name = "TimeLimitError";
+  }
+}
+
+/** Wall-clock limit of a solve (SOLVE_TIME_LIMIT_MIN, default 40 minutes; 0 = none). */
+export function solveTimeLimitMs(): number | undefined {
+  const raw = process.env.SOLVE_TIME_LIMIT_MIN;
+  const v = raw === undefined || raw.trim() === "" ? 40 : Number(raw);
+  return Number.isFinite(v) && v > 0 ? v * 60_000 : undefined;
+}
+
 /** Too many jobs of this user running or waiting. */
 export class TooManyJobsError extends Error {
   constructor(public readonly limit: number) {
@@ -116,6 +131,8 @@ export async function runJob<T>(
     signal?: AbortSignal;
     /** Jobs this owner may have running or waiting (the plan's concurrentSolvers; -1 = no limit); default JOBS_PER_USER. */
     maxActive?: number;
+    /** Stop the job this long after it started running (not counting the queue): TimeLimitError. */
+    timeLimitMs?: number;
     onStart?: (job: JobInfo) => void;
     onQueued?: (position: number) => void;
   },
@@ -162,15 +179,25 @@ export async function runJob<T>(
   }
   job.state = "running";
   job.startedAt = Date.now();
+  let timedOut = false;
+  const timer =
+    opts.timeLimitMs && opts.timeLimitMs > 0
+      ? setTimeout(() => {
+          timedOut = true;
+          job.controller.abort();
+        }, opts.timeLimitMs)
+      : undefined;
   try {
     const out = await storage.run({ signal: job.controller.signal, jobId: job.id }, () => fn(job.controller.signal));
     job.state = job.controller.signal.aborted ? "cancelled" : "done";
     return out;
   } catch (e) {
     job.state = job.controller.signal.aborted ? "cancelled" : "failed";
+    if (timedOut) throw new TimeLimitError(opts.timeLimitMs!);
     if (job.controller.signal.aborted && !(e instanceof CancelledError)) throw new CancelledError();
     throw e;
   } finally {
+    if (timer) clearTimeout(timer);
     job.endedAt = Date.now();
     outer?.removeEventListener("abort", onOuterAbort);
     running--;
