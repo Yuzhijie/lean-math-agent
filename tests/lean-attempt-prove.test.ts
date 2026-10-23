@@ -25,7 +25,7 @@ vi.mock("@/lib/prover/context", () => ({ buildProverContext: m.buildProverContex
 vi.mock("@/lib/prover/replay", () => ({ replayRecalled: m.replayRecalled }));
 vi.mock("@/lib/lean/proof-memory", () => ({ rememberRepair: m.rememberRepair }));
 
-const { attemptLeanFormalization, leanAttemptRetryable, multiplicativeOrder, orderConditions, orderProofScripts, primePowers, proofHints } = await import("@/lib/pipeline/lean-attempt");
+const { attemptLeanFormalization, leanAttemptRetryable, bigExponents, multiplicativeOrder, orderConditions, orderProofScripts, primePowers, proofHints } = await import("@/lib/pipeline/lean-attempt");
 const { hugePower } = await import("@/lib/compute/nat-expr");
 
 const GCD = {
@@ -111,9 +111,9 @@ describe("attemptLeanFormalization", () => {
   it("writes the order proof itself for \"smallest n with m ∣ 2^n - 1\", before any model call", async () => {
     const type = ": (3 ^ 4 * 5 ^ 2 * 127 : ℕ) ∣ (2 ^ 3780 - 1) ∧ ∀ n : ℕ, 0 < n → (3 ^ 4 * 5 ^ 2 * 127 : ℕ) ∣ (2 ^ n - 1) → 3780 ≤ n";
     m.autoformalize.mockResolvedValue({ ...GCD, theorem_name: "smallest_n", theorem_type: type, formal_statement: `theorem smallest_n ${type} := by sorry` });
-    m.verifyLeanSource.mockResolvedValueOnce({ ...okVerify, ok: false }).mockResolvedValue(okVerify);
+    m.verifyLeanSource.mockResolvedValue(okVerify);
     const a = await attemptLeanFormalization("求最小的正整数 $n$，使得 $3^4\\cdot 5^2\\cdot 127\\mid 2^n-1$。", { answer: "3780" });
-    expect(a).toMatchObject({ success: true, strategy: "order", attempts: 2 });
+    expect(a).toMatchObject({ success: true, strategy: "order", attempts: 1 });
     expect(a.proof_code).toContain("ord 2 127 7 n");
     expect(m.proveWholeTheorem).not.toHaveBeenCalled();
     expect(m.rememberVerifiedProof).toHaveBeenCalledWith(expect.objectContaining({ strategy: "order" }));
@@ -253,6 +253,36 @@ describe("hints for the prover and the sorry report", () => {
     expect(orderProofScripts(T2)[0]).toMatch(/^intro ExactValuation\n/);
     expect(orderProofScripts(T2)[0]).toContain("Nat.not_le.mpr hlt");
     expect(orderProofScripts(": ∀ n : ℕ, n + 0 = n")).toEqual([]);
+    // congruence forms, two bases, and closed facts with an exponent above 2^24 (all checked in Lean)
+    const T29 =
+      ": Nat.ModEq ((3 : ℕ)^6 * 5^3 * 7^2) (2^35380800) 1 ∧ Nat.ModEq ((2 : ℕ)^8 * 13^2) (3^35380800) 1 ∧ ∀ m : ℕ, 0 < m → (Nat.ModEq ((3 : ℕ)^6 * 5^3 * 7^2) (2^m) 1 ∧ Nat.ModEq ((2 : ℕ)^8 * 13^2) (3^m) 1) → 35380800 ≤ m";
+    expect(orderConditions(T29)?.map((o) => `${o.base}:${o.modulus}:${o.order}`)).toEqual(["2:729:486", "2:125:100", "2:49:21", "3:256:64", "3:169:39"]);
+    expect(orderProofScripts(T29)[0]).toContain("rw [show (35380800 : ℕ) = 5948 * 5948 + 2096 by norm_num, pow_add, pow_mul]");
+    expect(orderProofScripts(T29)[0]).toContain("have o4 : 39 ∣ n := ord 3 169 39 n");
+    expect(orderConditions(": (2 ^ 907200 : ℕ) % (3 ^ 5 * 5 ^ 3) = 1 % (3 ^ 5 * 5 ^ 3) ∧ ∀ n : ℕ, 0 < n → (3 ^ n : ℕ) % (2 ^ 8 * 7 ^ 2) = 1 % (2 ^ 8 * 7 ^ 2) → 1344 ≤ n")?.map((o) => o.order)).toEqual([64, 42]);
+    expect(orderConditions(": ∀ n : ℕ, 0 < n → 2 ^ n ≡ 1 [MOD 3 ^ 5 * 5 ^ 3] → 8100 ≤ n")?.map((o) => o.order)).toEqual([162, 100]);
+    // review cases: an "exactly" half is not a condition; things applied to the power are not the power
+    const ords = (t: string) => orderConditions(t)?.map((o) => `${o.base}:${o.modulus}:${o.order}`);
+    expect(ords(": ∀ n : ℕ, 0 < n → 2 ^ n ≡ 1 [MOD 3 ^ 5] ∧ ¬ 2 ^ n ≡ 1 [MOD 3 ^ 6] → 162 ≤ n")).toEqual(["2:243:162"]);
+    for (const bad of [
+      ": ∀ n : ℕ, 0 < n → 3 * 2 ^ n % 7 = 1 → 3 ≤ n",
+      ": ∀ n : ℕ, 0 < n → 3 * 2 ^ n ≡ 1 [MOD 7] → 3 ≤ n",
+      ": ∀ n : ℕ, 0 < n → f 2 ^ n % 7 = 1 → 3 ≤ n",
+      ": ∀ n : ℕ, 0 < n → 2 ^ n % 3 ^ 5 * 5 ^ 3 = 1 → 3 ≤ n",
+      ": ∀ n : ℕ, 0 < n → 2 ^ n % 7 = 1 + k → 3 ≤ n",
+      ": ∀ n : ℕ, 0 < n → (2 ^ n : ℤ) % 7 = 1 → 3 ≤ n",
+    ])
+      expect(ords(bad), bad).toBeUndefined();
+    // only conditions on the minimised variable
+    expect(ords(": ∀ n k : ℕ, 0 < n → 2 ^ n % 7 = 1 % 7 → 3 ≤ n ∧ 4 ^ k % 15 = 1 % 15")).toEqual(["2:7:3"]);
+    // orders too large to check in a script: a hint, no script
+    expect(orderProofScripts(": ∀ n : ℕ, 0 < n → 2 ^ n ≡ 1 [MOD 1000003] → 1000002 ≤ n")).toEqual([]);
+    // huge powers: split only when safe
+    expect(bigExponents("Nat.ModEq M (2^35380800) 1")).toEqual([{ n: "35380800", d: "5948", e: "5948", r: "2096" }]);
+    expect(bigExponents("2 ^ (35380800 * 2) % 7")).toBeUndefined();
+    expect(bigExponents("2 ^ 1099511627776 % 7 = 2")).toBeUndefined();
+    expect(bigExponents("2 ^ 35380800 ^ 2")).toBeUndefined();
+    expect(bigExponents("2 ^ 100 = 5")).toEqual([]);
     expect(multiplicativeOrder(2, 243)).toBe(162);
     expect(multiplicativeOrder(2, 6)).toBeUndefined();
   });

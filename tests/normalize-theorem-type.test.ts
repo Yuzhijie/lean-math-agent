@@ -37,3 +37,18 @@ describe("normalizeTheoremType", () => {
     expect(normalizeTheoremType(complex)).toBe(`: ${complex}`);
   });
 });
+
+describe("binders after the colon without ∀", () => {
+  it("adds the missing ∀ and leaves everything else alone", () => {
+    expect(normalizeTheoremType(": (A B C : ℝ × ℝ) (u v : ℝ), let d := 1; A = B")).toBe(": ∀ (A B C : ℝ × ℝ) (u v : ℝ), let d := 1; A = B");
+    expect(normalizeTheoremType(": (f : ℕ → ℕ) (h : f 0 = 1), f 0 = 1")).toBe(": ∀ (f : ℕ → ℕ) (h : f 0 = 1), f 0 = 1");
+    expect(normalizeTheoremType(": ∀ (x : ℕ), x = x")).toBe(": ∀ (x : ℕ), x = x");
+    expect(normalizeTheoremType(": (x : ℕ) = x")).toBe(": (x : ℕ) = x");
+    expect(normalizeTheoremType(": (n : ℕ) → n = n")).toBe(": (n : ℕ) → n = n");
+    expect(normalizeTheoremType(": (Finset.range 3).card = 3")).toBe(": (Finset.range 3).card = 3");
+    expect(normalizeTheoremType("(n : ℕ) : n + 0 = n")).toBe("(n : ℕ) : n + 0 = n");
+    expect(normalizeTheoremType("(x : ℕ) (y : ℕ), x = y")).toBe(": ∀ (x : ℕ) (y : ℕ), x = y");
+    expect(normalizeTheoremType(": (x : ℕ)\n  (y : ℕ), x = y")).toBe(": ∀ (x : ℕ)\n  (y : ℕ), x = y");
+    expect(normalizeTheoremType(": (p : ℕ) [Fact p.Prime] (h : 2 < p), p ≠ 2")).toBe(": ∀ (p : ℕ) [Fact p.Prime] (h : 2 < p), p ≠ 2");
+  });
+});

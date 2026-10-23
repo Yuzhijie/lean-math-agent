@@ -198,7 +198,7 @@ export function proofHints(theoremType: string, opts: { tooMany?: boolean; huge?
       ].join("\n"),
     );
   }
-  const orders = !opts.huge ? orderConditions(t) : undefined;
+  const orders = orderConditions(t);
   if (orders) hints.push(orderHint(orders));
   if (/∣/.test(t) && /\(\s*\w+\s*:\s*(ℕ|ℤ|Nat|Int)\s*\)|∀\s*\w+\s*:\s*(ℕ|ℤ)/.test(t) && /↔|∃/.test(t)) {
     hints.push(
@@ -267,6 +267,10 @@ export interface OrderCondition {
   order: number;
   /** A prime-power part of a composite modulus as written (`257175` for 81, 25, 127). */
   partOf?: string;
+  /** How the condition is written: `M ∣ a ^ n - 1` (or a helper / padicValNat), a congruence `≡ 1` / `% M = 1 % M`, or `a ^ n % M = 1`. */
+  form?: "dvd" | "modeq" | "mod1";
+  /** The modulus as written in the statement (for `mod1`). */
+  modText?: string;
 }
 
 const NUM = String.raw`\(?\s*(\d+)\s*(?::\s*(?:ℕ|ℤ|Nat|Int)\s*)?\)?`;
@@ -285,6 +289,12 @@ function productValue(expr: string): bigint {
     .reduce((acc, [b, e]) => acc * b ** (e ?? 1n), 1n);
 }
 
+/** The prime of a prime power. */
+function primeOf(q: bigint): bigint {
+  for (let p = 2n; p * p <= q; p++) if (q % p === 0n) return p;
+  return q;
+}
+
 /** Prime-power factors of n (trial division; undefined when a factor above 10^6 is left over). */
 export function primePowers(n: bigint): bigint[] | undefined {
   const out: bigint[] = [];
@@ -300,6 +310,84 @@ export function primePowers(n: bigint): bigint[] | undefined {
     out.push(q);
   }
   if (m > 1n) out.push(m);
+  return out;
+}
+
+/**
+ * A modulus written at `i`: a number, `3 ^ 5`, or a product in parentheses
+ * (`((3 : ℕ) ^ 6 * 5 ^ 3 * 7 ^ 2)`); its value, and where it ends.
+ */
+function modulusAt(t: string, i: number, opts: { bareProduct?: boolean } = {}): { value: bigint; end: number; text: string } | undefined {
+  let j = i;
+  while (t[j] === " ") j++;
+  let text: string;
+  if (t[j] === "(") {
+    let depth = 0;
+    let k = j;
+    for (; k < t.length; k++) {
+      if (t[k] === "(") depth++;
+      else if (t[k] === ")" && --depth === 0) break;
+    }
+    if (k >= t.length) return undefined;
+    text = t.slice(j, k + 1);
+    j = k + 1;
+  } else {
+    // after `%` a bare product binds wrongly (`a % 3 ^ 5 * 5 ^ 3` is `(a % 3 ^ 5) * 5 ^ 3`)
+    const m = (opts.bareProduct === false ? /^\d+(?:\s*\^\s*\d+)?/ : /^\d+(?:\s*\^\s*\d+)?(?:\s*\*\s*\d+(?:\s*\^\s*\d+)?)*/).exec(t.slice(j));
+    if (!m) return undefined;
+    text = m[0];
+    j += m[0].length;
+  }
+  const clean = text.replace(/:\s*(?:ℕ|ℤ|Nat|Int)/g, "").replace(/[()]/g, "").trim();
+  if (!/^\d+(?:\s*\^\s*\d+)?(?:\s*\*\s*\d+(?:\s*\^\s*\d+)?)*$/.test(clean)) return undefined;
+  return { value: productValue(clean), end: j, text: text.trim() };
+}
+
+/** `a ^ n` with a variable exponent, possibly cast: `2 ^ n`, `(2 ^ n : ℕ)`, `((2 : ℕ) ^ n)`. */
+const VAR_POW = String.raw`\(?\s*\(?\s*(\d+)\s*(?::\s*(?:ℕ|Nat)\s*)?\)?\s*\^\s*([a-z]\w*)\s*(?::\s*(?:ℕ|Nat)\s*)?\)?`;
+
+/**
+ * Congruences `a ^ n ≡ 1` written as `Nat.ModEq M (a ^ n) 1`, `a ^ n ≡ 1 [MOD M]` or
+ * `a ^ n % M = 1 % M` (also `= 1`): the same condition as `M ∣ a ^ n - 1`.
+ */
+type CongruenceAtom = { text: string; value: bigint; base: string; v: string; negated: boolean; form: "modeq" | "mod1"; modText: string };
+function congruenceAtoms(t: string): CongruenceAtom[] {
+  const out: CongruenceAtom[] = [];
+  const neg = (at: number) => /¬\s*\(*\s*$/.test(t.slice(Math.max(0, at - 12), at));
+  // `3 * 2 ^ n % 7`, `f 2 ^ n` are not `2 ^ n …`: nothing may be applied to the power on the left
+  const freeLeft = (at: number) => {
+    while (t[at] === " ") at++; // a match may start at the space before the power
+    return !/(?:[*\/%]|[\w')\]])\s*\(*\s*$/.test(t.slice(Math.max(0, at - 8), at));
+  };
+  // and the condition ends there (`= 1 + k` is not `= 1`)
+  const ends = (at: number) => /^\s*(?:$|[)∧∨→↔,\]])/.test(t.slice(at));
+  for (const m of t.matchAll(/Nat\.ModEq\s+/g)) {
+    const mod = modulusAt(t, m.index! + m[0].length);
+    if (!mod) continue;
+    const rest = new RegExp(String.raw`^\s*${VAR_POW}\s+1\b`).exec(t.slice(mod.end));
+    if (rest && ends(mod.end + rest[0].length)) out.push({ text: t.slice(m.index!, mod.end + rest[0].length), value: mod.value, base: rest[1], v: rest[2], negated: neg(m.index!), form: "modeq", modText: mod.text });
+  }
+  for (const m of t.matchAll(new RegExp(String.raw`${VAR_POW}\s*≡\s*1\s*\[MOD\s*`, "g"))) {
+    if (!freeLeft(m.index!)) continue;
+    const mod = modulusAt(t, m.index! + m[0].length);
+    if (mod && /^\s*\]/.test(t.slice(mod.end))) out.push({ text: t.slice(m.index!, mod.end), value: mod.value, base: m[1], v: m[2], negated: neg(m.index!), form: "modeq", modText: mod.text });
+  }
+  for (const m of t.matchAll(new RegExp(String.raw`${VAR_POW}\s*%\s*`, "g"))) {
+    if (!freeLeft(m.index!)) continue;
+    const mod = modulusAt(t, m.index! + m[0].length, { bareProduct: false });
+    if (!mod) continue;
+    const eq = /^\s*=\s*1\b/.exec(t.slice(mod.end));
+    if (!eq) continue;
+    let end = mod.end + eq[0].length;
+    const pct = /^\s*%\s*/.exec(t.slice(end));
+    const form: "modeq" | "mod1" = pct ? "modeq" : "mod1";
+    if (pct) {
+      const again = modulusAt(t, end + pct[0].length, { bareProduct: false });
+      if (!again || again.value !== mod.value) continue;
+      end = again.end;
+    }
+    if (ends(end)) out.push({ text: t.slice(m.index!, end), value: mod.value, base: m[1], v: m[2], negated: neg(m.index!), form, modText: mod.text });
+  }
   return out;
 }
 
@@ -329,7 +417,7 @@ export function orderConditions(t: string): OrderCondition[] | undefined {
   const out: OrderCondition[] = [];
   // A composite modulus is split into prime powers: their orders are small, while the order mod
   // the whole number can be large enough that `decide` over r < k hits Lean's recursion limit.
-  const add = (text: string, value: bigint, b: string) => {
+  const add = (text: string, value: bigint, b: string, form: OrderCondition["form"] = "dvd", modText?: string) => {
     const base = Number(b);
     const parts = primePowers(value);
     if (!parts?.length) return;
@@ -337,17 +425,21 @@ export function orderConditions(t: string): OrderCondition[] | undefined {
       const modulus = Number(q);
       if (!Number.isSafeInteger(modulus) || modulus > 10_000_000 || out.some((o) => o.modulus === modulus && o.base === base)) continue;
       const order = multiplicativeOrder(base, modulus);
-      if (order) out.push({ text: text.trim(), modulus, base, order, ...(parts.length > 1 ? { partOf: value.toString() } : {}) });
+      if (order) out.push({ text: text.trim(), modulus, base, order, form, ...(modText ? { modText } : {}), ...(parts.length > 1 ? { partOf: value.toString() } : {}) });
     }
   };
   // a helper (let-defined) whose definition says p ^ e ∣ m
   const helpers = new Set([...t.matchAll(/let\s+([A-Za-z_][\w']*)\s*:[^:=]*:=\s*fun\s+(\w+)\s+(\w+)\s+(\w+)\s*=>\s*\2\s*\^\s*\4\s*∣\s*\3/g)].map((m) => m[1]));
-  const atoms: { text: string; p: string; e?: string; base: string; negated: boolean; value?: bigint }[] = [
-    ...[...t.matchAll(PRODUCT_ATOM)].map((m) => ({ text: m[0], p: m[2], value: productValue(m[2]), base: m[3], negated: !!m[1] })),
-    ...[...t.matchAll(ORDER_ATOM)].map((m) => ({ text: m[0], p: m[2], e: m[3], base: m[4], negated: !!m[1] })),
-    ...[...t.matchAll(PADIC_ATOM)].map((m) => ({ text: m[0], p: m[2], e: m[6], base: m[3], negated: !!m[1] })),
-    ...[...t.matchAll(HELPER_ATOM)].filter((m) => helpers.has(m[2])).map((m) => ({ text: m[0], p: m[3], e: m[6], base: m[4], negated: !!m[1] })),
+  let atoms: { text: string; p: string; e?: string; base: string; v: string; negated: boolean; value?: bigint; form?: "modeq" | "mod1"; modText?: string }[] = [
+    ...[...t.matchAll(PRODUCT_ATOM)].map((m) => ({ text: m[0], p: m[2], value: productValue(m[2]), base: m[3], v: m[4], negated: !!m[1] })),
+    ...[...t.matchAll(ORDER_ATOM)].map((m) => ({ text: m[0], p: m[2], e: m[3], base: m[4], v: m[5], negated: !!m[1] })),
+    ...[...t.matchAll(PADIC_ATOM)].map((m) => ({ text: m[0], p: m[2], e: m[6], base: m[3], v: m[4], negated: !!m[1] })),
+    ...[...t.matchAll(HELPER_ATOM)].filter((m) => helpers.has(m[2])).map((m) => ({ text: m[0], p: m[3], e: m[6], base: m[4], v: m[5], negated: !!m[1] })),
+    ...congruenceAtoms(t).map((c) => ({ ...c, p: c.value.toString() })),
   ];
+  // only conditions on the variable being minimised (`B ≤ n`, `n < B →`, `IsLeast {n : ℕ | …}`)
+  const minVar = /→\s*\d+\s*≤\s*([a-z]\w*)/.exec(t)?.[1] ?? /([a-z]\w*)\s*<\s*\d+\s*→/.exec(t)?.[1] ?? /([a-z]\w*)\s*≥\s*\d+/.exec(t)?.[1] ?? /IsLeast\s*\{\s*([a-z]\w*)/.exec(t)?.[1];
+  if (minVar) atoms = atoms.filter((a) => a.v === minVar);
   // ORDER_ATOM also matches the last factor of a product (`127 ∣ 2 ^ m - 1` inside `3 ^ 4 * 5 ^ 2 * 127 ∣ …`).
   const productTexts = atoms.filter((a) => a.value !== undefined).map((a) => a.text);
   for (let i = atoms.length - 1; i >= 0; i--) {
@@ -356,9 +448,13 @@ export function orderConditions(t: string): OrderCondition[] | undefined {
   // `¬ p ^ (e+1) ∣ …` next to `p ^ e ∣ …` is the "exactly e" half and does not constrain n; a negated
   // conjunction (`n < B → ¬ (… ∧ …)`) does, through each of its conditions.
   const positive = atoms.filter((a) => !a.negated);
+  const primesOf = (a: (typeof atoms)[number]) => new Set((primePowers(a.value ?? BigInt(a.p) ** BigInt(a.e ?? "1")) ?? []).map(primeOf));
   for (const a of atoms) {
-    if (a.negated && positive.some((q) => q.base === a.base && q.p === a.p)) continue;
-    add(a.text, a.value ?? BigInt(a.p) ** BigInt(a.e ?? "1"), a.base);
+    if (a.negated) {
+      const mine = primesOf(a);
+      if (positive.some((q) => q.base === a.base && [...primesOf(q)].some((p) => mine.has(p)))) continue;
+    }
+    add(a.text, a.value ?? BigInt(a.p) ** BigInt(a.e ?? "1"), a.base, a.form ?? "dvd", a.modText);
   }
   return out.length ? out : undefined;
 }
@@ -373,8 +469,48 @@ const ORD_LEMMA = [
   "  exact Nat.dvd_of_mod_eq_zero (hmin _ (Nat.mod_lt _ hk0) (by rw [← h2, h1, hm]))",
 ];
 
-/** Where a condition `q ∣ a ^ n - 1` can sit in a hypothesis: itself, a conjunct, or the first half of a helper. */
-const HYP_PATHS = [...new Set(["", ".1", ".2.1", ".2.2.1", ".2.2.2.1", ".2.2.2.2.1", ".2.2.2.2.2.1", ".2.2.2.2.2"].flatMap((p) => [p, `${p}.1`]))];
+/** Largest order the program-written proof checks with `decide +kernel` over r < k. */
+const ORDER_SCRIPT_MAX = 5000;
+
+/**
+ * Exponents above 2^24 (Lean's limit for computing a power) in `t`, each as N = d * e + r with
+ * d, e, r below it, so `a ^ N` can be rewritten `(a ^ d) ^ e * a ^ r` before the kernel computes.
+ * Undefined when that is not safe: an exponent that is not a plain literal (`2 ^ (N * 2)` — the
+ * rewrite would miss it and the kernel would meet the whole power), or a power whose value would
+ * have more than 2^27 bits (the kernel builds the number; far beyond that it runs out of memory).
+ */
+export function bigExponents(t: string): { n: string; d: string; e: string; r: string }[] | undefined {
+  const out = new Map<string, { n: string; d: string; e: string; r: string }>();
+  for (const m of t.matchAll(/(\d+)?\s*(?::\s*ℕ\s*)?\)?\s*\^\s*(\(?)\s*(\d+)(\s*\)?)(\s*[*+\-/^%])?/g)) {
+    const n = BigInt(m[3]);
+    if (n <= 1n << 24n) continue;
+    // `^ (N` must close right after the literal (`^ (N * 2)` is not N); `^ N ^ k` is a tower
+    if (m[2] && !m[4].includes(")")) return undefined;
+    if (!m[2] && /\^/.test(m[5] ?? "")) return undefined;
+    const base = m[1] ? Number(m[1]) : 2;
+    if (Number(n) * Math.log2(Math.max(2, base)) > 2 ** 27) return undefined;
+    let d = BigInt(Math.floor(Math.sqrt(Number(n))));
+    while (d * d > n) d--;
+    while ((d + 1n) * (d + 1n) <= n) d++;
+    const e = n / d;
+    out.set(m[3], { n: m[3], d: d.toString(), e: e.toString(), r: (n - d * e).toString() });
+  }
+  return [...out.values()];
+}
+
+/** Where a condition `q ∣ a ^ n - 1` can sit in a hypothesis with `depth` conjunctions: itself, a conjunct, or the first half of a helper. */
+function hypPaths(depth: number): string[] {
+  return [
+    ...new Set(
+      Array.from({ length: Math.min(6, depth) + 1 }, (_, k) => {
+        const rest = ".2".repeat(k);
+        return [`${rest}.1`, rest]; // the k-th conjunct, or what is left after k of them
+      })
+        .flat()
+        .flatMap((p) => [p, `${p}.1`]),
+    ),
+  ];
+}
 
 /**
  * Proofs the program writes itself for "the smallest n with m ∣ a ^ n - 1 …": the statement's closed
@@ -384,13 +520,27 @@ const HYP_PATHS = [...new Set(["", ".1", ".2.1", ".2.2.1", ".2.2.2.1", ".2.2.2.2
  */
 export function orderProofScripts(theoremType: string): string[] {
   const t = theoremType.replace(/^\s*:\s*/, "");
-  const orders = orderConditions(t);
-  if (!orders?.length || new Set(orders.map((o) => o.base)).size !== 1) return [];
+  const all = orderConditions(t);
+  // the script's `decide +kernel` over r < k must stay small
+  const orders = all?.filter((o) => o.order <= ORDER_SCRIPT_MAX);
+  if (!orders?.length || orders.length !== all?.length) return [];
+  const big = bigExponents(t);
+  if (!big) return [];
   const g = (x: number, y: number): number => (y ? g(y, x % y) : x);
   const l = orders.reduce((acc, o) => (acc / g(acc, o.order)) * o.order, 1);
   const lets = [...t.matchAll(/(?:^|;\s*|\(\s*)let\s+([A-Za-z_][\w']*)/g)].map((m) => m[1]);
   const script = (hyps: string[], lt: boolean) => {
-    const pick = `first | ${hyps.flatMap((h) => HYP_PATHS.map((p) => `(refine Nat.dvd_trans ?_ ${h}${p}; norm_num; done)`)).join(" | ")}`;
+    // The condition turned into `M ∣ a ^ n - 1` the way it is written (only that conversion: a
+    // wrong one can be logged by Lean instead of failing, and `first` would stop there), then the
+    // prime-power part q ∣ M.
+    const asDvd = (o: OrderCondition, e: string) =>
+      o.form === "modeq"
+        ? `((Nat.modEq_iff_dvd' (Nat.one_le_pow _ _ (by norm_num))).mp (${e}).symm)`
+        : o.form === "mod1"
+          ? `((Nat.modEq_iff_dvd' (Nat.one_le_pow _ _ (by norm_num))).mp ((${e}).trans (Nat.mod_eq_of_lt (show (1 : ℕ) < ${o.modText} by norm_num)).symm).symm)`
+          : e;
+    const pick = (o: OrderCondition) =>
+      `first | ${hyps.flatMap((h) => hypPaths(depth).map((p) => `(refine Nat.dvd_trans ?_ ${asDvd(o, `${h}${p}`)}; norm_num; done)`)).join(" | ")}`;
     const lcmExpr = orders.slice(1).reduce((acc, o) => `Nat.lcm (${acc}) ${o.order}`, String(orders[0].order));
     const lcmProof = orders.slice(1).reduce((acc, _o, i) => `Nat.lcm_dvd (${acc}) o${i + 1}`, "o0");
     return [
@@ -398,10 +548,14 @@ export function orderProofScripts(theoremType: string): string[] {
       ...ORD_LEMMA,
       // every closed conjunct (however many) by the kernel; what is left is the "no smaller n" part
       "and_intros",
-      "all_goals try decide +kernel",
+      // a power too big for the kernel (exponent above 2^24) is split, a ^ N = (a ^ d) ^ e * a ^ r,
+      // and only the split goal goes to the kernel — never the power as written
+      ...(big.length
+        ? big.map(({ n, d, e, r }) => `all_goals try (rw [show (${n} : ℕ) = ${d} * ${e} + ${r} by norm_num, pow_add, pow_mul]; decide +kernel)`)
+        : ["all_goals try decide +kernel"]),
       `intro n hn ${lt ? "hlt " : ""}${hyps.join(" ")}`,
       ...orders.map(
-        (o, i) => `have o${i} : ${o.order} ∣ n := ord ${o.base} ${o.modulus} ${o.order} n (by norm_num) (by norm_num) (by norm_num) (by decide +kernel) (by ${pick})`,
+        (o, i) => `have o${i} : ${o.order} ∣ n := ord ${o.base} ${o.modulus} ${o.order} n (by norm_num) (by norm_num) (by decide +kernel) (by decide +kernel) (by ${pick(o)})`,
       ),
       `have hl : ${l} ∣ n := by`,
       `  have := ${lcmProof}`,
@@ -411,8 +565,14 @@ export function orderProofScripts(theoremType: string): string[] {
   };
   const ltForm = /<\s*\d+\s*→\s*¬/.test(t);
   const names = ["h", "h2", "h3", "h4"];
-  const curried = [1, 2, 3, 4].map((k) => script(names.slice(0, k), false));
-  return ltForm ? [script(["h"], true), ...curried.slice(0, 1)] : [...curried.slice(0, Math.max(1, Math.min(4, orders.length))), script(["h"], true)];
+  // The hypotheses after `0 < n →`: how many (curried) and how deeply they are conjunctions.
+  const seg = /0\s*<\s*[a-z]\w*\s*→([\s\S]*?)→\s*\d+\s*≤\s*[a-z]\w*\s*$/.exec(t)?.[1] ?? /<\s*\d+\s*→\s*¬([\s\S]*)$/.exec(t)?.[1];
+  // (a let-defined predicate hides its conjunctions: then every depth)
+  const depth = seg && !lets.length ? (seg.match(/∧/g) ?? []).length : 6;
+  const count = seg && !ltForm ? Math.min(4, Math.max(1, seg.split("→").length)) : undefined;
+  if (ltForm) return [script(["h"], true)];
+  if (count) return [script(names.slice(0, count), false)];
+  return [1, 2, 3, 4].slice(0, Math.max(1, Math.min(4, orders.length))).map((k) => script(names.slice(0, k), false));
 }
 
 function orderHint(orders: OrderCondition[]): string {
@@ -454,6 +614,54 @@ function orderHint(orders: OrderCondition[]): string {
 /** The candidate that got furthest, for the failure report. */
 function bestCandidate(w: WholeProofResult) {
   return [...w.candidates].sort((a, b) => (b.progress ?? 0) - (a.progress ?? 0) || a.errors - b.errors)[0];
+}
+
+/**
+ * The steps that need no model: the hammer cascade in REPL tactic mode, single-tactic probes, and
+ * for "smallest n with m ∣ a ^ n - 1" the order proof the program writes. Shared by the Lean
+ * attempt and `npm run lean:recheck` (which re-runs them on stored statements).
+ */
+export async function proveWithoutModel(args: {
+  sessionId: string;
+  theoremName: string;
+  theoremType: string;
+  expectedSignature?: string;
+  useMathlib: boolean;
+  /** A power too big to compute is in the statement: skip what would evaluate it. */
+  huge: boolean;
+}): Promise<{
+  proof?: { verification: LeanVerifyResult; source: string; tactics: string; strategy: "hammer" | "trivial" | "order"; attempts: number };
+  tried: string[];
+}> {
+  const { sessionId, theoremName, theoremType, expectedSignature, useMathlib, huge } = args;
+  const tried: string[] = [];
+  if (huge) {
+    tried.push(lt("跳过了会去直接计算的自动化策略（数太大，无法计算）", "skipped the automation that would compute (the number is too big to compute)"));
+  } else if (process.env.LEAN_SERVER_MODE !== "spawn") {
+    const root = assembleLeanSource({ theoremName, theoremType, stepCodes: ["sorry"], useMathlib });
+    const hit = await hammerTheorem(root, { useMathlib });
+    tried.push(lt("自动化策略组合（rfl、decide、decide +kernel、simp、omega、norm_num、ring、linarith、aesop 等）", "the automation cascade (rfl, decide, decide +kernel, simp, omega, norm_num, ring, linarith, aesop, …)"));
+    if (hit) {
+      const source = assembleLeanSource({ theoremName, theoremType, stepCodes: [hit.tactic], useMathlib });
+      const v = await verifyLeanSource(sessionId, source, { theoremName, expectedSignature });
+      if (v.ok) return { proof: { verification: v, source, tactics: hit.tactic, strategy: "hammer", attempts: 1 }, tried };
+    }
+  }
+  const trivial = huge ? undefined : await tryTrivialProof(sessionId, theoremName, theoremType, useMathlib, { expectedSignature });
+  if (trivial) return { proof: { verification: trivial.verification, source: trivial.source, tactics: trivial.tactic, strategy: "trivial", attempts: 1 }, tried };
+  if (!tried.length) tried.push(lt("单条策略（rfl、simp、norm_num、omega、decide、decide +kernel、ring、linarith 等）", "single tactics (rfl, simp, norm_num, omega, decide, decide +kernel, ring, linarith, …)"));
+
+  // "Smallest n with m ∣ a ^ n - 1": the program writes the order proof itself (models kept
+  // getting the order argument wrong: omega on `n % q`, `decide` over r < 3780); also with a huge
+  // power — the scripts split exponents above 2^24 before the kernel computes.
+  const orderScripts = orderProofScripts(theoremType);
+  for (const [i, tactics] of orderScripts.entries()) {
+    const source = assembleLeanSource({ theoremName, theoremType, stepCodes: [tactics], useMathlib });
+    const v = await verifyLeanSource(sessionId, source, { theoremName, expectedSignature });
+    if (v.ok) return { proof: { verification: v, source, tactics, strategy: "order", attempts: i + 1 }, tried };
+  }
+  if (orderScripts.length) tried.push(lt("按乘法阶由程序写出的证明", "a proof the program wrote from the multiplicative orders"));
+  return { tried };
 }
 
 export async function attemptLeanFormalization(problemText: string, ctx: LeanAttemptContext = {}): Promise<LeanProofAttempt> {
@@ -545,34 +753,10 @@ export async function attemptLeanFormalization(problemText: string, ctx: LeanAtt
     // evaluate it and Lean refuses ("Nat.pow exponent is too big"), so go straight to the prover.
     const huge = hugePower(formal.formal_statement ?? theoremType);
 
-    // 1. Automation: the hammer cascade in REPL tactic mode, then single-tactic probes.
-    const tried: string[] = [];
-    if (huge) {
-      tried.push(lt("跳过了会去直接计算的自动化策略（数太大，无法计算）", "skipped the automation that would compute (the number is too big to compute)"));
-    } else if (process.env.LEAN_SERVER_MODE !== "spawn") {
-      const root = assembleLeanSource({ theoremName, theoremType, stepCodes: ["sorry"], useMathlib });
-      const hit = await hammerTheorem(root, { useMathlib });
-      tried.push(lt("自动化策略组合（rfl、decide、decide +kernel、simp、omega、norm_num、ring、linarith、aesop 等）", "the automation cascade (rfl, decide, decide +kernel, simp, omega, norm_num, ring, linarith, aesop, …)"));
-      if (hit) {
-        const source = assembleLeanSource({ theoremName, theoremType, stepCodes: [hit.tactic], useMathlib });
-        const v = await verifyLeanSource(sessionId, source, { theoremName, expectedSignature });
-        if (v.ok) return done(v, source, { strategy: "hammer", attempts: 1 }, hit.tactic);
-      }
-    }
-    const trivial = huge ? undefined : await tryTrivialProof(sessionId, theoremName, theoremType, useMathlib, { expectedSignature });
-    if (trivial) return done(trivial.verification, trivial.source, { strategy: "trivial", attempts: 1 }, trivial.tactic);
-
-    if (!tried.length) tried.push(lt("单条策略（rfl、simp、norm_num、omega、decide、decide +kernel、ring、linarith 等）", "single tactics (rfl, simp, norm_num, omega, decide, decide +kernel, ring, linarith, …)"));
-
-    // "Smallest n with m ∣ a ^ n - 1": the program writes the order proof itself (models kept
-    // getting the order argument wrong: omega on `n % q`, `decide` over r < 3780).
-    const orderScripts = huge ? [] : orderProofScripts(theoremType);
-    for (const [i, tactics] of orderScripts.entries()) {
-      const source = assembleLeanSource({ theoremName, theoremType, stepCodes: [tactics], useMathlib });
-      const v = await verifyLeanSource(sessionId, source, { theoremName, expectedSignature });
-      if (v.ok) return done(v, source, { strategy: "order", attempts: i + 1 }, tactics);
-    }
-    if (orderScripts.length) tried.push(lt("按乘法阶由程序写出的证明", "a proof the program wrote from the multiplicative orders"));
+    // 1. Without a model: automation, single tactics, the order proof the program writes.
+    const auto = await proveWithoutModel({ sessionId, theoremName, theoremType, expectedSignature, useMathlib, huge: !!huge });
+    const tried = auto.tried;
+    if (auto.proof) return done(auto.proof.verification, auto.proof.source, { strategy: auto.proof.strategy, attempts: auto.proof.attempts }, auto.proof.tactics);
 
     // Proof memory: verified proofs of similar statements, tried verbatim first (no model call),
     // then given to the prover as worked examples together with the retrieved Mathlib lemmas.

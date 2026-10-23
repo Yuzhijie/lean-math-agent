@@ -51,10 +51,38 @@ interface BackTranslation {
  */
 export function normalizeTheoremType(raw: string): string {
   const trimmed = raw.trim();
-  if (trimmed.startsWith(":")) return trimmed;
+  if (trimmed.startsWith(":")) return addMissingForall(trimmed);
   // Binder form `(n : ℕ) (h : 0 < n) : goal` already has its own top-level colon.
   if (/^[({[⦃]/.test(trimmed) && hasTopLevelColon(trimmed)) return trimmed;
-  return `: ${trimmed}`;
+  return addMissingForall(`: ${trimmed}`);
+}
+
+/**
+ * `: (A B : ℝ × ℝ) (r : ℝ), P` — binders after the colon without `∀` (a model habit; Lean reads it
+ * as a syntax error) → `: ∀ (A B : ℝ × ℝ) (r : ℝ), P`.
+ */
+export function addMissingForall(t: string): string {
+  const m = /^:\s*/.exec(t);
+  if (!m) return t;
+  let i = m[0].length;
+  let groups = 0;
+  while (i < t.length && "({[⦃".includes(t[i])) {
+    const open = t[i];
+    const close = ({ "(": ")", "{": "}", "[": "]", "⦃": "⦄" } as Record<string, string>)[open];
+    let depth = 0;
+    let j = i;
+    let colon = false;
+    for (; j < t.length; j++) {
+      if (t[j] === open) depth++;
+      else if (t[j] === close && --depth === 0) break;
+      else if (t[j] === ":" && depth === 1 && t[j + 1] !== "=") colon = true;
+    }
+    if (j >= t.length || (!colon && open !== "[")) return t;
+    groups++;
+    i = j + 1;
+    while (i < t.length && /\s/.test(t[i])) i++;
+  }
+  return groups > 0 && t[i] === "," ? `: ∀ ${t.slice(m[0].length)}` : t;
 }
 
 function hasTopLevelColon(t: string): boolean {
