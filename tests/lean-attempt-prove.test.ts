@@ -25,7 +25,7 @@ vi.mock("@/lib/prover/context", () => ({ buildProverContext: m.buildProverContex
 vi.mock("@/lib/prover/replay", () => ({ replayRecalled: m.replayRecalled }));
 vi.mock("@/lib/lean/proof-memory", () => ({ rememberRepair: m.rememberRepair }));
 
-const { attemptLeanFormalization, leanAttemptRetryable, multiplicativeOrder, orderConditions, primePowers, proofHints } = await import("@/lib/pipeline/lean-attempt");
+const { attemptLeanFormalization, leanAttemptRetryable, multiplicativeOrder, orderConditions, orderProofScripts, primePowers, proofHints } = await import("@/lib/pipeline/lean-attempt");
 const { hugePower } = await import("@/lib/compute/nat-expr");
 
 const GCD = {
@@ -106,6 +106,17 @@ describe("attemptLeanFormalization", () => {
     expect(m.autoformalize.mock.calls[0][0].problemText).toContain("The answer found by solving is: 1");
     expect(m.verifyLeanSource.mock.calls[0][2]).toMatchObject({ theoremName: "gcd_two_powers", expectedSignature: GCD.formal_signature });
     expect(m.proveWholeTheorem).not.toHaveBeenCalled();
+  });
+
+  it("writes the order proof itself for \"smallest n with m ∣ 2^n - 1\", before any model call", async () => {
+    const type = ": (3 ^ 4 * 5 ^ 2 * 127 : ℕ) ∣ (2 ^ 3780 - 1) ∧ ∀ n : ℕ, 0 < n → (3 ^ 4 * 5 ^ 2 * 127 : ℕ) ∣ (2 ^ n - 1) → 3780 ≤ n";
+    m.autoformalize.mockResolvedValue({ ...GCD, theorem_name: "smallest_n", theorem_type: type, formal_statement: `theorem smallest_n ${type} := by sorry` });
+    m.verifyLeanSource.mockResolvedValueOnce({ ...okVerify, ok: false }).mockResolvedValue(okVerify);
+    const a = await attemptLeanFormalization("求最小的正整数 $n$，使得 $3^4\\cdot 5^2\\cdot 127\\mid 2^n-1$。", { answer: "3780" });
+    expect(a).toMatchObject({ success: true, strategy: "order", attempts: 2 });
+    expect(a.proof_code).toContain("ord 2 127 7 n");
+    expect(m.proveWholeTheorem).not.toHaveBeenCalled();
+    expect(m.rememberVerifiedProof).toHaveBeenCalledWith(expect.objectContaining({ strategy: "order" }));
   });
 
   it("falls back to the whole-proof loop with the solution as sketch", async () => {
@@ -234,6 +245,14 @@ describe("hints for the prover and the sorry report", () => {
     expect(proofHints(T3).join("\n")).toContain("lcm 3780");
     expect(orderConditions(": ∀ n : ℕ, 0 < n → 257175 ∣ 2 ^ n - 1 → 3780 ≤ n")?.map((o) => o.order)).toEqual([54, 20, 7]);
     expect(primePowers(257175n)).toEqual([81n, 25n, 127n]);
+    // the proof the program writes (all four shapes checked in Lean 4.33.1 + Mathlib; the first candidate fits T3)
+    const scripts = orderProofScripts(T3);
+    expect(scripts[0]).toContain("have o0 : 54 ∣ n := ord 2 81 54 n");
+    expect(scripts[0]).toContain("rwa [show Nat.lcm (Nat.lcm (54) 20) 7 = 3780 by norm_num] at this");
+    expect(scripts[0]).toMatch(/^have ord/);
+    expect(orderProofScripts(T2)[0]).toMatch(/^intro ExactValuation\n/);
+    expect(orderProofScripts(T2)[0]).toContain("Nat.not_le.mpr hlt");
+    expect(orderProofScripts(": ∀ n : ℕ, n + 0 = n")).toEqual([]);
     expect(multiplicativeOrder(2, 243)).toBe(162);
     expect(multiplicativeOrder(2, 6)).toBeUndefined();
   });

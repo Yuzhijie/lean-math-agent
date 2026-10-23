@@ -363,6 +363,58 @@ export function orderConditions(t: string): OrderCondition[] | undefined {
   return out.length ? out : undefined;
 }
 
+const ORD_LEMMA = [
+  "have ord : ∀ a m k n : ℕ, 0 < a → 0 < k → a ^ k % m = 1 → (∀ r < k, a ^ r % m = 1 → r = 0) → m ∣ a ^ n - 1 → k ∣ n := by",
+  "  intro a m k n ha hk0 hk hmin h",
+  "  have h1 : a ^ n % m = 1 % m := ((Nat.modEq_iff_dvd' (Nat.one_le_pow _ _ ha)).mpr h).symm",
+  "  have hm : 1 % m = 1 := by rw [← hk, Nat.mod_mod]",
+  "  have h2 : a ^ n % m = a ^ (n % k) % m := by",
+  "    conv_lhs => rw [← Nat.div_add_mod n k, pow_add, pow_mul, Nat.mul_mod, Nat.pow_mod, hk, one_pow, hm, one_mul, Nat.mod_mod]",
+  "  exact Nat.dvd_of_mod_eq_zero (hmin _ (Nat.mod_lt _ hk0) (by rw [← h2, h1, hm]))",
+];
+
+/** Where a condition `q ∣ a ^ n - 1` can sit in a hypothesis: itself, a conjunct, or the first half of a helper. */
+const HYP_PATHS = [...new Set(["", ".1", ".2.1", ".2.2.1", ".2.2.2.1", ".2.2.2.2.1", ".2.2.2.2.2.1", ".2.2.2.2.2"].flatMap((p) => [p, `${p}.1`]))];
+
+/**
+ * Proofs the program writes itself for "the smallest n with m ∣ a ^ n - 1 …": the statement's closed
+ * facts by `decide +kernel`, then one order lemma per prime power and their lcm. Shapes: `… ∧ ∀ n,
+ * 0 < n → P n → B ≤ n` (P one hypothesis or several curried ones) and `… ∀ n, 0 < n → n < B → ¬ P n`.
+ * Checked in Lean 4.33.1 + Mathlib for the forms in the tests; Lean decides whether a candidate fits.
+ */
+export function orderProofScripts(theoremType: string): string[] {
+  const t = theoremType.replace(/^\s*:\s*/, "");
+  const orders = orderConditions(t);
+  if (!orders?.length || new Set(orders.map((o) => o.base)).size !== 1) return [];
+  const g = (x: number, y: number): number => (y ? g(y, x % y) : x);
+  const l = orders.reduce((acc, o) => (acc / g(acc, o.order)) * o.order, 1);
+  const lets = [...t.matchAll(/(?:^|;\s*|\(\s*)let\s+([A-Za-z_][\w']*)/g)].map((m) => m[1]);
+  const script = (hyps: string[], lt: boolean) => {
+    const pick = `first | ${hyps.flatMap((h) => HYP_PATHS.map((p) => `(refine Nat.dvd_trans ?_ ${h}${p}; norm_num; done)`)).join(" | ")}`;
+    const lcmExpr = orders.slice(1).reduce((acc, o) => `Nat.lcm (${acc}) ${o.order}`, String(orders[0].order));
+    const lcmProof = orders.slice(1).reduce((acc, _o, i) => `Nat.lcm_dvd (${acc}) o${i + 1}`, "o0");
+    return [
+      ...(lets.length ? [`intro ${lets.join(" ")}`] : []),
+      ...ORD_LEMMA,
+      // every closed conjunct (however many) by the kernel; what is left is the "no smaller n" part
+      "and_intros",
+      "all_goals try decide +kernel",
+      `intro n hn ${lt ? "hlt " : ""}${hyps.join(" ")}`,
+      ...orders.map(
+        (o, i) => `have o${i} : ${o.order} ∣ n := ord ${o.base} ${o.modulus} ${o.order} n (by norm_num) (by norm_num) (by norm_num) (by decide +kernel) (by ${pick})`,
+      ),
+      `have hl : ${l} ∣ n := by`,
+      `  have := ${lcmProof}`,
+      `  rwa [show ${lcmExpr} = ${l} by norm_num] at this`,
+      lt ? "exact absurd (Nat.le_of_dvd hn hl) (Nat.not_le.mpr hlt)" : "exact Nat.le_of_dvd hn hl",
+    ].join("\n");
+  };
+  const ltForm = /<\s*\d+\s*→\s*¬/.test(t);
+  const names = ["h", "h2", "h3", "h4"];
+  const curried = [1, 2, 3, 4].map((k) => script(names.slice(0, k), false));
+  return ltForm ? [script(["h"], true), ...curried.slice(0, 1)] : [...curried.slice(0, Math.max(1, Math.min(4, orders.length))), script(["h"], true)];
+}
+
 function orderHint(orders: OrderCondition[]): string {
   const g = (x: number, y: number): number => (y ? g(y, x % y) : x);
   const l = orders.reduce((acc, o) => (acc / g(acc, o.order)) * o.order, 1);
@@ -511,6 +563,16 @@ export async function attemptLeanFormalization(problemText: string, ctx: LeanAtt
     if (trivial) return done(trivial.verification, trivial.source, { strategy: "trivial", attempts: 1 }, trivial.tactic);
 
     if (!tried.length) tried.push(lt("单条策略（rfl、simp、norm_num、omega、decide、decide +kernel、ring、linarith 等）", "single tactics (rfl, simp, norm_num, omega, decide, decide +kernel, ring, linarith, …)"));
+
+    // "Smallest n with m ∣ a ^ n - 1": the program writes the order proof itself (models kept
+    // getting the order argument wrong: omega on `n % q`, `decide` over r < 3780).
+    const orderScripts = huge ? [] : orderProofScripts(theoremType);
+    for (const [i, tactics] of orderScripts.entries()) {
+      const source = assembleLeanSource({ theoremName, theoremType, stepCodes: [tactics], useMathlib });
+      const v = await verifyLeanSource(sessionId, source, { theoremName, expectedSignature });
+      if (v.ok) return done(v, source, { strategy: "order", attempts: i + 1 }, tactics);
+    }
+    if (orderScripts.length) tried.push(lt("按乘法阶由程序写出的证明", "a proof the program wrote from the multiplicative orders"));
 
     // Proof memory: verified proofs of similar statements, tried verbatim first (no model call),
     // then given to the prover as worked examples together with the retrieved Mathlib lemmas.

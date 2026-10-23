@@ -1198,6 +1198,8 @@ export default function Home() {
                                     ? tr("自动化策略", "Automated tactics")
                                     : leanProofAttempt.strategy === "memory"
                                       ? tr("证明记忆（相似定理的已验证证明直接适用）", "Proof memory (a verified proof of a similar theorem, as is)")
+                                      : leanProofAttempt.strategy === "order"
+                                        ? tr("乘法阶（程序按各素数幂的阶写出证明）", "Multiplicative orders (proof written by the program from the order of each prime power)")
                                       : tr(
                                         `分步搜索（${leanProofAttempt.attempts ?? "?"} 次尝试）`,
                                         `Stepwise search (${leanProofAttempt.attempts ?? "?"} attempts)`,
@@ -1330,6 +1332,7 @@ function strategyLabel(strategy: string, tr: (zh: string, en: string) => string)
     trivial: tr("单条策略", "a single tactic"),
     hammer: tr("自动化策略（锤子）", "automation (hammer)"),
     memory: tr("证明记忆（相似定理的证明直接适用）", "proof memory (a similar theorem's proof, as is)"),
+    order: tr("乘法阶（程序写出的证明）", "multiplicative orders (a proof the program wrote)"),
     whole_proof: tr("整体证明（模型写完整证明，Lean 验证）", "whole proof (the model writes it, Lean checks it)"),
     sketch: tr("骨架分解（子目标逐个证明）", "sketch and fill (subgoals proved one by one)"),
     stepwise: tr("分步搜索", "step-by-step search"),
