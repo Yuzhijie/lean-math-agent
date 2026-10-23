@@ -273,3 +273,17 @@ describe("time limits with a slow local prover", () => {
     }
   });
 });
+
+describe("a candidate that was finished early", () => {
+  it("drops the extra tactics and verifies again instead of failing", async () => {
+    sampleMock.mockResolvedValue(["```lean\ntheorem amgm (x y : ℝ) : x * y ≤ (x ^ 2 + y ^ 2) / 2 := by\n  nlinarith [sq_nonneg (x - y)]\n  linarith\n```"]);
+    verifyMock.mockResolvedValue(OK);
+    verifyMock.mockImplementationOnce(async (_id: string, source: string) => {
+      const line = source.split("\n").findIndex((l) => l.trim() === "linarith") + 1;
+      return result({ messages: [{ severity: "error", line, column: 2, message: "No goals to be solved" }] });
+    });
+    const r = await proveWholeTheorem({ sessionId: "s", theoremName: NAME, theoremType: TYPE, expectedSignature: SIG, config: { samples: 1, rounds: 0 } });
+    expect(r.ok).toBe(true);
+    expect(r.tactics).toBe("nlinarith [sq_nonneg (x - y)]");
+  });
+});

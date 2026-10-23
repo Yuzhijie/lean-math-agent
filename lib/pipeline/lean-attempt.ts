@@ -575,6 +575,50 @@ export function orderProofScripts(theoremType: string): string[] {
   return [1, 2, 3, 4].slice(0, Math.max(1, Math.min(4, orders.length))).map((k) => script(names.slice(0, k), false));
 }
 
+/**
+ * "The smallest m with P m is B" where B is small: the kernel checks every m below B
+ * (`have key : ∀ m : ℕ, m < B → (P m → False) := by decide +kernel`), then each m ≥ B is fine.
+ * For `… ∧ ∀ m : ℕ, H₁ → H₂ → B ≤ m` with decidable hypotheses, B ≤ 2000; checked in Lean 4.33.1 +
+ * Mathlib (2025 ∣ m² − 1 over ℤ, B = 649; 7 ∣ 2 ^ n − 1, B = 3; two curried hypotheses, B = 2).
+ */
+export function boundedMinScripts(theoremType: string): string[] {
+  const t = theoremType.replace(/^\s*:\s*/, "").trim();
+  const m = /∀\s*([a-z]\w*)\s*:\s*(?:ℕ|Nat)\s*,\s*([\s\S]*?)→\s*(\d+)\s*≤\s*\1\s*\)*\s*$/.exec(t);
+  if (!m) return [];
+  const [, v, rawBody, bound] = m;
+  const body = rawBody.trim();
+  const B = Number(bound);
+  // the kernel walks m < B by recursion: it stops with "deep recursion detected" between 2500 and
+  // 3000 (Lean 4.33.1), so B stays at 2000 or below
+  const cap = 2000;
+  if (!Number.isSafeInteger(B) || B < 1 || B > cap || hugePower(t)) return [];
+  let depth = 0;
+  for (const c of body) {
+    if ("([{⟨".includes(c)) depth++;
+    else if (")]}⟩".includes(c) && --depth < 0) return [];
+  }
+  if (depth !== 0 || !body) return [];
+  const lets = [...t.matchAll(/(?:^|;\s*|\(\s*)let\s+([A-Za-z_][\w']*)/g)].map((x) => x[1]);
+  const close = [1, 2, 3, 4].map((k) => {
+    const xs = ["a", "b", "c", "d"].slice(0, k).join(" ");
+    return `exact fun ${xs} => (this ${xs}).elim`;
+  });
+  return [
+    [
+      ...(lets.length ? [`intro ${lets.join(" ")}`] : []),
+      `have key : ∀ ${v} : ℕ, ${v} < ${B} → (${body} → False) := by decide +kernel`,
+      "and_intros",
+      "all_goals try decide +kernel",
+      `intro ${v}`,
+      `by_cases hlt : ${v} < ${B}`,
+      `· have := key ${v} hlt`,
+      `  first | ${close.join(" | ")}`,
+      "· intros",
+      "  exact Nat.le_of_not_lt hlt",
+    ].join("\n"),
+  ];
+}
+
 function orderHint(orders: OrderCondition[]): string {
   const g = (x: number, y: number): number => (y ? g(y, x % y) : x);
   const l = orders.reduce((acc, o) => (acc / g(acc, o.order)) * o.order, 1);
@@ -630,7 +674,7 @@ export async function proveWithoutModel(args: {
   /** A power too big to compute is in the statement: skip what would evaluate it. */
   huge: boolean;
 }): Promise<{
-  proof?: { verification: LeanVerifyResult; source: string; tactics: string; strategy: "hammer" | "trivial" | "order"; attempts: number };
+  proof?: { verification: LeanVerifyResult; source: string; tactics: string; strategy: "hammer" | "trivial" | "order" | "bounded"; attempts: number };
   tried: string[];
 }> {
   const { sessionId, theoremName, theoremType, expectedSignature, useMathlib, huge } = args;
@@ -661,6 +705,15 @@ export async function proveWithoutModel(args: {
     if (v.ok) return { proof: { verification: v, source, tactics, strategy: "order", attempts: i + 1 }, tried };
   }
   if (orderScripts.length) tried.push(lt("按乘法阶由程序写出的证明", "a proof the program wrote from the multiplicative orders"));
+
+  // "Smallest m" with a small bound: the kernel checks every m below it.
+  const boundedScripts = huge ? [] : boundedMinScripts(theoremType);
+  for (const tactics of boundedScripts) {
+    const source = assembleLeanSource({ theoremName, theoremType, stepCodes: [tactics], useMathlib });
+    const v = await verifyLeanSource(sessionId, source, { theoremName, expectedSignature });
+    if (v.ok) return { proof: { verification: v, source, tactics, strategy: "bounded", attempts: 1 }, tried };
+  }
+  if (boundedScripts.length) tried.push(lt("程序写的逐个检查（内核算完界以下的每个数）", "a check the program wrote (the kernel tries every number below the bound)"));
   return { tried };
 }
 

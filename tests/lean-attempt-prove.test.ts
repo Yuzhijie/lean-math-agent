@@ -25,7 +25,7 @@ vi.mock("@/lib/prover/context", () => ({ buildProverContext: m.buildProverContex
 vi.mock("@/lib/prover/replay", () => ({ replayRecalled: m.replayRecalled }));
 vi.mock("@/lib/lean/proof-memory", () => ({ rememberRepair: m.rememberRepair }));
 
-const { attemptLeanFormalization, leanAttemptRetryable, bigExponents, multiplicativeOrder, orderConditions, orderProofScripts, primePowers, proofHints } = await import("@/lib/pipeline/lean-attempt");
+const { attemptLeanFormalization, leanAttemptRetryable, bigExponents, boundedMinScripts, multiplicativeOrder, orderConditions, orderProofScripts, primePowers, proofHints } = await import("@/lib/pipeline/lean-attempt");
 const { hugePower } = await import("@/lib/compute/nat-expr");
 
 const GCD = {
@@ -117,6 +117,15 @@ describe("attemptLeanFormalization", () => {
     expect(a.proof_code).toContain("ord 2 127 7 n");
     expect(m.proveWholeTheorem).not.toHaveBeenCalled();
     expect(m.rememberVerifiedProof).toHaveBeenCalledWith(expect.objectContaining({ strategy: "order" }));
+  });
+
+  it("checks a small bound itself before any model call", async () => {
+    const type = ": ((2025 : ℤ) ∣ ((649 : ℤ)^2 - 1)) ∧ ∀ m : ℕ, 1 < m → (2025 : ℤ) ∣ ((m : ℤ)^2 - 1) → 649 ≤ m";
+    m.autoformalize.mockResolvedValue({ ...GCD, theorem_name: "minimal_m", theorem_type: type, formal_statement: `theorem minimal_m ${type} := by sorry` });
+    m.verifyLeanSource.mockResolvedValue(okVerify);
+    const a = await attemptLeanFormalization("求最小的正整数 $m>1$，使得 $2025\\mid (m^2-1)$。", { answer: "649" });
+    expect(a).toMatchObject({ success: true, strategy: "bounded" });
+    expect(m.proveWholeTheorem).not.toHaveBeenCalled();
   });
 
   it("falls back to the whole-proof loop with the solution as sketch", async () => {
@@ -283,6 +292,12 @@ describe("hints for the prover and the sorry report", () => {
     expect(bigExponents("2 ^ 1099511627776 % 7 = 2")).toBeUndefined();
     expect(bigExponents("2 ^ 35380800 ^ 2")).toBeUndefined();
     expect(bigExponents("2 ^ 100 = 5")).toEqual([]);
+    // small bound: the kernel checks every m below it (checked in Lean)
+    const B1 = boundedMinScripts(": ((2025 : ℤ) ∣ ((649 : ℤ)^2 - 1)) ∧ ∀ m : ℕ, 1 < m → (2025 : ℤ) ∣ ((m : ℤ)^2 - 1) → 649 ≤ m");
+    expect(B1).toHaveLength(1);
+    expect(B1[0]).toContain("have key : ∀ m : ℕ, m < 649 → (1 < m → (2025 : ℤ) ∣ ((m : ℤ)^2 - 1) → False) := by decide +kernel");
+    expect(boundedMinScripts(": 7 ∣ 2 ^ 3780 - 1 ∧ ∀ n : ℕ, 0 < n → 257175 ∣ 2 ^ n - 1 → 3780 ≤ n")).toEqual([]); // above 2000: deep recursion
+    expect(boundedMinScripts(": ∀ n : ℕ, n + 0 = n")).toEqual([]);
     expect(multiplicativeOrder(2, 243)).toBe(162);
     expect(multiplicativeOrder(2, 6)).toBeUndefined();
   });

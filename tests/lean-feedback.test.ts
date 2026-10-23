@@ -117,3 +117,18 @@ describe("compilingPrefix", () => {
     expect(dedent(["    a", "      b", "", "    c"])).toEqual(["a", "  b", "", "c"]);
   });
 });
+
+describe("a proof that was finished early", () => {
+  it("drops the tactics after the last goal closed (the rest of that block), only for 'No goals' errors", async () => {
+    const { dropNoGoalTactics } = await import("@/lib/lean/feedback");
+    const tactics = "norm_num\nrfl\n· simp\n  rfl";
+    const source = `theorem t : (2 : ℕ) + 2 = 4 := by\n${tactics.split("\n").map((l) => "  " + l).join("\n")}`;
+    const r = (message: string, line: number) => ({ ok: false, log: "", status: "fail", backend: "repl", messages: [{ severity: "error", line, column: 2, message }], sorries: [], goals: [], infos: [], durationMs: 1 }) as never;
+    expect(dropNoGoalTactics(r("No goals to be solved", 3), source, tactics)).toBe("norm_num");
+    // nested: only the rest of the inner block goes
+    const t2 = "constructor\n· norm_num\n  simp\n· rfl";
+    const s2 = `theorem t : True ∧ True := by\n${t2.split("\n").map((l) => "  " + l).join("\n")}`;
+    expect(dropNoGoalTactics(r("No goals to be solved", 4), s2, t2)).toBe("constructor\n· norm_num\n· rfl");
+    expect(dropNoGoalTactics(r("unsolved goals", 3), source, tactics)).toBeUndefined();
+  });
+});

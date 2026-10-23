@@ -15,7 +15,7 @@
  * with the statement lock, so a "proof" of a different theorem cannot pass.
  */
 import { assembleLeanSource } from "../lean/assemble";
-import { compilingPrefix, formatVerificationFeedback, summarizeFailure, dedent } from "../lean/feedback";
+import { compilingPrefix, dropNoGoalTactics, formatVerificationFeedback, summarizeFailure, dedent } from "../lean/feedback";
 import { loogleHintsForUnknownIdentifiers, unknownIdentifiers } from "../lean/loogle";
 import { modernizeLeanSyntax } from "../lean/modernize";
 import { localHintsForUnknownIdentifiers } from "../lean/premises";
@@ -280,6 +280,16 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
           theoremName: args.theoremName,
           expectedSignature: args.expectedSignature,
         });
+        // "No goals": the proof was done before its last tactics — drop them and check again.
+        const trimmed = verification.ok ? undefined : dropNoGoalTactics(verification, source, tactics);
+        if (trimmed) {
+          const source2 = assemble(trimmed);
+          const v2 = await verifyLeanSource(args.sessionId, source2, { theoremName: args.theoremName, expectedSignature: args.expectedSignature });
+          if (v2.ok) {
+            log.push(`round ${round}: a candidate was finished early; its extra tactics were dropped`);
+            return { tactics: trimmed, source: source2, verification: v2 };
+          }
+        }
         return { tactics, source, verification };
       }),
     );

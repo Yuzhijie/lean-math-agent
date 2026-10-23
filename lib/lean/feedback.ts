@@ -145,6 +145,32 @@ export function compilingPrefix(result: LeanVerifyResult, source: string): strin
   return body.slice(0, cut).filter((l) => l.trim().length > 0);
 }
 
+/**
+ * A proof whose only errors are "no goals" (it was already finished; a tactic came after the
+ * last goal closed) with those tactics removed — the reported line and the rest of its block. Undefined when any other error is present or nothing could be placed. The caller verifies
+ * the result again: this only proposes it.
+ */
+export function dropNoGoalTactics(result: LeanVerifyResult, source: string, tactics: string): string | undefined {
+  const layout = proofLayout(source);
+  if (!layout) return undefined;
+  const errors = result.messages.filter((m) => m.severity === "error");
+  if (!errors.length || !errors.every((m) => /^no goals( to be (solved|proved))?\b/i.test(m.message.trim()))) return undefined;
+  const lines = tactics.split("\n");
+  const drop = new Set<number>();
+  for (const e of errors) {
+    const k = tacticLineOf(e, layout);
+    if (k === undefined || k < 1 || k > lines.length) return undefined;
+    const i = k - 1;
+    const indent = (l: string) => l.match(/^\s*/)![0].length;
+    // Lean reports only the first tactic after the block's last goal closed; the rest of the
+    // block (same or deeper indentation) cannot be needed either
+    drop.add(i);
+    for (let j = i + 1; j < lines.length && (lines[j].trim() === "" || indent(lines[j]) >= indent(lines[i])); j++) drop.add(j);
+  }
+  const kept = lines.filter((_, i) => !drop.has(i));
+  return kept.some((l) => l.trim()) ? kept.join("\n") : undefined;
+}
+
 // ── helpers ───────────────────────────────────────────────────────────
 
 function describePosition(m: LeanDiagnostic, layout: ProofLayout | undefined): string {
