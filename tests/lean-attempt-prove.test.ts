@@ -198,6 +198,18 @@ describe("hints for the prover and the sorry report", () => {
   const DODECAGON =
     ": let rot : Fin 12 → Fin 12 → Fin 12 := fun k i => ⟨(i.val + k.val) % 12, Nat.mod_lt _ (by decide)⟩; let Valid : Finset (Fin 12) → Prop := fun s => s.card = 4; ∃ reps : Fin 8 → Finset (Fin 12), ∀ j, Valid (reps j)";
 
+  it("tells arccos angle statements to compare cosines (rw [← hA]; congr 1 when the asked angle is the given one)", () => {
+    const iso =
+      "(A B C D : ℝ × ℝ) : let dist : (ℝ × ℝ) → (ℝ × ℝ) → ℝ := fun P Q => Real.sqrt ((P.1 - Q.1)^2 + (P.2 - Q.2)^2); let angle : (ℝ × ℝ) → (ℝ × ℝ) → (ℝ × ℝ) → ℝ := fun P Q R => Real.arccos (((P.1 - Q.1) * (R.1 - Q.1) + (P.2 - Q.2) * (R.2 - Q.2)) / (dist Q P * dist Q R)); dist A B = dist A C ∧ angle B A C = 2 * Real.pi / 9 ∧ A ≠ B ∧ A ≠ C ∧ B ≠ C ∧ (∃ t : ℝ, 0 ≤ t ∧ t ≤ 1 ∧ D = ((1 - t) * A.1 + t * C.1, (1 - t) * A.2 + t * C.2) ∧ D ≠ C) ∧ dist B D = dist B C → angle C B D = 2 * Real.pi / 9";
+    const h = proofHints(iso).join("\n");
+    expect(h).toContain("never evaluate `Real.arccos`");
+    expect(h).toContain("`rw [← hA]`");
+    expect(h).toContain("Real.mul_self_sqrt");
+    const other = proofHints(iso.replace(/→ angle C B D = 2 \* Real\.pi \/ 9$/, "→ angle B D C = 7 * Real.pi / 18")).join("\n");
+    expect(other).toContain("Real.arccos_cos");
+    expect(proofHints(": ∀ x : ℝ, x ^ 2 ≥ 0").join("\n")).not.toContain("arccos");
+  });
+
   it("says to introduce the lets and to use witnesses + decide +kernel on finite statements", async () => {
 
     const h = proofHints(DODECAGON).join("\n");

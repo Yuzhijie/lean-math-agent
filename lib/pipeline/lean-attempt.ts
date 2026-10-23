@@ -232,6 +232,7 @@ export function proofHints(theoremType: string, opts: { tooMany?: boolean; huge?
       ].join("\n"),
     );
   }
+  if (/arccos|∠|InnerProductGeometry\.angle|EuclideanGeometry\.angle/.test(t)) hints.push(angleHint(t));
   if (/Real\.sqrt|√/.test(t)) {
     hints.push(
       [
@@ -244,6 +245,29 @@ export function proofHints(theoremType: string, opts: { tooMany?: boolean; huge?
   }
   hints.push("Never write `sorry` or `admit`: a proof that contains them is rejected.");
   return hints;
+}
+
+/**
+ * Angles written as `Real.arccos (dot / (dist * dist))`. Models evaluate arccos or argue by
+ * contradiction and end at `⊢ False`; the working route compares the cosines (checked in Lean on
+ * "AB = AC, ∠BAC = 40°, D on AC with BD = BC → ∠CBD = 40°").
+ */
+function angleHint(t: string): string {
+  // the asked angle is one of the given values (2 * π / 9 both in a hypothesis and after the arrow)
+  const goal = /→\s*([^→]*)$/.exec(t)?.[1] ?? "";
+  const value = /=\s*([^=∧]+?)\s*$/.exec(goal)?.[1]?.trim();
+  const same = !!value && t.split(value).length > 2;
+  return [
+    "Angles defined with `Real.arccos` of a cosine `dot / (dist Q P * dist Q R)`: never evaluate `Real.arccos` and do not argue by contradiction (`exfalso` / `nlinarith` toward `False` leaves `⊢ False`). Compare cosines instead:",
+    same
+      ? `- the asked angle equals the given one (both \`${value}\`): \`rw [← hA]\` (hA the hypothesis \`angle … = ${value}\`), then \`congr 1\` — what is left is that the two cosine fractions are equal, a polynomial fact;`
+      : "- to show `Real.arccos x = c`: `rw [show c = Real.arccos (Real.cos c) from (Real.arccos_cos (by positivity) (by linarith [Real.pi_pos])).symm]`, `congr 1`, then prove `x = Real.cos c` from the given angle (`Real.cos_arccos (h₁ : -1 ≤ x) (h₂ : x ≤ 1)`, `Real.cos_sq_half`, `Real.cos_pi_sub`, `Real.cos_two_mul`); if the asked angle equals a given one, `rw [← hA]; congr 1` instead;",
+    "- `obtain ⟨a1, a2⟩ := A` for every point, `rintro ⟨hAB, hA, …, ⟨t, -, -, rfl, hDC⟩, hBD⟩` (substitute the point on the segment), `simp only [dist, angle] at hAB hA hBD ⊢`;",
+    "- each `dist X Y = dist X Z` becomes a polynomial equation: `have hAB2 : … = … := (Real.sqrt_inj (by positivity) (by positivity)).mp hAB`;",
+    "- denominators: rewrite an equal distance so the product is `√S * √S`, then `Real.mul_self_sqrt (by positivity)` gives `S`; `rw [div_eq_div_iff (ne_of_gt h1) (ne_of_gt h2)]`; positivity of `(b1 - c1) ^ 2 + (b2 - c2) ^ 2` from `B ≠ C`: `have : b1 ≠ c1 ∨ b2 ≠ c2 := by by_contra h; push Not at h; exact hBC (Prod.ext h.1 h.2)`, then per case `have := pow_pos (abs_pos.mpr (sub_ne_zero.mpr h)) 2; rw [sq_abs] at this; positivity`;",
+    "- a parameter fixed by the conditions (D = (1 - t) • A + t • C with BD = BC): factor out the excluded root — `have hfac : (t - 1) * ((t + 1) * U - 2 * W) = 0 := by linear_combination hBD2`, `ht : t ≠ 1` from `D ≠ C` (`rintro rfl; apply hDC; ext <;> simp`), then `rcases mul_eq_zero.mp hfac` → `key : (t + 1) * U = 2 * W` (U, W the squared side and dot product written out);",
+    "- finish with `linear_combination (U - W) * key + (U - W) * hAB2` — the coefficients are polynomials; if `ring` reports leftover terms, change the signs or the coefficients rather than switching to `nlinarith`.",
+  ].join("\n");
 }
 
 /** Largest closed exponent above 256 (and below what Lean refuses outright), as text, else undefined. */
