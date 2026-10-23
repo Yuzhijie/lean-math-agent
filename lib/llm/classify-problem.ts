@@ -26,9 +26,13 @@ export const problemClassificationSchema = z
             "radical_equation",
             "other",
           ])
-          .optional(),
+          .nullish()
+          .transform((v) => v ?? undefined)
+          .catch(undefined),
       })
-      .optional(),
+      // Models send null (or a half-filled object) when the problem is not computational.
+      .nullish()
+      .catch(undefined),
     find_all_hints: z
       .object({
         parameter: z.string().min(1),
@@ -36,18 +40,20 @@ export const problemClassificationSchema = z
           .enum(["integer", "positive_integer", "real"])
           .optional(),
         condition_description: z.string().min(1),
-        search_range_hint: z.string().optional(),
+        search_range_hint: z.string().nullish().transform((v) => v ?? undefined),
       })
-      .optional()
+      .nullish()
       .catch(undefined),
   })
   .transform((data) => {
     // Strip find_all_hints when the problem isn't find_all_values,
     // or when the LLM returned empty/invalid placeholder strings.
-    if (data.problem_type !== "find_all_values") {
-      return { ...data, find_all_hints: undefined };
-    }
-    return data;
+    // Hints only for their own problem type; null becomes undefined.
+    return {
+      ...data,
+      computational_hints: data.problem_type === "computational" ? (data.computational_hints ?? undefined) : undefined,
+      find_all_hints: data.problem_type === "find_all_values" ? (data.find_all_hints ?? undefined) : undefined,
+    };
   });
 
 export type ProblemClassification = z.infer<

@@ -26,6 +26,7 @@ Return JSON only:
   "problem_type": "computational" | "theorem" | "optimization" | "find_all_values",
   "confidence": 0-1,
   "reasoning": "brief explanation (Chinese)",
+  // Leave out computational_hints / find_all_hints entirely when they do not apply (do not send null).
   "computational_hints": {  // only for computational problems
     "unknowns": ["variable names"],
     "equation_type": "linear" | "quadratic" | "polynomial" | "system" | "radical_equation" | "other"

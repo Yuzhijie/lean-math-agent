@@ -29,6 +29,36 @@ afterEach(() => {
 // ── Schema tests ────────────────────────────────────────────────────
 
 describe("problemClassificationSchema", () => {
+  it("accepts null hints (the model's way of saying 'not applicable') and drops hints of another type", () => {
+    const r = problemClassificationSchema.parse({
+      problem_type: "theorem",
+      confidence: 0.9,
+      reasoning: "证明题",
+      computational_hints: null,
+      find_all_hints: null,
+    });
+    expect(r.computational_hints).toBeUndefined();
+    expect(r.find_all_hints).toBeUndefined();
+    const c = problemClassificationSchema.parse({
+      problem_type: "computational",
+      confidence: 0.9,
+      reasoning: "求值",
+      computational_hints: { unknowns: ["x"], equation_type: null },
+      find_all_hints: { parameter: "m", condition_description: "x" },
+    });
+    expect(c.computational_hints).toEqual({ unknowns: ["x"] });
+    expect(c.find_all_hints).toBeUndefined();
+    const f = problemClassificationSchema.parse({
+      problem_type: "find_all_values",
+      confidence: 0.9,
+      reasoning: "求所有",
+      computational_hints: { unknowns: "bad" },
+      find_all_hints: { parameter: "m", condition_description: "整除", search_range_hint: null },
+    });
+    expect(f.computational_hints).toBeUndefined();
+    expect(f.find_all_hints).toEqual({ parameter: "m", condition_description: "整除" });
+  });
+
   it("accepts valid computational classification", () => {
     const result = problemClassificationSchema.parse({
       problem_type: "computational",
