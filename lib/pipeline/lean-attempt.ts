@@ -16,6 +16,7 @@
  */
 import { autoformalize } from "../llm/autoformalize";
 import { lt } from "../llm/output-locale";
+import { geometryProof, looksGeometric } from "../lean/geometry";
 import { assembleLeanSource } from "../lean/assemble";
 import { hammerTheorem } from "../lean/hammer";
 import { checkLeanAvailable, verifyLeanSource, type LeanVerifyResult } from "../lean/sandbox";
@@ -698,7 +699,7 @@ export async function proveWithoutModel(args: {
   /** A power too big to compute is in the statement: skip what would evaluate it. */
   huge: boolean;
 }): Promise<{
-  proof?: { verification: LeanVerifyResult; source: string; tactics: string; strategy: "hammer" | "trivial" | "order" | "bounded"; attempts: number };
+  proof?: { verification: LeanVerifyResult; source: string; tactics: string; strategy: "hammer" | "trivial" | "order" | "bounded" | "geometry"; attempts: number };
   tried: string[];
 }> {
   const { sessionId, theoremName, theoremType, expectedSignature, useMathlib, huge } = args;
@@ -738,6 +739,13 @@ export async function proveWithoutModel(args: {
     if (v.ok) return { proof: { verification: v, source, tactics, strategy: "bounded", attempts: 1 }, tried };
   }
   if (boundedScripts.length) tried.push(lt("程序写的逐个检查（内核算完界以下的每个数）", "a check the program wrote (the kernel tries every number below the bound)"));
+
+  // Coordinate geometry: the program writes the algebraic proof (polynomial certificate from SymPy).
+  if (!huge && looksGeometric(theoremType)) {
+    const geo = await geometryProof({ sessionId, theoremName, theoremType, expectedSignature, useMathlib });
+    if (geo.proof) return { proof: { ...geo.proof, strategy: "geometry", attempts: 1 }, tried };
+    tried.push(lt(`程序写的坐标代数证明（${geo.reason}）`, `an algebraic proof in coordinates the program wrote (${geo.reason})`));
+  }
   return { tried };
 }
 

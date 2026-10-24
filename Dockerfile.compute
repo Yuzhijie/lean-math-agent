@@ -8,7 +8,7 @@ COPY scripts/requirements.txt* ./
 RUN pip install --no-cache-dir -r requirements.txt 2>/dev/null || pip install --no-cache-dir sympy flask flask-cors
 
 # Copy compute server + the hardened parsing helper it imports
-COPY scripts/compute-server.py scripts/safe_parse.py ./
+COPY scripts/compute-server.py scripts/safe_parse.py scripts/poly_certificate.py ./
 COPY scripts/solve ./solve
 
 # Run as an unprivileged user: the service evaluates untrusted expressions.

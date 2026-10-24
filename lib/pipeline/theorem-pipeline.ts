@@ -28,6 +28,7 @@ import { buildProverContext, rememberVerifiedProof } from "../prover/context";
 import { proveBySketch, sketchEnabled } from "../prover/sketch";
 import { proveWholeTheorem, wholeProofEnabled } from "../prover/whole-proof";
 import { hammerTheorem } from "../lean/hammer";
+import { geometryProof, looksGeometric } from "../lean/geometry";
 import { rememberRepair } from "../lean/proof-memory";
 import { replayRecalled } from "../prover/replay";
 import { lt } from "../llm/output-locale";
@@ -233,6 +234,53 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
     }
   } catch {
     // Lean unavailable or similar — continue with the LLM stages.
+  }
+
+  // ── 3a. Coordinate geometry: the program writes the algebraic proof itself (no model calls) ──
+  if (looksGeometric(theoremType)) {
+    throwIfCancelled();
+    emit("geometry", lt("尝试程序写的坐标代数证明（SymPy 求系数）", "Trying an algebraic proof in coordinates written by the program (coefficients from SymPy)"));
+    try {
+      const geo = await geometryProof({ sessionId: session.id, theoremName, theoremType, expectedSignature: frozenSignature, useMathlib });
+      if (geo.proof) {
+        emit("geometry", lt("✅ 程序写出的坐标代数证明通过 Lean 检查", "✅ The program's algebraic proof in coordinates passed Lean"));
+        void rememberVerifiedProof({ theoremName, theoremType, tactics: geo.proof.tactics, strategy: "geometry", problemText: session.problem_text });
+        const leanProofAttempt: LeanProofAttempt = {
+          attempted: true,
+          success: true,
+          formal_statement: geo.proof.source,
+          proof_code: geo.proof.source,
+          axioms: geo.proof.verification.axioms?.axioms,
+          statement_locked: frozenSignature !== undefined && geo.proof.verification.signatureMatch === true,
+          verifier: geo.proof.verification.backend,
+          strategy: "geometry",
+          attempts: 1,
+        };
+        updateSession(session.id, { assembled_lean: geo.proof.source, build_status: "ok", pipeline_stage: "complete", lean_proof_attempt: leanProofAttempt });
+        emit("complete", lt("✅ 完全形式化验证通过（坐标代数）", "✅ Fully formally verified (coordinate algebra)"));
+        return {
+          status: 200,
+          body: {
+            ...baseBody,
+            nl_solution: nlSolution,
+            lean_proof_attempt: leanProofAttempt,
+            method: { id: "geometry", title: lt("坐标代数（程序写的证明）", "Coordinate algebra (proof written by the program)"), category: "other" },
+            steps: [],
+            sorry_labels: [],
+            fully_verified: true,
+            build_status: "ok",
+            total_attempts: 1,
+            sorry_report: { fully_verified: true, summary: lt("✅ 完全形式化验证通过", "✅ Fully formally verified"), details: [] },
+            assembled_lean: geo.proof.source,
+            build_log: geo.proof.verification.log,
+          },
+        };
+      }
+      emit("geometry", lt(`坐标代数证明没有成功：${geo.reason}`, `The coordinate proof did not work: ${geo.reason}`));
+    } catch (e) {
+      if (e instanceof CancelledError) throw e;
+      // best effort
+    }
   }
 
   // Goal state at the initial `sorry` (also a preflight of the statement).

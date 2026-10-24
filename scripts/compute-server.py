@@ -14,6 +14,8 @@ Endpoints:
                        → { "is_valid": true, "equation_residuals": [...], "constraint_checks": [...] }
   POST /vieta          { "polynomial": "5*x**2 - 14*x + 8", "variable": "x" }
                        → { "degree": 2, "sum_of_roots": "14/5", "product_of_roots": "8/5", "coefficients": [...] }
+  POST /certificate    { "vars", "hyps", "goal", "multipliers" } (sparse polynomials, see poly_certificate.py)
+                       → { "ok": true, "multiplier": [...], "coefficients": {...} }
 """
 
 import json
@@ -34,6 +36,7 @@ except ImportError:
 # All expression strings reach this server from LLM output (ultimately from
 # user-supplied problem text). `parse_expr`/`sympify` are eval-based, so the
 # hardened wrappers in safe_parse.py are used everywhere instead.
+import poly_certificate  # noqa: E402  (polynomial certificates for the Lean geometry prover)
 from safe_parse import (  # noqa: E402
     DEFAULT_TRANSFORMATIONS,
     ComputationTimeout,
@@ -78,6 +81,7 @@ class ComputeHandler(BaseHTTPRequestHandler):
             "/vieta": lambda: self._vieta(body),
             "/recurrence": lambda: self._recurrence(body),
             "/check-perfect-squares": lambda: self._check_perfect_squares(body),
+            "/certificate": lambda: poly_certificate.certificate_or_reason(body),
         }
 
         handler = routes.get(self.path)

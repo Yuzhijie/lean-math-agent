@@ -1202,6 +1202,8 @@ export default function Home() {
                                         ? tr("乘法阶（程序按各素数幂的阶写出证明）", "Multiplicative orders (proof written by the program from the order of each prime power)")
                                         : leanProofAttempt.strategy === "bounded"
                                           ? tr("逐个检查（程序写的证明，Lean 内核算完界以下的每个数）", "Checked one by one (a proof the program wrote; Lean's kernel tries every number below the bound)")
+                                          : leanProofAttempt.strategy === "geometry"
+                                            ? tr("坐标代数（程序把几何条件化成多项式，用 SymPy 求出系数写出证明）", "Coordinate algebra (the program turned the geometry into polynomials and wrote the proof from SymPy's coefficients)")
                                       : tr(
                                         `分步搜索（${leanProofAttempt.attempts ?? "?"} 次尝试）`,
                                         `Stepwise search (${leanProofAttempt.attempts ?? "?"} attempts)`,

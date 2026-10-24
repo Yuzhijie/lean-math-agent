@@ -43,6 +43,8 @@ export type TacticOutcome =
       solved: boolean;
       /** Info messages (e.g. `Try this:` from `exact?`). */
       infos: string[];
+      /** Errors Lean logged while still producing a state (elaboration errors it recovered from). */
+      errors: string[];
       durationMs: number;
     }
   | { ok: false; error: string; durationMs: number };
@@ -186,6 +188,7 @@ export class ProofSession {
           goals: resp.goals,
           solved: resp.solved,
           infos: resp.messages.filter((m) => m.severity === "info").map((m) => m.data),
+          errors: resp.messages.filter((m) => m.severity === "error").map((m) => m.data),
           durationMs: Date.now() - started,
         };
       } catch (e) {
