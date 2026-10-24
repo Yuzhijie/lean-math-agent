@@ -91,6 +91,53 @@ function parseAnswer(raw: unknown, prep: Prepared): CertificateResult {
 
 const MAX_OUTPUT = 8 * 1024 * 1024;
 
+/** POST /certificate on the compute server, else the script; the parsed JSON answer (null on failure). */
+async function transport(body: string, timeoutMs: number): Promise<unknown> {
+  const url = process.env.COMPUTE_ENGINE_URL;
+  if (url) {
+    try {
+      const res = await fetch(`${url.replace(/\/$/, "")}/certificate`, { method: "POST", headers: { "Content-Type": "application/json" }, body, signal: AbortSignal.timeout(timeoutMs) });
+      if (res.ok) return await res.json().catch(() => null);
+      if (res.status === 408) return null;
+    } catch (e) {
+      if (e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")) return null;
+    }
+  }
+  return new Promise((resolve) => {
+    let out = "";
+    let done = false;
+    const finish = (v: unknown) => {
+      if (!done) {
+        done = true;
+        clearTimeout(timer);
+        resolve(v);
+      }
+    };
+    const child = spawn(process.env.GEOMETRY_PYTHON ?? "python3", [path.join(process.cwd(), "scripts", "poly_certificate.py")], { stdio: ["pipe", "pipe", "ignore"] });
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish(null);
+    }, timeoutMs);
+    child.on("error", () => finish(null));
+    child.stdin.on("error", () => undefined);
+    child.stdout.on("data", (d) => {
+      out += d;
+      if (out.length > MAX_OUTPUT) {
+        child.kill("SIGKILL");
+        finish(null);
+      }
+    });
+    child.on("close", () => {
+      try {
+        finish(JSON.parse(out));
+      } catch {
+        finish(null);
+      }
+    });
+    child.stdin.end(body);
+  });
+}
+
 function runScript(prep: Prepared, timeoutMs: number): Promise<CertificateResult> {
   const python = process.env.GEOMETRY_PYTHON ?? "python3";
   const script = path.join(process.cwd(), "scripts", "poly_certificate.py");
@@ -158,4 +205,38 @@ export async function findCertificate(req: CertificateRequest): Promise<Certific
     }
   }
   return runScript(prep, timeoutMs);
+}
+
+// ── Numeric points (refutation) ───────────────────────────────────────────
+
+export interface PointsRequest {
+  /** Variable count of the problem's VarTable (v0…). */
+  vars: number;
+  fixed: Map<number, number>;
+  equations: Poly[];
+  inequalities: { poly: Poly; rel: ">" | ">=" | "!=" }[];
+  timeoutSec?: number;
+}
+
+/** Points satisfying the polynomial system (proposals only: the caller checks them). */
+export async function findPoints(req: PointsRequest): Promise<Map<number, number>[]> {
+  const eqs = req.equations.filter(fits);
+  const ineqs = req.inequalities.filter((q) => fits(q.poly));
+  const used = new Set<number>(req.fixed.keys());
+  for (const p of [...eqs, ...ineqs.map((q) => q.poly)]) for (const v of p.vars()) used.add(v);
+  const order = [...used].sort((a, b) => a - b);
+  if (!order.length || !eqs.length) return [];
+  const to = new Map(order.map((v, i) => [v, i]));
+  const body = JSON.stringify({
+    mode: "points",
+    vars: order.map((_, i) => `v${i}`),
+    fixed: Object.fromEntries([...req.fixed].filter(([v]) => to.has(v)).map(([v, x]) => [`v${to.get(v)}`, String(x)])),
+    equations: eqs.map((p) => p.rename(to).toSparse()),
+    inequalities: ineqs.map((q) => ({ poly: q.poly.rename(to).toSparse(), rel: q.rel })),
+    timeout: req.timeoutSec ?? 20,
+  });
+  const raw = await transport(body, ((req.timeoutSec ?? 20) + 10) * 1000);
+  const r = raw as { ok?: boolean; points?: Record<string, string>[] } | null;
+  if (!r?.ok || !Array.isArray(r.points)) return [];
+  return r.points.map((pt) => new Map(Object.entries(pt).map(([k, v]) => [order[Number(k.slice(1))], Number(v)])));
 }

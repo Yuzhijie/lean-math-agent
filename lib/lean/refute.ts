@@ -19,6 +19,7 @@
  * Everything else (no Decidable/Testable instance, ℝ variables, timeouts,
  * missing tactic) is `inconclusive`. Nothing here ever accepts a proof.
  */
+import { CancelledError } from "../jobs";
 import { verifyLeanSource, type LeanVerifyResult } from "./sandbox";
 import { validateTheoremStatement } from "./sanitize";
 import { lt } from "../llm/output-locale";
@@ -28,7 +29,7 @@ export type RefuteVerdict = "refuted" | "confirmed" | "no_counterexample" | "inc
 export interface RefuteResult {
   verdict: RefuteVerdict;
   /** Probe that produced the verdict. */
-  method?: "decide" | "plausible";
+  method?: "decide" | "plausible" | "numeric";
   /** Variable assignment reported by `plausible`, when refuted. */
   counterexample?: string;
   detail: string;
@@ -42,7 +43,7 @@ export interface RefuteOptions {
   /** Random trials for `plausible` (default REFUTE_TRIALS or 200). */
   trials?: number;
   /** Skip a probe (tests / spawn mode). */
-  probes?: Array<"decide" | "plausible">;
+  probes?: Array<"decide" | "plausible" | "numeric">;
   sessionId?: string;
 }
 
@@ -100,7 +101,7 @@ function errorTexts(res: LeanVerifyResult): string[] {
 }
 
 /**
- * Try to refute (or decidably confirm) a theorem statement. Never throws.
+ * Try to refute (or decidably confirm) a theorem statement. Never throws (except when the job is cancelled).
  */
 export async function refuteStatement(theoremName: string, theoremType: string, opts: RefuteOptions = {}): Promise<RefuteResult> {
   const started = Date.now();
@@ -113,7 +114,7 @@ export async function refuteStatement(theoremName: string, theoremType: string, 
   const header = useMathlib ? HEADER_MATHLIB : "";
   const timeoutMs = opts.timeoutMs ?? envNum("REFUTE_TIMEOUT_MS", 20_000);
   const sessionId = opts.sessionId ?? "refute";
-  const probes = opts.probes ?? ["decide", "plausible"];
+  const probes = opts.probes ?? ["decide", "plausible", "numeric"];
   const notes: string[] = [];
 
   // ── decide on the negation ─────────────────────────────────────────
@@ -177,6 +178,31 @@ export async function refuteStatement(theoremName: string, theoremType: string, 
       notes.push(`plausible: ${text.split("\n")[0]?.slice(0, 120) || res.log.slice(0, 120)}`);
     } catch (e) {
       notes.push(`plausible: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  // ── numeric (real statements: coordinates, roots, trigonometry) ─────
+  // decide and plausible cannot evaluate real numbers; points that satisfy the hypotheses are
+  // searched numerically and each is checked against the statement itself (lib/lean/geometry/refute.ts).
+  if (probes.includes("numeric") && useMathlib) {
+    try {
+      const { geometryRefute, describeCounterexample, looksNumeric } = await import("./geometry");
+      if (looksNumeric(theoremType)) {
+        const c = await geometryRefute({ theoremName, theoremType, useMathlib });
+        if (c) {
+          const text = describeCounterexample(c);
+          return done({
+            verdict: "refuted",
+            method: "numeric",
+            counterexample: text,
+            detail: lt(`数值反例：满足全部条件但结论不成立的点 ${text}`, `Numeric counterexample: every hypothesis holds but the conclusion fails at ${text}`),
+          });
+        }
+        notes.push(lt("数值搜索没有找到反例", "numeric search found no counterexample"));
+      }
+    } catch (e) {
+      if (e instanceof CancelledError) throw e;
+      notes.push(`numeric: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 

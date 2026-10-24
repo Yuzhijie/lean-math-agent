@@ -136,6 +136,15 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
       const detail = failedLayers.map((v) => `Layer ${v.layer}: ${v.detail}`).join("; ");
       updateSession(session.id, { build_status: "fail", pipeline_stage: "complete" });
       emit("autoformalizing", lt(`❌ 形式化验证未通过 (${failedLayers.length} 层失败)`, `❌ Formalization failed validation (${failedLayers.length} layer(s) failed)`));
+      if (formalResult.refutation?.verdict === "refuted" && formalResult.refutation.counterexample) {
+        emit(
+          "autoformalizing",
+          lt(
+            `陈述有反例（${formalResult.refutation.counterexample}）：不会去找证明。若形式化忠实于题意，说明题目的结论本身不成立。`,
+            `The statement has a counterexample (${formalResult.refutation.counterexample}): no proof will be searched for. If the formalization is faithful, the problem's claim itself is false.`,
+          ),
+        );
+      }
       return {
         status: 422,
         body: {

@@ -46,7 +46,7 @@ export interface GeometryOutcome {
 const PAIR_SIMP = "simp only [Prod.mk.injEq, ne_eq, Prod.mk_sub_mk, Prod.mk_add_mk, Prod.smul_mk, smul_eq_mul, Prod.neg_mk] at *";
 const MAX_INTROS = 60;
 
-class Fail extends Error {}
+export class Fail extends Error {}
 
 /**
  * A tactic that may compute a lot (ring normal forms of big certificates, nlinarith): in tactic
@@ -58,7 +58,7 @@ function heavy(tactic: string): string {
   return `set_option maxHeartbeats ${Number.isFinite(n) && n > 0 ? Math.floor(n) : 1_000_000} in ${tactic}`;
 }
 
-function tryParse(text: string): Node | undefined {
+export function tryParse(text: string): Node | undefined {
   try {
     return parseTerm(text);
   } catch (e) {
@@ -67,7 +67,7 @@ function tryParse(text: string): Node | undefined {
   }
 }
 
-function state(run: TacticRunner): GoalState {
+export function state(run: TacticRunner): GoalState {
   const g = run.goals()[0];
   const st = g ? parseGoal(g) : null;
   if (!st) throw new Fail("could not read the goal");
@@ -89,7 +89,7 @@ const isReal = (type: string) => /^ℝ$/.test(type.trim());
 const isPoint = (type: string) => /^ℝ\s*×\s*ℝ$/.test(type.trim());
 
 /** Step 1: unfold lets, intro everything, split ∧/∃, name everything, substitute and split points. */
-async function normalize(run: TacticRunner): Promise<void> {
+export async function normalize(run: TacticRunner): Promise<void> {
   await run.apply("simp only []");
   if (!run.goals().length) return;
   let hyp = 0;

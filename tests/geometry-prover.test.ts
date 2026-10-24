@@ -5,6 +5,8 @@ import { parseGoal } from "@/lib/lean/geometry/goal";
 import { Frac, Poly, toPoly, VarTable } from "@/lib/lean/geometry/poly";
 import { findCertificate } from "@/lib/lean/geometry/certificate";
 import { looksGeometric } from "@/lib/lean/geometry";
+import { evalProp, evalTerm } from "@/lib/lean/geometry/refute";
+import { findPoints } from "@/lib/lean/geometry/certificate";
 
 function show(src: string, vars = new VarTable(new Set(["x", "t", "a", "b"]))) {
   const n = parseTerm(src);
@@ -77,6 +79,24 @@ describe("polynomials", () => {
   });
 });
 
+describe("numeric evaluation (refutation checks)", () => {
+  const env = new Map([["d", 2 * Math.cos(Math.PI / 9) - 1]]);
+  it("evaluates terms as Lean means them", () => {
+    expect(evalTerm(parseTerm("√((0 - d) ^ 2 + (0 - 0) ^ 2)"), env)).toBeCloseTo(0.8794, 4);
+    expect(evalTerm(parseTerm("√3 / 2 * Real.cos (Real.pi / 9)"), env)).toBeCloseTo(0.8138, 4);
+    expect(evalTerm(parseTerm("1 / 0"), env)).toBe(0); // x / 0 = 0
+    expect(evalTerm(parseTerm("√(-4)"), env)).toBe(0); // Real.sqrt of a negative is 0
+    expect(evalTerm(parseTerm("↑n + 1"), env)).toBeUndefined();
+  });
+  it("tells true, false and too close to call apart", () => {
+    expect(evalProp(parseTerm("d = 2 * Real.cos (Real.pi / 9) - 1"), env)).toBe(true);
+    expect(evalProp(parseTerm("d = √3 / 2"), env, 1e-4)).toBe(false);
+    expect(evalProp(parseTerm("d = 0.8793853"), env)).toBeUndefined();
+    expect(evalProp(parseTerm("0 ≤ d ∧ d ≤ 1"), env)).toBe(true);
+    expect(evalProp(parseTerm("d < 0 ∨ d > 2"), env)).toBe(false);
+  });
+});
+
 describe("statements it takes on", () => {
   it("coordinates yes, synthetic geometry no", () => {
     expect(looksGeometric("(E F : ℝ × ℝ) : E ≠ F → √((E.1 - F.1) ^ 2) = 1")).toBe(true);
@@ -145,6 +165,18 @@ describe.skipIf(!sympy)("polynomial certificates (SymPy)", () => {
     expect([...r.coefficients.keys()]).toEqual(["h₁"]);
     expect(r.multiplier.map((m) => m.source)).toEqual(["hAB'"]);
     expect(r.coefficients.get("h₁")!.toLean(vars.names)).toBe("1");
+  });
+
+  it("finds the points of a system (the two D with BD = BC on AC)", async () => {
+    // d² − 2d·c + 2c − 1 = 0 with c = cos 20°: d = 1 or d = 2c − 1
+    const vars = new VarTable(new Set(["d", "c"]));
+    const P = (s: string) => toPoly(s, parseTerm(s), vars);
+    const eq = P("d ^ 2 - 2 * d * c + 2 * c - 1");
+    const pts = await findPoints({ vars: 2, fixed: new Map([[1, Math.cos(Math.PI / 9)]]), equations: [eq], inequalities: [{ poly: P("d"), rel: ">=" }] });
+    const ds = pts.map((p) => p.get(0)!).sort();
+    expect(ds.length).toBe(2);
+    expect(ds[0]).toBeCloseTo(2 * Math.cos(Math.PI / 9) - 1, 9);
+    expect(ds[1]).toBeCloseTo(1, 9);
   });
 
   it("says so when the goal does not follow", async () => {

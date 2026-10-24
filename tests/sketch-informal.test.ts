@@ -68,9 +68,13 @@ describe("sketch-and-fill: informal proof first, holes to the prover", () => {
   });
 
   it("does not spend prover samples on a hole whose goal does not elaborate as a lemma", async () => {
-    verifyMock.mockResolvedValue({ ok: false, log: "unknown identifier", status: "fail" });
+    // the lemma check runs on the sketch's own session (it holds the worker)
+    const session = (await openMock()) as { verify: ReturnType<typeof vi.fn> };
+    openMock.mockClear();
+    session.verify.mockResolvedValue({ ok: false, log: "unknown identifier", status: "fail" });
     const r = await proveBySketch({ sessionId: "s", theoremName: "t", theoremType: TYPE, config: { samples: 1, repairs: 0, holeProver: true, useMathlib: false, goalSearch: { maxNodes: 0 } } });
     expect(wholeMock).not.toHaveBeenCalled();
     expect(r.log).toContain("does not elaborate as a lemma");
+    expect(verifyMock).not.toHaveBeenCalled(); // never a second lease while the session holds a worker
   });
 });

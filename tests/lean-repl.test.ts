@@ -150,6 +150,38 @@ describe("ReplWorker protocol", () => {
   });
 });
 
+describe("waiting for a worker", () => {
+  it("gives up after LEAN_REPL_LEASE_TIMEOUT_MS instead of waiting forever (a holder asking for a second worker)", async () => {
+    const pool = makePool();
+    const held = await pool.lease();
+    process.env.LEAN_REPL_LEASE_TIMEOUT_MS = "200";
+    try {
+      await expect(pool.lease()).rejects.toMatchObject({ kind: "timeout" });
+    } finally {
+      delete process.env.LEAN_REPL_LEASE_TIMEOUT_MS;
+      held.release();
+    }
+    // the pool still works afterwards
+    const again = await pool.lease();
+    again.release();
+  });
+
+  it("stops waiting when the job is cancelled", async () => {
+    const { runJob, CancelledError, cancelJob, _resetJobsForTests } = await import("@/lib/jobs");
+    _resetJobsForTests();
+    const pool = makePool();
+    const held = await pool.lease();
+    let jobId = "";
+    const p = runJob({ owner: "u", kind: "solve", onStart: (j) => (jobId = j.id) }, async () => {
+      await pool.lease();
+    }).catch((e) => e);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(cancelJob(jobId, "u")).toBe(true);
+    expect(await p).toBeInstanceOf(CancelledError);
+    held.release();
+  });
+});
+
 describe("ReplWorker direct", () => {
   it("start() rejects for a missing binary", async () => {
     const w = new ReplWorker(fakeConfig({ binPath: "/nonexistent/repl" }), 1);

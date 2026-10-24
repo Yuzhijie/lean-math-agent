@@ -306,7 +306,8 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
             const elaborates =
               lemma &&
               (
-                await verifyLeanSource(
+                // on this session's worker: it holds one, and with LEAN_REPL_WORKERS=1 another lease would wait for it forever
+                await session.verify(
                   args.sessionId,
                   assembleLeanSource({ theoremName: `${args.theoremName}_hole${i + 1}`, theoremType: lemma.statement, stepCodes: ["sorry"], useMathlib: cfg.useMathlib, opens: args.opens }),
                   { allowSorry: true, checkAxioms: false },
@@ -322,6 +323,7 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
                 problemText: args.problemText,
                 opens: args.opens,
                 config: { samples: cfg.samples, rounds: 1, timeBudgetMs: budget, useMathlib: cfg.useMathlib, suggest: false, strictBudget: true },
+                verify: (sid, src, o) => session.verify(sid, src, o),
               });
               llmCalls += pr.samples;
               if (pr.ok && pr.tactics) {

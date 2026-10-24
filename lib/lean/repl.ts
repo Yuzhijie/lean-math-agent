@@ -20,6 +20,7 @@
  * `cd lean-sandbox && lake build repl`.
  */
 import { spawn, type ChildProcess } from "node:child_process";
+import { CancelledError, currentSignal } from "../jobs";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
@@ -470,8 +471,47 @@ export class ReplPool {
         }
         return w;
       }
-      await new Promise<void>((resolve) => this.waiters.push(resolve));
+      await this.waitForWorker();
     }
+  }
+
+  /**
+   * Wait until a worker is released. Bounded (LEAN_REPL_LEASE_TIMEOUT_MS, default 10 min) and
+   * cancellable: a caller that already holds the only worker and asks for another one (a proof
+   * session that verifies through verifyLeanSource) would otherwise wait forever, and the solve
+   * with it — sketch-and-fill once did exactly that with LEAN_REPL_WORKERS=1.
+   */
+  private waitForWorker(): Promise<void> {
+    const signal = currentSignal();
+    if (signal?.aborted) return Promise.reject(new CancelledError());
+    const ms = envInt("LEAN_REPL_LEASE_TIMEOUT_MS", 600_000);
+    return new Promise<void>((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        const i = this.waiters.indexOf(wake);
+        if (i >= 0) this.waiters.splice(i, 1);
+      };
+      const wake = () => {
+        cleanup();
+        resolve();
+      };
+      const onAbort = () => {
+        cleanup();
+        reject(new CancelledError());
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(
+          new ReplError(
+            "timeout",
+            `no Lean worker became free within ${Math.round(ms / 1000)}s (all ${this.config.workers} busy; LEAN_REPL_WORKERS raises the number)`,
+          ),
+        );
+      }, ms);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      this.waiters.push(wake);
+    });
   }
 
   private release(worker: ReplWorker): void {

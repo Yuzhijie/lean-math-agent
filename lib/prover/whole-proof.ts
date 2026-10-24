@@ -142,11 +142,18 @@ export interface WholeProofArgs {
   opens?: string[];
   config?: Partial<WholeProofConfig>;
   onProgress?: (p: WholeProofProgress) => void;
+  /**
+   * How candidates are checked (default verifyLeanSource). A caller holding a REPL worker (a
+   * sketch hole inside an open ProofSession) passes its session's verify: with one worker,
+   * verifyLeanSource would wait for the worker the caller holds.
+   */
+  verify?: typeof verifyLeanSource;
 }
 
 // ── Main loop ─────────────────────────────────────────────────────────
 
 export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProofResult> {
+  const verify = args.verify ?? verifyLeanSource;
   const started = Date.now();
   const cfg = loadWholeProofConfig(args.config);
   const candidates: WholeProofCandidate[] = [];
@@ -276,7 +283,7 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
     const verified = await Promise.all(
       tacticBlocks.map(async (tactics) => {
         const source = assemble(tactics);
-        const verification = await verifyLeanSource(args.sessionId, source, {
+        const verification = await verify(args.sessionId, source, {
           theoremName: args.theoremName,
           expectedSignature: args.expectedSignature,
         });
@@ -284,7 +291,7 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
         const trimmed = verification.ok ? undefined : dropNoGoalTactics(verification, source, tactics);
         if (trimmed) {
           const source2 = assemble(trimmed);
-          const v2 = await verifyLeanSource(args.sessionId, source2, { theoremName: args.theoremName, expectedSignature: args.expectedSignature });
+          const v2 = await verify(args.sessionId, source2, { theoremName: args.theoremName, expectedSignature: args.expectedSignature });
           if (v2.ok) {
             log.push(`round ${round}: a candidate was finished early; its extra tactics were dropped`);
             return { tactics: trimmed, source: source2, verification: v2 };
@@ -348,7 +355,7 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
     }
 
     // ── Pick the most promising failure and build feedback ──────────
-    const best = await pickBestFailure(args.sessionId, verified, assemble);
+    const best = await pickBestFailure(verify, args.sessionId, verified, assemble);
     let feedback = formatVerificationFeedback(best.verification, best.source);
     if (!feedback) feedback = best.verification.log || "verification failed";
 
@@ -428,6 +435,7 @@ interface Verified {
  * `sorry` is re-verified with `allowSorry` so its open goals are visible.
  */
 async function pickBestFailure(
+  verify: typeof verifyLeanSource,
   sessionId: string,
   verified: Verified[],
   assemble: (t: string) => string,
@@ -437,7 +445,7 @@ async function pickBestFailure(
       let verification = v.verification;
       if (verification.rejected && /sorry/.test(verification.rejected)) {
         try {
-          verification = await verifyLeanSource(sessionId, assemble(v.tactics), { allowSorry: true });
+          verification = await verify(sessionId, assemble(v.tactics), { allowSorry: true });
         } catch {
           // keep the textual rejection
         }

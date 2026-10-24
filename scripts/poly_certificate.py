@@ -393,6 +393,152 @@ def certificate(req: dict) -> dict:
     return {"ok": False, "reason": "the goal follows, but no cofactors were found within the degree bounds"}
 
 
+# ── Numeric points (for refuting a statement) ────────────────────────────────
+
+
+def _sparse_terms(sparse: Any, index: dict[str, int]) -> list[tuple[Any, list[tuple[int, int]]]]:
+    import mpmath
+
+    if not isinstance(sparse, list) or len(sparse) > MAX_TERMS:
+        raise CertError("a polynomial must be a list of at most %d terms" % MAX_TERMS)
+    out = []
+    for term in sparse:
+        if not (isinstance(term, list) and len(term) == 2 and isinstance(term[1], dict)):
+            raise CertError("a term is [coefficient, {variable: exponent}]")
+        try:
+            c = Fraction(str(term[0]))
+        except (ValueError, ZeroDivisionError):
+            raise CertError(f"bad coefficient {term[0]!r}")
+        mono = []
+        for v, e in term[1].items():
+            if v not in index or not isinstance(e, int) or e < 0 or e > 64:
+                raise CertError(f"bad monomial {term[1]!r}")
+            mono.append((index[v], e))
+        out.append((mpmath.mpf(c.numerator) / c.denominator, mono))
+    return out
+
+
+def _eval(terms, x):
+    total = 0
+    for c, mono in terms:
+        t = c
+        for i, e in mono:
+            t *= x[i] ** e
+        total += t
+    return total
+
+
+def _grad(terms, x, n):
+    g = [0] * n
+    for c, mono in terms:
+        for k, (i, e) in enumerate(mono):
+            t = c * e * x[i] ** (e - 1)
+            for j, (i2, e2) in enumerate(mono):
+                if j != k:
+                    t *= x[i2] ** e2
+            g[i] += t
+    return g
+
+
+def numeric_points(req: dict) -> dict:
+    """
+    Points where every equation is zero and every inequality holds, found by damped Gauss–Newton
+    (minimum-norm steps, so an underdetermined system lands somewhere on its solution set) from
+    random starts, refined at 40 digits. `fixed` gives known values (numeric atoms such as
+    cos(π/9)). The caller checks each point against the original statement; this only proposes.
+    """
+    import random
+
+    import mpmath
+
+    names = req.get("vars")
+    if not isinstance(names, list) or not names or len(names) > MAX_VARS or not all(isinstance(n, str) and NAME.match(n) for n in names):
+        raise CertError("vars: a list of plain identifiers")
+    index = {n: i for i, n in enumerate(names)}
+    mpmath.mp.dps = 40
+    fixed: dict[int, Any] = {}
+    for k, v in (req.get("fixed") or {}).items():
+        if k not in index:
+            raise CertError(f"unknown fixed variable {k}")
+        try:
+            fixed[index[k]] = mpmath.mpf(str(v))
+        except (ValueError, TypeError):
+            raise CertError(f"bad value for {k}")
+    eqs = [_sparse_terms(e, index) for e in (req.get("equations") or [])][:200]
+    ineqs = []
+    for q in (req.get("inequalities") or [])[:200]:
+        if not isinstance(q, dict) or q.get("rel") not in (">", ">=", "!="):
+            raise CertError("an inequality is {poly, rel: '>' | '>=' | '!='}")
+        ineqs.append((_sparse_terms(q.get("poly"), index), q["rel"]))
+    if not eqs:
+        return {"ok": True, "points": []}
+    n = len(names)
+    free = [i for i in range(n) if i not in fixed]
+    trials = max(1, min(200, int(req.get("trials", 30))))
+    rng = random.Random(int(req.get("seed", 1)))
+    points: list[list[Any]] = []
+
+    def residual(x):
+        return [_eval(e, x) for e in eqs]
+
+    for _ in range(trials):
+        x = [fixed[i] if i in fixed else mpmath.mpf(rng.uniform(-3, 3)) for i in range(n)]
+        lam = mpmath.mpf("1e-3")
+        r = residual(x)
+        norm = sum(v * v for v in r)
+        for _it in range(200):
+            if norm < mpmath.mpf("1e-60"):
+                break
+            J = [[g[i] for i in free] for g in (_grad(e, x, n) for e in eqs)]
+            m = len(eqs)
+            k = len(free)
+            if k == 0:
+                break
+            # minimum-norm damped step: δ = -Jᵀ (J Jᵀ + λI)⁻¹ r
+            A = mpmath.matrix(m, m)
+            for a in range(m):
+                for b in range(m):
+                    A[a, b] = sum(J[a][t] * J[b][t] for t in range(k)) + (lam if a == b else 0)
+            try:
+                y = mpmath.lu_solve(A, mpmath.matrix([-v for v in r]))
+            except ZeroDivisionError:
+                lam *= 10
+                continue
+            step = [sum(J[a][t] * y[a] for a in range(m)) for t in range(k)]
+            trial = list(x)
+            for t, i in enumerate(free):
+                trial[i] = x[i] + step[t]
+            r2 = residual(trial)
+            n2 = sum(v * v for v in r2)
+            if n2 < norm:
+                x, r, norm = trial, r2, n2
+                lam = max(lam / 10, mpmath.mpf("1e-30"))
+            else:
+                lam *= 10
+                if lam > 1e12:
+                    break
+        if norm > mpmath.mpf("1e-50"):
+            continue
+        ok = True
+        for terms, rel in ineqs:
+            v = _eval(terms, x)
+            if (rel == ">" and not v > mpmath.mpf("1e-20")) or (rel == ">=" and not v > mpmath.mpf("-1e-20")) or (rel == "!=" and not abs(v) > mpmath.mpf("1e-12")):
+                ok = False
+                break
+        if not ok:
+            continue
+        if any(max(abs(a - b) for a, b in zip(p, x)) < mpmath.mpf("1e-12") for p in points):
+            continue
+        points.append(x)
+        if len(points) >= 8:
+            break
+    return {"ok": True, "points": [{names[i]: mpmath.nstr(v, 25) for i, v in enumerate(p)} for p in points]}
+
+
+def dispatch(req: dict) -> dict:
+    return numeric_points(req) if req.get("mode") == "points" else certificate(req)
+
+
 def request_timeout(req: Any, default: float = 30.0) -> float:
     try:
         t = float(req.get("timeout", default)) if isinstance(req, dict) else default
@@ -406,7 +552,7 @@ def certificate_or_reason(req: Any) -> dict:
     if not isinstance(req, dict):
         return {"ok": False, "reason": "request must be a JSON object"}
     try:
-        return certificate(req)
+        return dispatch(req)
     except CertError as e:
         return {"ok": False, "reason": str(e)}
 
@@ -416,7 +562,7 @@ def handle(req: Any, timeout: float = 30.0) -> dict:
         return {"ok": False, "reason": "request must be a JSON object"}
     try:
         with time_limit(request_timeout(req, timeout)):
-            return certificate(req)
+            return dispatch(req)
     except CertError as e:
         return {"ok": False, "reason": str(e)}
     except ComputationTimeout:
