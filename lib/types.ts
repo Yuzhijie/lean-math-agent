@@ -353,6 +353,26 @@ export interface GeneratedProblem {
   diagram_svg?: string;
   /** Set when the problem was generated from the local question bank (bank questions as the template). */
   bank?: BankProblemMeta;
+  /** Built-in generation: how the problem was checked (independent solve, counterexample search, Lean). */
+  verification?: GeneratedVerification;
+}
+
+export interface GeneratedCheck {
+  ok: boolean;
+  detail: string;
+  /** The check could not run (a person should look). */
+  skipped?: boolean;
+}
+
+/** Checks of a built-in generated problem (lib/llm/verify-generated.ts). */
+export interface GeneratedVerification {
+  /** The answer agrees with an independent solve and no counterexample was found. */
+  passed: boolean;
+  checks: { answer: GeneratedCheck; counterexample: GeneratedCheck };
+  /** The independent solver's answer ("true" / "false" for a claim to prove). */
+  independent_answer?: string;
+  /** The problem as a Lean statement and whether the program proved it (no model). */
+  lean?: { statement: string; proved: boolean; strategy?: string };
 }
 
 /** Where a bank-templated problem came from and how its checks went (problem generator, "local bank" mode). */

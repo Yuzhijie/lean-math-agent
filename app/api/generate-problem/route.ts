@@ -23,6 +23,8 @@ interface GenerateRequest {
   difficulty?: DifficultyLevel;
   domain?: CompetitionDomain;
   count?: number;
+  /** Stream progress as NDJSON lines (the checks take minutes). */
+  stream?: boolean;
 }
 
 const bankSourceSchema = z.object({
@@ -127,33 +129,52 @@ async function handlePOST(req: Request) {
   }
 
   const count = typeof body.count === "number" ? body.count : 3;
+  const options = { gradeLevel: body.grade_level, difficulty: body.difficulty, domain: body.domain, count };
+
+  if (body.stream) {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        const send = (data: Record<string, unknown>) => {
+          try {
+            controller.enqueue(encoder.encode(`${JSON.stringify(data)}\n`));
+          } catch {
+            /* the client went away */
+          }
+        };
+        const beat = setInterval(() => send({ type: "ping" }), 15_000);
+        try {
+          const result = await generateProblems({ ...options, onProgress: (p) => send({ type: "progress", ...p }) });
+          send({ type: "result", ...result });
+        } catch (e) {
+          console.error("[generate-problem] caught error:", e);
+          send({ type: "error", error: errorMessage(e), status: 502 });
+        } finally {
+          clearInterval(beat);
+          try {
+            controller.close();
+          } catch {
+            /* already closed */
+          }
+        }
+      },
+    });
+    return new Response(stream, { headers: { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-cache", "X-Accel-Buffering": "no" } });
+  }
 
   try {
-    const problems = await generateProblems({
-      gradeLevel: body.grade_level,
-      difficulty: body.difficulty,
-      domain: body.domain,
-      count,
-    });
-
-    return NextResponse.json({ problems });
+    const result = await generateProblems(options);
+    return NextResponse.json(result);
   } catch (e) {
     console.error("[generate-problem] caught error:", e);
-
-    let msg: string;
-    if (e instanceof LlmError) {
-      msg = e.message;
-    } else if (
-      e instanceof DOMException &&
-      e.name === "AbortError"
-    ) {
-      msg = "LLM request timed out";
-    } else {
-      msg = `generate-problem failed: ${e instanceof Error ? e.message : String(e)}`;
-    }
-
-    return NextResponse.json({ error: msg }, { status: 502 });
+    return NextResponse.json({ error: errorMessage(e) }, { status: 502 });
   }
+}
+
+function errorMessage(e: unknown): string {
+  if (e instanceof LlmError) return e.message;
+  if (e instanceof DOMException && e.name === "AbortError") return "LLM request timed out";
+  return `generate-problem failed: ${e instanceof Error ? e.message : String(e)}`;
 }
 
 // Server messages and model output follow the UI language (lib/llm/output-locale.ts).

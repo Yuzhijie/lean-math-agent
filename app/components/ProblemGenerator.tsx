@@ -13,7 +13,7 @@ import { QuestionFigure } from "./QuestionFigure";
 import { FigurePanel } from "./FigurePanel";
 import { BankTemplateControls, MatchHint, perQuestion, useBanks, type BankTemplateValue } from "./BankTemplateControls";
 import type { SolvedFigure } from "@/lib/figure/spec";
-import { cardStatus, checkIssues, readNdjson, type CheckKey, type ProgressLine } from "@/lib/bank/generation-view";
+import { cardStatus, checkIssues, readNdjson, type CheckedMeta, type CheckKey, type ProgressLine } from "@/lib/bank/generation-view";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -152,12 +152,14 @@ export function ProblemGenerator({ mode: modeProp, onUseProblem, onFormalize, on
   }
   // Bank mode: candidates that failed a check are kept but hidden behind a toggle.
   const [showFailed, setShowFailed] = useState(false);
-  const failedBank = problems.filter((p) => p.bank && !p.bank.passed);
-  const passedBank = problems.filter((p) => p.bank?.passed);
-  const isBankResult = problems.some((p) => p.bank);
+  // Bank candidates and checked built-in problems alike: the ones that failed are kept behind a toggle.
+  const checkedOf = (p: GeneratedProblem): CheckedMeta | undefined => p.bank ?? p.verification;
+  const failedBank = problems.filter((p) => checkedOf(p) && !checkedOf(p)!.passed);
+  const passedBank = problems.filter((p) => checkedOf(p)?.passed);
+  const isBankResult = problems.some((p) => checkedOf(p));
   // When nothing passed, show the failed ones right away (with their check results) instead of an empty list.
   const nonePassed = failedBank.length > 0 && failedBank.length === problems.length;
-  const shown = problems.filter((p) => !p.bank || p.bank.passed || showFailed || nonePassed);
+  const shown = problems.filter((p) => !checkedOf(p) || checkedOf(p)!.passed || showFailed || nonePassed);
   // How many were asked for (the summary says when fewer came back), and where the generation is.
   const [requested, setRequested] = useState(0);
   const [progress, setProgress] = useState<ProgressLine | null>(null);
@@ -226,6 +228,7 @@ export function ProblemGenerator({ mode: modeProp, onUseProblem, onFormalize, on
                 difficulty,
                 domain,
                 count,
+                stream: true,
               },
         ),
         signal: controller.signal,
@@ -264,12 +267,13 @@ export function ProblemGenerator({ mode: modeProp, onUseProblem, onFormalize, on
       const got = data.problems ?? [];
       setProblems(got);
       if (data.requested) setRequested(data.requested);
-      const bankPassed = got.filter((p) => p.bank?.passed).length;
+      const checkedPassed = got.filter((p) => (p.bank ?? p.verification)?.passed).length;
+      const anyChecked = got.some((p) => p.bank ?? p.verification);
       onResults?.({
         mode: activeMode,
         requested: data.requested ?? asked,
-        passed: activeMode === "bank" ? bankPassed : got.length,
-        failed: activeMode === "bank" ? got.filter((p) => p.bank && !p.bank.passed).length : 0,
+        passed: anyChecked ? checkedPassed : got.length,
+        failed: anyChecked ? got.filter((p) => { const m = p.bank ?? p.verification; return m && !m.passed; }).length : 0,
         label: data.template_label,
         at: Date.now(),
       });
@@ -277,7 +281,7 @@ export function ProblemGenerator({ mode: modeProp, onUseProblem, onFormalize, on
         setResultNote(
           [tr(`模板：${data.template_label}（${data.matched ?? 0} 道题库题）`, `Template: ${data.template_label} (${data.matched ?? 0} bank questions)`), data.note].filter(Boolean).join(" "),
         );
-      }
+      } else if (data.note) setResultNote(data.note);
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") {
         setError(tr("生成超时，请减少题目数量（建议1-2题）或选择标准难度后重试", "Generation timed out. Reduce the number of problems (1–2 recommended) or choose Standard difficulty, then try again."));
@@ -552,11 +556,15 @@ function ProblemCard({
           ? { figure, fallbackSvg: problem.diagram_svg }
           : undefined,
     );
-  const status = bank ? cardStatus(bank) : undefined;
-  const issues = bank ? checkIssues(bank) : [];
+  // the checks shown on the card: a bank candidate's, or a checked built-in problem's
+  const checked: CheckedMeta | undefined = bank ?? problem.verification;
+  const status = checked ? cardStatus(checked) : undefined;
+  const issues = checked ? checkIssues(checked) : [];
+  const lean = problem.verification?.lean;
   const checkNames: Record<CheckKey, string> = {
     format: tr("格式", "Format"),
     answer: tr("答案", "Answer"),
+    counterexample: tr("反例检查", "Counterexample"),
     novelty: tr("查重", "Duplicate"),
     fit: tr("贴合模板", "Fit"),
     figure: tr("图形", "Figure"),
@@ -568,22 +576,7 @@ function ProblemCard({
         {/* Header */}
         {bank ? (
           <div className="flex flex-wrap items-center gap-2">
-            {status === "ok" ? (
-              <Badge variant="success" className="gap-1" data-testid="card-status">
-                <CircleCheck className="h-3 w-3" />
-                {tr("可用", "Ready to use")}
-              </Badge>
-            ) : status === "review" ? (
-              <Badge variant="warning" className="gap-1" data-testid="card-status">
-                <AlertTriangle className="h-3 w-3" />
-                {tr("需人工看", "Needs a look")}
-              </Badge>
-            ) : (
-              <Badge variant="destructive" className="gap-1" data-testid="card-status">
-                <CircleX className="h-3 w-3" />
-                {tr("未通过", "Failed")}
-              </Badge>
-            )}
+            {status && <StatusBadge status={status} />}
             {bank.grade && <Badge variant="info">{bank.grade}</Badge>}
             {bank.difficulty ? (
               <span className="text-xs text-warning" title={tr(`难度 ${bank.difficulty}/5`, `Difficulty ${bank.difficulty}/5`)}>
@@ -598,7 +591,14 @@ function ProblemCard({
           </div>
         ) : (
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {status && <StatusBadge status={status} />}
+              {lean?.proved && (
+                <Badge variant="success" className="gap-1" title={tr(`程序在 Lean 里证明了这道题的形式化陈述（${lean.strategy ?? ""}）`, `The program proved this problem's Lean statement (${lean.strategy ?? ""})`)} data-testid="lean-proved">
+                  <CircleCheck className="h-3 w-3" />
+                  {tr("Lean 已证", "Proved in Lean")}
+                </Badge>
+              )}
               <Badge variant="info">
                 {GRADE_LABELS[problem.grade_level]} · {DIFFICULTY_LABELS[problem.difficulty]}
               </Badge>
@@ -658,12 +658,12 @@ function ProblemCard({
           <FigurePanel key={problem.id} problemText={problem.statement} fallbackSvg={problem.diagram_svg} onFigure={setFigure} />
         )}
 
-        {/* Bank checks: format, independent answer, duplicate vs the bank, fit to the template */}
-        {bank && (
+        {/* Checks: bank — format, independent answer, duplicate vs the bank, fit; built-in — independent answer, counterexample search */}
+        {checked && (
           <div className="space-y-1.5">
             <div className="flex flex-wrap items-center gap-1.5">
-              {(Object.keys(checkNames) as Array<keyof typeof checkNames>).filter((k) => bank.checks[k]).map((k) => {
-                const c = bank.checks[k]!;
+              {(Object.keys(checkNames) as Array<keyof typeof checkNames>).filter((k) => checked.checks[k]).map((k) => {
+                const c = checked.checks[k]!;
                 return (
                   <span
                     key={k}
@@ -683,11 +683,18 @@ function ProblemCard({
             </div>
             {showChecks && (
               <ul className="space-y-0.5 rounded-md border border-border/50 p-2 text-xs text-muted-foreground">
-                {(Object.keys(checkNames) as Array<keyof typeof checkNames>).filter((k) => bank.checks[k]).map((k) => (
+                {(Object.keys(checkNames) as Array<keyof typeof checkNames>).filter((k) => checked.checks[k]).map((k) => (
                   <li key={k}>
-                    <span className="font-medium text-foreground/80">{checkNames[k]}</span>: {bank.checks[k]!.detail}
+                    <span className="font-medium text-foreground/80">{checkNames[k]}</span>: {checked.checks[k]!.detail}
                   </li>
                 ))}
+                {lean && (
+                  <li>
+                    <span className="font-medium text-foreground/80">Lean</span>:{" "}
+                    {lean.proved ? tr(`程序证明了下面的形式化陈述（${lean.strategy ?? ""}）`, `the program proved the statement below (${lean.strategy ?? ""})`) : tr("形式化陈述（没有直接证出，不影响使用）", "the Lean statement (not proved directly; this does not affect use)")}
+                    <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-muted/40 p-1.5 font-mono text-[10px]">{lean.statement.replace(/^[\s\S]*?(?=(set_option|theorem) )/, "")}</pre>
+                  </li>
+                )}
               </ul>
             )}
           </div>
@@ -861,7 +868,7 @@ function GenerationProgressView({
       <p className="text-[11px] text-muted-foreground">
         {mode === "bank"
           ? tr("每道题都会经过独立解题、查重和图形检查，通常需要 1–5 分钟。", "Every question is solved independently and checked for duplicates and figures; this usually takes 1–5 minutes.")
-          : tr("通常需要 30 秒到 2 分钟。", "This usually takes 30 seconds to 2 minutes.")}
+          : tr("每道题都会独立解题、写成 Lean 陈述找反例，通常需要 2–6 分钟。", "Every problem is solved independently and searched for counterexamples in Lean; this usually takes 2–6 minutes.")}
       </p>
     </div>
   );
@@ -927,6 +934,27 @@ function ResultSummary({
         </span>
       )}
     </div>
+  );
+}
+
+/** 可用 / 需人工看 / 未通过 for a card whose checks ran. */
+function StatusBadge({ status }: { status: "ok" | "review" | "failed" }) {
+  const { tr } = useI18n();
+  return status === "ok" ? (
+    <Badge variant="success" className="gap-1" data-testid="card-status">
+      <CircleCheck className="h-3 w-3" />
+      {tr("可用", "Ready to use")}
+    </Badge>
+  ) : status === "review" ? (
+    <Badge variant="warning" className="gap-1" data-testid="card-status">
+      <AlertTriangle className="h-3 w-3" />
+      {tr("需人工看", "Needs a look")}
+    </Badge>
+  ) : (
+    <Badge variant="destructive" className="gap-1" data-testid="card-status">
+      <CircleX className="h-3 w-3" />
+      {tr("未通过", "Failed")}
+    </Badge>
   );
 }
 

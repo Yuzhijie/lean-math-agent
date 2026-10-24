@@ -2,10 +2,15 @@
  * How the problem generator shows a bank-templated question's checks, and how it reads the
  * streamed generation (NDJSON progress lines). Bundled into the browser: no server imports.
  */
-import type { BankProblemMeta } from "@/lib/types";
 
-export type CheckKey = "format" | "answer" | "novelty" | "fit" | "figure";
-export const CHECK_KEYS: CheckKey[] = ["answer", "figure", "fit", "novelty", "format"];
+export type CheckKey = "format" | "answer" | "novelty" | "fit" | "figure" | "counterexample";
+export const CHECK_KEYS: CheckKey[] = ["answer", "counterexample", "figure", "fit", "novelty", "format"];
+
+/** What a card's checks look like: a bank candidate's (BankProblemMeta) or a built-in problem's (GeneratedVerification). */
+export interface CheckedMeta {
+  passed: boolean;
+  checks: Partial<Record<CheckKey, { ok: boolean; detail: string; skipped?: boolean }>>;
+}
 
 /** ok = every check ran and passed; review = passed, but a check could not run (a person should look); failed = a check failed. */
 export type CardStatus = "ok" | "review" | "failed";
@@ -14,7 +19,7 @@ export type CardStatus = "ok" | "review" | "failed";
 const NO_FIGURE = /此题不需要图形|has no figure/;
 const needsReview = (c: { ok: boolean; detail: string; skipped?: boolean } | undefined) => !!c?.skipped && !NO_FIGURE.test(c.detail);
 
-export function cardStatus(meta: Pick<BankProblemMeta, "passed" | "checks">): CardStatus {
+export function cardStatus(meta: CheckedMeta): CardStatus {
   if (!meta.passed) return "failed";
   return CHECK_KEYS.some((k) => needsReview(meta.checks[k])) ? "review" : "ok";
 }
@@ -26,7 +31,7 @@ export interface CheckIssue {
 }
 
 /** The checks worth showing on the card without opening the details: failures first, then those to review. */
-export function checkIssues(meta: Pick<BankProblemMeta, "checks">): CheckIssue[] {
+export function checkIssues(meta: Pick<CheckedMeta, "checks">): CheckIssue[] {
   const failed = CHECK_KEYS.flatMap((k): CheckIssue[] => {
     const c = meta.checks[k];
     return c && !c.ok && !c.skipped ? [{ key: k, kind: "failed", detail: c.detail }] : [];

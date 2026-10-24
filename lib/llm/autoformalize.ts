@@ -110,6 +110,12 @@ export async function autoformalize(args: {
   candidates?: number;
   /** Search for counterexamples with `decide` / `plausible` (REFUTE_ENABLED, default true). */
   refute?: boolean;
+  /**
+   * Only the checks the program makes (layer 1 elaborate, layer 6 counterexample), none of the
+   * model's: for screening generated problems, where a refuted statement is what matters and the
+   * caller does not claim the statement is faithful.
+   */
+  light?: boolean;
 }): Promise<AutoformalizeResult> {
   const maxRetries = args.maxRetries ?? 3;
   const threshold = args.equivalenceThreshold ?? 0.8;
@@ -211,6 +217,20 @@ export async function autoformalize(args: {
         };
         continue;
       }
+    }
+
+    if (args.light) {
+      return {
+        theorem_name: formal.theorem_name,
+        theorem_type: formal.theorem_type,
+        domain: formal.domain,
+        formal_statement: formalStatement,
+        formal_signature: formalSignature,
+        validation_results: sortLayers(results),
+        accepted: results.every((r) => r.pass),
+        vote,
+        refutation,
+      };
     }
 
     // Layer 2: Non-triviality — is it a tautology or vacuous?
