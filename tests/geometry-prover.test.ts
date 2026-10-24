@@ -67,6 +67,10 @@ describe("polynomials", () => {
     expect(show("x / (2 * 3)").p.toLean(["x"])).toBe("(1 / 6) * x");
   });
 
+  it("refuses expansions past the limits", () => {
+    expect(() => show("((x + t + a + b + 1) ^ 12) ^ 12")).toThrow();
+  });
+
   it("round-trips through the sparse form", () => {
     const { p } = show("3 / 4 * x ^ 2 * t - 5");
     expect(Poly.fromSparse(p.toSparse()).toLean(["x", "t"])).toBe(p.toLean(["x", "t"]));
@@ -124,6 +128,23 @@ describe.skipIf(!sympy)("polynomial certificates (SymPy)", () => {
     const t = r.multiplier.find((f) => f.source === "ht")!;
     expect(t.factor.mul(t.cofactor).sub(P("25 * t ^ 2")).isZero()).toBe(true);
     expect(t.factor.degree()).toBe(1);
+  });
+
+  it("takes Lean names (h₁, hAB') and sends only the variables used", async () => {
+    const vars = new VarTable(new Set(["a", "t", "z"]));
+    const P = (s: string) => toPoly(s, parseTerm(s), vars);
+    P("z"); // a variable nothing below uses
+    const r = await findCertificate({
+      vars: [],
+      hyps: [{ name: "h₁", poly: P("t ^ 2 - 1") }],
+      goal: P("t - 1"),
+      multipliers: [{ name: "hAB'", poly: P("t + 1") }],
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect([...r.coefficients.keys()]).toEqual(["h₁"]);
+    expect(r.multiplier.map((m) => m.source)).toEqual(["hAB'"]);
+    expect(r.coefficients.get("h₁")!.toLean(vars.names)).toBe("1");
   });
 
   it("says so when the goal does not follow", async () => {

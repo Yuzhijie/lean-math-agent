@@ -2,6 +2,7 @@
  * Entry point of the geometry prover (see prove.ts): open the statement in REPL tactic mode, let
  * the program write the proof step by step, then verify the whole script like any other proof.
  */
+import { CancelledError, throwIfCancelled } from "../../jobs";
 import { assembleLeanSource } from "../assemble";
 import type { LeanVerifyResult } from "../sandbox";
 import { parseGoal } from "./goal";
@@ -29,13 +30,14 @@ export async function geometryProof(args: {
   const { sessionId, theoremName, theoremType, expectedSignature, useMathlib } = args;
   if (!looksGeometric(theoremType)) return { reason: "not a coordinate statement" };
   if (process.env.LEAN_SERVER_MODE === "spawn") return { reason: "needs the Lean REPL" };
-  const { openTheorem } = await import("../proof-state");
-  let opened: Awaited<ReturnType<typeof openTheorem>>;
+  let opened: Awaited<ReturnType<typeof import("../proof-state").openTheorem>>;
   try {
+    const { openTheorem } = await import("../proof-state");
     opened = await openTheorem(assembleLeanSource({ theoremName, theoremType, stepCodes: ["sorry"], useMathlib }), {
       tacticTimeoutMs: Number(process.env.GEOMETRY_TACTIC_TIMEOUT_MS ?? 30_000),
     });
   } catch (e) {
+    if (e instanceof CancelledError) throw e;
     return { reason: `the statement did not open: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}` };
   }
   if (!opened) return { reason: "Lean is not available" };
@@ -45,6 +47,8 @@ export async function geometryProof(args: {
   let lastError = "";
   const script: string[] = [];
   let counter = 0;
+  // the whole attempt is bounded: a timed-out tactic kills the worker and the next one replays the path
+  const deadline = Date.now() + Number(process.env.GEOMETRY_TIME_LIMIT_MS ?? 180_000);
   const run: TacticRunner = {
     goals: () => goals,
     lastError: () => lastError,
@@ -55,6 +59,8 @@ export async function geometryProof(args: {
       return name;
     },
     async apply(tactic) {
+      throwIfCancelled();
+      if (Date.now() > deadline) throw new Error("the geometry prover ran out of time (GEOMETRY_TIME_LIMIT_MS)");
       const out = await session.apply(handle, tactic);
       // an error Lean recovered from (the state still comes back) is a failure too
       const r = out.ok && out.errors.length ? { ok: false as const, error: out.errors.join("\n"), durationMs: out.durationMs } : out;
@@ -85,6 +91,7 @@ export async function geometryProof(args: {
     if (!verification.ok) return { reason: `the written proof did not verify: ${verification.log.split("\n")[0]?.slice(0, 160) ?? ""}` };
     return { proof: { verification, source, tactics }, reason: "" };
   } catch (e) {
+    if (e instanceof CancelledError) throw e;
     return { reason: e instanceof Error ? e.message.split("\n")[0] : String(e) };
   } finally {
     session.close();

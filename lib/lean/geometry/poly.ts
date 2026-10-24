@@ -8,6 +8,10 @@ import { slice, unwrap, type Node } from "./expr";
 
 export class NotPolynomial extends Error {}
 
+/** Expansion limits (scripts/poly_certificate.py has the same): beyond them a term is not used. */
+export const MAX_DEGREE = 64;
+export const MAX_TERMS = 4000;
+
 function gcd(a: bigint, b: bigint): bigint {
   a = a < 0n ? -a : a;
   b = b < 0n ? -b : b;
@@ -115,6 +119,7 @@ export class Poly {
     return this.add(o.neg());
   }
   mul(o: Poly): Poly {
+    if (this.degree() + o.degree() > MAX_DEGREE) throw new NotPolynomial("degree too high");
     let out = new Poly();
     for (const [ma, ca] of this.terms) {
       const t = new Map<Mono, Frac>();
@@ -125,10 +130,26 @@ export class Poly {
         else t.set(m, s);
       }
       out = out.add(new Poly(t));
+      if (out.terms.size > MAX_TERMS) throw new NotPolynomial("too many terms");
     }
     return out;
   }
+  /** Variables renumbered (old index → new index); every variable must be mapped. */
+  rename(map: Map<number, number>): Poly {
+    const t = new Map<Mono, Frac>();
+    for (const [m, c] of this.terms) {
+      const parts = new Map<number, number>();
+      for (const [v, e] of monoParts(m)) {
+        const to = map.get(v);
+        if (to === undefined) throw new NotPolynomial(`variable v${v} not mapped`);
+        parts.set(to, (parts.get(to) ?? 0) + e);
+      }
+      t.set(monoKey(parts), c);
+    }
+    return new Poly(t);
+  }
   pow(n: number): Poly {
+    if (n * this.degree() > MAX_DEGREE) throw new NotPolynomial("degree too high");
     let out = Poly.const(new Frac(1n));
     for (let i = 0; i < n; i++) out = out.mul(this);
     return out;

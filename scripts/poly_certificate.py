@@ -39,6 +39,12 @@ from safe_parse import ComputationTimeout, time_limit  # noqa: E402
 NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 MAX_VARS = 40
 MAX_TERMS = 4000
+# linear algebra size (rows × columns of the cofactor system) and caller-settable bounds
+MAX_CELLS = 100_000_000
+MAX_ENTRIES = 2_000_000
+MAX_UNKNOWNS = 5000
+MAX_EXTRA_DEGREE = 3
+MAX_TIMEOUT = 120.0
 
 
 class CertError(ValueError):
@@ -201,19 +207,23 @@ def solve_cofactors(target: Poly, hyps: list[Poly], extra: int, max_unknowns: in
     from sympy.polys.matrices import DomainMatrix
 
     nrows, ncols = len(rows), len(columns)
-    A = [[QQ(0)] * (ncols + 1) for _ in range(nrows)]
+    if nrows * (ncols + 1) > MAX_CELLS or len(entries) > MAX_ENTRIES:
+        return None
+    # sparse: most entries are zero (a dense matrix of this size is hundreds of MB of Python objects)
+    A: dict[int, dict[int, Any]] = {}
     for (r, c), v in entries.items():
-        A[r][c] = QQ.convert(v)
+        if v != 0:
+            A.setdefault(r, {})[c] = QQ.convert(v)
     for tm, tc in target.terms():
-        A[rows[tm]][ncols] = QQ.convert(tc)
+        A.setdefault(rows[tm], {})[ncols] = QQ.convert(tc)
     M = DomainMatrix(A, (nrows, ncols + 1), QQ)
     R, pivots = M.rref()
     if ncols in pivots:
         return None  # inconsistent: no cofactors of this degree
     sol = [QQ(0)] * ncols
-    Rl = R.to_list()
+    Rd = R.to_sdm()
     for row, pc in enumerate(pivots):
-        sol[pc] = Rl[row][ncols]
+        sol[pc] = Rd.get(row, {}).get(ncols, QQ(0))
     out = [Poly(0, *gens, domain=QQ) for _ in hyps]
     for col, (j, mono) in enumerate(columns):
         if sol[col] != 0:
@@ -319,8 +329,11 @@ def certificate(req: dict) -> dict:
         if not (isinstance(name, str) and NAME.match(name)):
             raise CertError("each multiplier needs a plain name")
         mults.append((name, to_poly(m.get("poly"), gens, index)))
-    max_extra = int(req.get("max_extra_degree", 2))
-    max_unknowns = int(req.get("max_unknowns", 3000))
+    try:
+        max_extra = max(0, min(MAX_EXTRA_DEGREE, int(req.get("max_extra_degree", 2))))
+        max_unknowns = max(1, min(MAX_UNKNOWNS, int(req.get("max_unknowns", 3000))))
+    except (TypeError, ValueError):
+        raise CertError("max_extra_degree / max_unknowns must be integers")
 
     # Irreducible factors of the candidates: lower degree than the candidates (a point D ≠ C with
     # D = (1 - t) A + t C gives (1 - t)^2 |A - C|^2, of which t - 1 is what is needed), and each is
@@ -380,6 +393,14 @@ def certificate(req: dict) -> dict:
     return {"ok": False, "reason": "the goal follows, but no cofactors were found within the degree bounds"}
 
 
+def request_timeout(req: Any, default: float = 30.0) -> float:
+    try:
+        t = float(req.get("timeout", default)) if isinstance(req, dict) else default
+    except (TypeError, ValueError):
+        t = default
+    return max(1.0, min(MAX_TIMEOUT, t))
+
+
 def certificate_or_reason(req: Any) -> dict:
     """For a caller that already runs under a time limit (the compute server)."""
     if not isinstance(req, dict):
@@ -394,7 +415,7 @@ def handle(req: Any, timeout: float = 30.0) -> dict:
     if not isinstance(req, dict):
         return {"ok": False, "reason": "request must be a JSON object"}
     try:
-        with time_limit(float(req.get("timeout", timeout))):
+        with time_limit(request_timeout(req, timeout)):
             return certificate(req)
     except CertError as e:
         return {"ok": False, "reason": str(e)}

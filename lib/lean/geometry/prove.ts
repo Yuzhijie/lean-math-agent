@@ -91,6 +91,7 @@ const isPoint = (type: string) => /^ℝ\s*×\s*ℝ$/.test(type.trim());
 /** Step 1: unfold lets, intro everything, split ∧/∃, name everything, substitute and split points. */
 async function normalize(run: TacticRunner): Promise<void> {
   await run.apply("simp only []");
+  if (!run.goals().length) return;
   let hyp = 0;
   for (let i = 0; i < MAX_INTROS; i++) {
     const st = state(run);
@@ -107,6 +108,7 @@ async function normalize(run: TacticRunner): Promise<void> {
     } else break;
   }
   await splitAndName(run);
+  if (!run.goals().length) return;
   // point definitions: `D = (…)` → substitute
   for (let round = 0; round < 8; round++) {
     const st = state(run);
@@ -141,11 +143,13 @@ async function normalize(run: TacticRunner): Promise<void> {
     }
   }
   await run.apply(PAIR_SIMP);
+  if (!run.goals().length) return;
   await splitAndName(run);
 }
 
 async function splitAndName(run: TacticRunner): Promise<void> {
   await run.apply("casesm* _ ∧ _, ∃ _, _");
+  if (!run.goals().length) return;
   const st = state(run);
   const taken = allNames(st);
   const names: string[] = [];
@@ -194,9 +198,8 @@ interface Facts {
 function readFacts(st: GoalState): Facts {
   const realVars = new Set(st.hyps.filter((h) => isReal(h.type) && h.value === undefined).flatMap((h) => h.names));
   const f: Facts = { st, realVars, eqs: [], nes: [], pointNes: [], lts: [] };
-  for (const h of st.hyps) {
-    if (h.names.length !== 1 || isInaccessible(h.names[0])) continue;
-    const name = h.names[0];
+  for (const h of st.hyps) for (const name of h.names) {
+    if (isInaccessible(name) || h.value !== undefined) continue;
     const t = tryParse(h.type);
     if (!t) continue;
     if (t.k === "bin" && t.op === "=") f.eqs.push({ name, node: t, text: h.type });
@@ -236,7 +239,11 @@ function squareBases(src: string): string[] {
 function positivityProofs(E: string, f: Facts, strict: boolean): string[] {
   const rel = strict ? "<" : "≤";
   const out = [`(show (0:ℝ) ${rel} ${E} by positivity)`];
-  const pos = f.lts.map((l) => l.name);
+  // `0 < a` hypotheses as they are, `a < b` as `0 < b - a`; each also squared
+  const pos = f.lts.map((l) => {
+    const lo = unwrap(l.lo);
+    return lo.k === "num" && lo.text === "0" ? l.name : `(sub_pos.mpr ${l.name})`;
+  });
   const squares = squareBases(E).map((b) => `sq_nonneg (${b})`);
   out.push(`(show (0:ℝ) ${rel} ${E} by nlinarith [${[...squares, ...pos, ...pos.map((p) => `mul_pos ${p} ${p}`)].join(", ")}])`);
   for (const p of f.pointNes) {
@@ -564,8 +571,9 @@ async function closeEquationOnce(run: TacticRunner): Promise<void> {
 
 /** Prove the main goal and everything it splits into. */
 export async function proveGeometryGoals(run: TacticRunner): Promise<GeometryOutcome> {
-  const atomsDone = new Set<string>();
-  const trigDone = new Set<string>();
+  let atomsDone = new Set<string>();
+  let trigDone = new Set<string>();
+  let goalsBefore = run.goals().length;
   try {
     await normalize(run);
     for (let guard = 0; run.goals().length && guard < 40; guard++) {
@@ -591,9 +599,21 @@ export async function proveGeometryGoals(run: TacticRunner): Promise<GeometryOut
         await reduceAngle(run, st, t);
         continue;
       }
+      if (t.k === "bin" && t.op === "=" && isArccos(t.b) && !isArccos(t.a)) {
+        if (!(await run.apply("symm"))) throw new Fail("could not turn the angle goal around");
+        continue;
+      }
       if (t.k === "bin" && t.op === "=") {
+        // facts added for another goal (another branch of a conjunction) are not in this one's context
+        if (run.goals().length !== goalsBefore) {
+          atomsDone = new Set();
+          trigDone = new Set();
+          goalsBefore = run.goals().length;
+        }
         await trigFacts(run, trigDone);
+        const open = run.goals().length;
         await numericAbs(run);
+        if (run.goals().length < open) continue; // the rewrite closed it
         await clearFractions(run);
         await atomFacts(run, atomsDone);
         await closeEquation(run, atomsDone);

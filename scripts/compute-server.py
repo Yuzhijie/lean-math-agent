@@ -90,13 +90,15 @@ class ComputeHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            with time_limit(COMPUTE_TIMEOUT_SECONDS):
+            # a certificate search may take longer than a simple computation (bounded in poly_certificate)
+            limit = poly_certificate.request_timeout(body, COMPUTE_TIMEOUT_SECONDS) if self.path == "/certificate" else COMPUTE_TIMEOUT_SECONDS
+            with time_limit(limit):
                 result = handler()
         except UnsafeExpressionError as e:
             self._respond(400, {"error": f"rejected expression: {e}"})
             return
         except ComputationTimeout:
-            self._respond(408, {"error": f"computation exceeded {COMPUTE_TIMEOUT_SECONDS}s"})
+            self._respond(408, {"error": "computation timed out"})
             return
         except Exception as e:  # never leak a traceback / kill the connection
             self._respond(500, {"error": f"{type(e).__name__}: {e}"})
