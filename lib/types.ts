@@ -326,7 +326,7 @@ export interface LeanProofAttempt {
   /** Which backend produced the verdict. */
   verifier?: "repl" | "spawn" | "none";
   /** How the proof was found: a one-tactic probe, the whole-proof loop, or stepwise search. */
-  strategy?: "trivial" | "hammer" | "memory" | "order" | "bounded" | "geometry" | "whole_proof" | "sketch" | "stepwise";
+  strategy?: "trivial" | "hammer" | "memory" | "order" | "bounded" | "geometry" | "induction" | "whole_proof" | "sketch" | "stepwise";
   /** The proof was stored in the proof memory (replayed for similar problems, exported as training data). */
   remembered?: boolean;
   /** Proof candidates generated (samples or step attempts). */

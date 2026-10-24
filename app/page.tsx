@@ -1204,6 +1204,8 @@ export default function Home() {
                                           ? tr("逐个检查（程序写的证明，Lean 内核算完界以下的每个数）", "Checked one by one (a proof the program wrote; Lean's kernel tries every number below the bound)")
                                           : leanProofAttempt.strategy === "geometry"
                                             ? tr("坐标代数（程序把几何条件化成多项式，用 SymPy 求出系数写出证明）", "Coordinate algebra (the program turned the geometry into polynomials and wrote the proof from SymPy's coefficients)")
+                                            : leanProofAttempt.strategy === "induction"
+                                              ? tr("数学归纳法（程序选归纳方式，逐个关闭奠基与归纳步）", "Induction (the program chose the scheme and closed the base and the step)")
                                       : tr(
                                         `分步搜索（${leanProofAttempt.attempts ?? "?"} 次尝试）`,
                                         `Stepwise search (${leanProofAttempt.attempts ?? "?"} attempts)`,

@@ -17,6 +17,7 @@
 import { autoformalize } from "../llm/autoformalize";
 import { lt } from "../llm/output-locale";
 import { geometryProof, looksGeometric } from "../lean/geometry";
+import { inductionProof, looksInductive } from "../lean/induction";
 import { assembleLeanSource } from "../lean/assemble";
 import { hammerTheorem } from "../lean/hammer";
 import { checkLeanAvailable, verifyLeanSource, type LeanVerifyResult } from "../lean/sandbox";
@@ -699,7 +700,7 @@ export async function proveWithoutModel(args: {
   /** A power too big to compute is in the statement: skip what would evaluate it. */
   huge: boolean;
 }): Promise<{
-  proof?: { verification: LeanVerifyResult; source: string; tactics: string; strategy: "hammer" | "trivial" | "order" | "bounded" | "geometry"; attempts: number };
+  proof?: { verification: LeanVerifyResult; source: string; tactics: string; strategy: "hammer" | "trivial" | "order" | "bounded" | "geometry" | "induction"; attempts: number };
   tried: string[];
 }> {
   const { sessionId, theoremName, theoremType, expectedSignature, useMathlib, huge } = args;
@@ -745,6 +746,16 @@ export async function proveWithoutModel(args: {
     const geo = await geometryProof({ sessionId, theoremName, theoremType, expectedSignature, useMathlib });
     if (geo.proof) return { proof: { ...geo.proof, strategy: "geometry", attempts: 1 }, tried };
     tried.push(lt(`程序写的坐标代数证明（${geo.reason}）`, `an algebraic proof in coordinates the program wrote (${geo.reason})`));
+  }
+
+  // Induction over ℕ: the program picks the scheme and closes base and step (divisibility quotients computed exactly).
+  if (!huge && looksInductive(theoremType)) {
+    const ind = await inductionProof({ sessionId, theoremName, theoremType, expectedSignature, useMathlib });
+    if (ind.proof) {
+      const { verification, source, tactics } = ind.proof;
+      return { proof: { verification, source, tactics, strategy: "induction", attempts: 1 }, tried };
+    }
+    tried.push(lt(`程序写的归纳证明（${ind.reason}）`, `an induction proof the program wrote (${ind.reason})`));
   }
   return { tried };
 }

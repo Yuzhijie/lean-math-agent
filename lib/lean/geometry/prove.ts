@@ -28,15 +28,8 @@ import { isInaccessible, parseGoal, type GoalState } from "./goal";
 import { NotPolynomial, Poly, toPoly, VarTable, hasNonConstDivision, isNumeric } from "./poly";
 import { findCertificate } from "./certificate";
 
-export interface TacticRunner {
-  /** Open goals (pretty-printed, with their contexts). */
-  goals(): string[];
-  /** Apply a tactic to the main goal; false (state unchanged) when Lean rejects it. */
-  apply(tactic: string): Promise<boolean>;
-  lastError(): string;
-  /** A fresh hypothesis name `base<n>` (unique within this proof). */
-  fresh(base: string): string;
-}
+export type { TacticRunner } from "../tactic-runner";
+import type { TacticRunner } from "../tactic-runner";
 
 export interface GeometryOutcome {
   ok: boolean;

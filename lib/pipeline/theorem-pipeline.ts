@@ -29,6 +29,7 @@ import { proveBySketch, sketchEnabled } from "../prover/sketch";
 import { proveWholeTheorem, wholeProofEnabled } from "../prover/whole-proof";
 import { hammerTheorem } from "../lean/hammer";
 import { geometryProof, looksGeometric } from "../lean/geometry";
+import { inductionProof, looksInductive } from "../lean/induction";
 import { rememberRepair } from "../lean/proof-memory";
 import { replayRecalled } from "../prover/replay";
 import { lt } from "../llm/output-locale";
@@ -245,47 +246,71 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
     // Lean unavailable or similar — continue with the LLM stages.
   }
 
-  // ── 3a. Coordinate geometry: the program writes the algebraic proof itself (no model calls) ──
-  if (looksGeometric(theoremType)) {
+  // ── 3a. Proofs the program writes itself (no model calls): coordinate geometry, induction ──
+  const programProvers = [
+    {
+      strategy: "geometry" as const,
+      applies: looksGeometric(theoremType),
+      prove: () => geometryProof({ sessionId: session.id, theoremName, theoremType, expectedSignature: frozenSignature, useMathlib }),
+      trying: lt("尝试程序写的坐标代数证明（SymPy 求系数）", "Trying an algebraic proof in coordinates written by the program (coefficients from SymPy)"),
+      passed: lt("✅ 程序写出的坐标代数证明通过 Lean 检查", "✅ The program's algebraic proof in coordinates passed Lean"),
+      failed: (r: string) => lt(`坐标代数证明没有成功：${r}`, `The coordinate proof did not work: ${r}`),
+      title: lt("坐标代数（程序写的证明）", "Coordinate algebra (proof written by the program)"),
+      done: lt("✅ 完全形式化验证通过（坐标代数）", "✅ Fully formally verified (coordinate algebra)"),
+    },
+    {
+      strategy: "induction" as const,
+      applies: looksInductive(theoremType),
+      prove: () => inductionProof({ sessionId: session.id, theoremName, theoremType, expectedSignature: frozenSignature, useMathlib }),
+      trying: lt("尝试程序写的归纳证明（选归纳方式，逐个关闭奠基与归纳步）", "Trying an induction proof written by the program (scheme chosen, base and step closed one by one)"),
+      passed: lt("✅ 程序写出的归纳证明通过 Lean 检查", "✅ The program's induction proof passed Lean"),
+      failed: (r: string) => lt(`归纳证明没有成功：${r}`, `The induction proof did not work: ${r}`),
+      title: lt("数学归纳法（程序写的证明）", "Induction (proof written by the program)"),
+      done: lt("✅ 完全形式化验证通过（数学归纳法）", "✅ Fully formally verified (induction)"),
+    },
+  ];
+  for (const pp of programProvers) {
+    if (!pp.applies) continue;
     throwIfCancelled();
-    emit("geometry", lt("尝试程序写的坐标代数证明（SymPy 求系数）", "Trying an algebraic proof in coordinates written by the program (coefficients from SymPy)"));
+    emit(pp.strategy, pp.trying);
     try {
-      const geo = await geometryProof({ sessionId: session.id, theoremName, theoremType, expectedSignature: frozenSignature, useMathlib });
-      if (geo.proof) {
-        emit("geometry", lt("✅ 程序写出的坐标代数证明通过 Lean 检查", "✅ The program's algebraic proof in coordinates passed Lean"));
-        void rememberVerifiedProof({ theoremName, theoremType, tactics: geo.proof.tactics, strategy: "geometry", problemText: session.problem_text });
+      const out = await pp.prove();
+      if (out.proof) {
+        const proof = out.proof;
+        emit(pp.strategy, pp.passed);
+        void rememberVerifiedProof({ theoremName, theoremType, tactics: proof.tactics, strategy: pp.strategy, problemText: session.problem_text });
         const leanProofAttempt: LeanProofAttempt = {
           attempted: true,
           success: true,
-          formal_statement: geo.proof.source,
-          proof_code: geo.proof.source,
-          axioms: geo.proof.verification.axioms?.axioms,
-          statement_locked: frozenSignature !== undefined && geo.proof.verification.signatureMatch === true,
-          verifier: geo.proof.verification.backend,
-          strategy: "geometry",
+          formal_statement: proof.source,
+          proof_code: proof.source,
+          axioms: proof.verification.axioms?.axioms,
+          statement_locked: frozenSignature !== undefined && proof.verification.signatureMatch === true,
+          verifier: proof.verification.backend,
+          strategy: pp.strategy,
           attempts: 1,
         };
-        updateSession(session.id, { assembled_lean: geo.proof.source, build_status: "ok", pipeline_stage: "complete", lean_proof_attempt: leanProofAttempt });
-        emit("complete", lt("✅ 完全形式化验证通过（坐标代数）", "✅ Fully formally verified (coordinate algebra)"));
+        updateSession(session.id, { assembled_lean: proof.source, build_status: "ok", pipeline_stage: "complete", lean_proof_attempt: leanProofAttempt });
+        emit("complete", pp.done);
         return {
           status: 200,
           body: {
             ...baseBody,
             nl_solution: nlSolution,
             lean_proof_attempt: leanProofAttempt,
-            method: { id: "geometry", title: lt("坐标代数（程序写的证明）", "Coordinate algebra (proof written by the program)"), category: "other" },
+            method: { id: pp.strategy, title: pp.title, category: "other" },
             steps: [],
             sorry_labels: [],
             fully_verified: true,
             build_status: "ok",
             total_attempts: 1,
             sorry_report: { fully_verified: true, summary: lt("✅ 完全形式化验证通过", "✅ Fully formally verified"), details: [] },
-            assembled_lean: geo.proof.source,
-            build_log: geo.proof.verification.log,
+            assembled_lean: proof.source,
+            build_log: proof.verification.log,
           },
         };
       }
-      emit("geometry", lt(`坐标代数证明没有成功：${geo.reason}`, `The coordinate proof did not work: ${geo.reason}`));
+      emit(pp.strategy, pp.failed(out.reason));
     } catch (e) {
       if (e instanceof CancelledError) throw e;
       // best effort
