@@ -29,7 +29,7 @@ export type RefuteVerdict = "refuted" | "confirmed" | "no_counterexample" | "inc
 export interface RefuteResult {
   verdict: RefuteVerdict;
   /** Probe that produced the verdict. */
-  method?: "decide" | "plausible" | "numeric";
+  method?: "decide" | "plausible" | "numeric" | "count";
   /** Variable assignment reported by `plausible`, when refuted. */
   counterexample?: string;
   detail: string;
@@ -43,7 +43,7 @@ export interface RefuteOptions {
   /** Random trials for `plausible` (default REFUTE_TRIALS or 200). */
   trials?: number;
   /** Skip a probe (tests / spawn mode). */
-  probes?: Array<"decide" | "plausible" | "numeric">;
+  probes?: Array<"decide" | "plausible" | "numeric" | "count">;
   sessionId?: string;
 }
 
@@ -114,7 +114,7 @@ export async function refuteStatement(theoremName: string, theoremType: string, 
   const header = useMathlib ? HEADER_MATHLIB : "";
   const timeoutMs = opts.timeoutMs ?? envNum("REFUTE_TIMEOUT_MS", 20_000);
   const sessionId = opts.sessionId ?? "refute";
-  const probes = opts.probes ?? ["decide", "plausible", "numeric"];
+  const probes = opts.probes ?? ["decide", "plausible", "numeric", "count"];
   const notes: string[] = [];
 
   // ── decide on the negation ─────────────────────────────────────────
@@ -203,6 +203,26 @@ export async function refuteStatement(theoremName: string, theoremType: string, 
     } catch (e) {
       if (e instanceof CancelledError) throw e;
       notes.push(`numeric: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  // ── count (orbits up to rotation / reflection: Lean counts them itself) ─────
+  if (probes.includes("count") && useMathlib) {
+    try {
+      const { countRefute } = await import("./combinatorics");
+      const c = await countRefute({ theoremName, theoremType, useMathlib });
+      if (c) {
+        const text = `${c.counted} ≠ ${c.stated}`;
+        return done({
+          verdict: "refuted",
+          method: "count",
+          counterexample: text,
+          detail: lt(`Lean 自己数出 ${c.counted} 类，陈述说 ${c.stated} 类`, `Lean counts ${c.counted} orbits; the statement says ${c.stated}`),
+        });
+      }
+    } catch (e) {
+      if (e instanceof CancelledError) throw e;
+      notes.push(`count: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 

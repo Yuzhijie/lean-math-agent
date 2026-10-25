@@ -241,6 +241,23 @@ export class ProofSession {
     return verifyLeanSource(sessionId, source, { ...opts, worker: this.lease.worker });
   }
 
+  /**
+   * Run a command the program wrote (definitions + `#eval`) in the statement's header environment
+   * on this session's worker, for computing data a proof needs (orbit representatives, witnesses).
+   * Not a proof step: nothing it says is trusted, the proof that uses its output is verified on its
+   * own. Returns the messages (an `#eval` result is an info message) or throws ReplError.
+   */
+  async evaluate(command: string, timeoutMs = 60_000): Promise<ReplMessage[]> {
+    if (this.closed || !this.lease) throw new ReplError("crashed", "proof session is closed");
+    // the program's own text; still no IO, unsafe code or new axioms
+    if (/\b(IO|unsafe|axiom|implemented_by|extern|run_cmd|run_tac|elab|macro|syntax|open\s+System)\b|#(exit|print|check_failure)/.test(command)) {
+      throw new ReplError("lean", "refused to evaluate this command");
+    }
+    const env = await this.lease.worker.headerEnv(this.imports);
+    const resp = await this.lease.worker.command({ cmd: command, env }, timeoutMs);
+    return resp.messages;
+  }
+
   /** Release the worker. Idempotent. */
   close(): void {
     if (this.closed) return;

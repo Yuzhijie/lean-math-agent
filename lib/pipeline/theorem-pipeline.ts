@@ -30,6 +30,7 @@ import { proveWholeTheorem, wholeProofEnabled } from "../prover/whole-proof";
 import { hammerTheorem } from "../lean/hammer";
 import { geometryProof, looksGeometric } from "../lean/geometry";
 import { inductionProof, looksInductive } from "../lean/induction";
+import { combinatoricsProof, looksCombinatorial } from "../lean/combinatorics";
 import { rememberRepair } from "../lean/proof-memory";
 import { replayRecalled } from "../prover/replay";
 import { lt } from "../llm/output-locale";
@@ -267,6 +268,16 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
       failed: (r: string) => lt(`归纳证明没有成功：${r}`, `The induction proof did not work: ${r}`),
       title: lt("数学归纳法（程序写的证明）", "Induction (proof written by the program)"),
       done: lt("✅ 完全形式化验证通过（数学归纳法）", "✅ Fully formally verified (induction)"),
+    },
+    {
+      strategy: "combinatorics" as const,
+      applies: looksCombinatorial(theoremType),
+      prove: () => combinatoricsProof({ sessionId: session.id, theoremName, theoremType, expectedSignature: frozenSignature, useMathlib }),
+      trying: lt("尝试程序写的组合证明（轨道代表元 / 韦恩图分区 / 有限枚举）", "Trying a combinatorial proof written by the program (orbit representatives / Venn regions / finite enumeration)"),
+      passed: lt("✅ 程序写出的组合证明通过 Lean 检查", "✅ The program's combinatorial proof passed Lean"),
+      failed: (r: string) => lt(`组合证明没有成功：${r}`, `The combinatorial proof did not work: ${r}`),
+      title: lt("组合计数（程序写的证明）", "Combinatorics (proof written by the program)"),
+      done: lt("✅ 完全形式化验证通过（组合计数）", "✅ Fully formally verified (combinatorics)"),
     },
   ];
   for (const pp of programProvers) {

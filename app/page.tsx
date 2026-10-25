@@ -1206,6 +1206,8 @@ export default function Home() {
                                             ? tr("坐标代数（程序把几何条件化成多项式，用 SymPy 求出系数写出证明）", "Coordinate algebra (the program turned the geometry into polynomials and wrote the proof from SymPy's coefficients)")
                                             : leanProofAttempt.strategy === "induction"
                                               ? tr("数学归纳法（程序选归纳方式，逐个关闭奠基与归纳步）", "Induction (the program chose the scheme and closed the base and the step)")
+                                              : leanProofAttempt.strategy === "combinatorics"
+                                                ? tr("组合计数（程序写的证明：轨道代表元、韦恩图分区或有限枚举，由 Lean 内核核对）", "Combinatorics (a proof the program wrote: orbit representatives, Venn regions or finite enumeration, checked by Lean's kernel)")
                                       : tr(
                                         `分步搜索（${leanProofAttempt.attempts ?? "?"} 次尝试）`,
                                         `Stepwise search (${leanProofAttempt.attempts ?? "?"} attempts)`,

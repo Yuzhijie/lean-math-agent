@@ -18,6 +18,7 @@ import { autoformalize } from "../llm/autoformalize";
 import { lt } from "../llm/output-locale";
 import { geometryProof, looksGeometric } from "../lean/geometry";
 import { inductionProof, looksInductive } from "../lean/induction";
+import { combinatoricsProof, looksCombinatorial } from "../lean/combinatorics";
 import { assembleLeanSource } from "../lean/assemble";
 import { hammerTheorem } from "../lean/hammer";
 import { checkLeanAvailable, verifyLeanSource, type LeanVerifyResult } from "../lean/sandbox";
@@ -731,7 +732,7 @@ export async function proveWithoutModel(args: {
   /** A power too big to compute is in the statement: skip what would evaluate it. */
   huge: boolean;
 }): Promise<{
-  proof?: { verification: LeanVerifyResult; source: string; tactics: string; strategy: "hammer" | "trivial" | "order" | "bounded" | "geometry" | "induction"; attempts: number };
+  proof?: { verification: LeanVerifyResult; source: string; tactics: string; strategy: "hammer" | "trivial" | "order" | "bounded" | "geometry" | "induction" | "combinatorics"; attempts: number };
   tried: string[];
 }> {
   const { sessionId, theoremName, theoremType, expectedSignature, useMathlib, huge } = args;
@@ -787,6 +788,16 @@ export async function proveWithoutModel(args: {
       return { proof: { verification, source, tactics, strategy: "induction", attempts: 1 }, tried };
     }
     tried.push(lt(`程序写的归纳证明（${ind.reason}）`, `an induction proof the program wrote (${ind.reason})`));
+  }
+
+  // Finite / counting statements: orbit representatives, Venn regions, kernel decision after rewriting.
+  if (!huge && looksCombinatorial(theoremType)) {
+    const comb = await combinatoricsProof({ sessionId, theoremName, theoremType, expectedSignature, useMathlib });
+    if (comb.proof) {
+      const { verification, source, tactics } = comb.proof;
+      return { proof: { verification, source, tactics, strategy: "combinatorics", attempts: 1 }, tried };
+    }
+    tried.push(lt(`程序写的组合证明（${comb.reason}）`, `a combinatorial proof the program wrote (${comb.reason})`));
   }
   return { tried };
 }
