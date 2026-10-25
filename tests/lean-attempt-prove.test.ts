@@ -210,6 +210,15 @@ describe("hints for the prover and the sorry report", () => {
     expect(proofHints(": ∀ x : ℝ, x ^ 2 ≥ 0").join("\n")).not.toContain("arccos");
   });
 
+  it("gives orbit-counting statements the representatives route (Set.ncard of orbits cannot be decided)", () => {
+    const seats =
+      ": (let Valid : Finset (Fin 15) → Prop := fun s => s.card = 5 ∧ ∀ i ∈ s, i + (1 : Fin 15) ∉ s; let Rot : Fin 15 → Finset (Fin 15) → Finset (Fin 15) := fun k s => s.image (fun i => i + k); let Ref : Fin 15 → Finset (Fin 15) → Finset (Fin 15) := fun k s => s.image (fun i => k - i); let Orbit : Finset (Fin 15) → Set (Finset (Fin 15)) := fun s => {t | Valid t ∧ ∃ k : Fin 15, t = Rot k s ∨ t = Ref k s}; Set.ncard {O : Set (Finset (Fin 15)) | ∃ s : Finset (Fin 15), Valid s ∧ O = Orbit s} = 16)";
+    const h = proofHints(seats).join("\n");
+    expect(h).toContain("hinj.ncard_image");
+    expect(h).toContain("insertionSort");
+    expect(proofHints(DODECAGON).join("\n")).not.toContain("hinj.ncard_image");
+  });
+
   it("says to introduce the lets and to use witnesses + decide +kernel on finite statements", async () => {
 
     const h = proofHints(DODECAGON).join("\n");

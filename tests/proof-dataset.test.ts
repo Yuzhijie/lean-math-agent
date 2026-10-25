@@ -106,6 +106,16 @@ describe("memory replay", () => {
     expect((await mem.allProofs()).find((e) => e.theorem_name === "t2")?.replay_hits).toBe(1);
   });
 
+  it("replays a long script only on the same statement", async () => {
+    const long = Array.from({ length: 50 }, (_, i) => `have h${i} : True := trivial`).join("\n") + "\nnlinarith [sq_nonneg (a - b)]";
+    await mem.rememberProofs([P(1, long)]);
+    const recalled = await mem.allProofs();
+    verifyMock.mockImplementation(async () => ({ ok: true, status: "ok", backend: "repl", log: "", messages: [], sorries: [], goals: [], infos: [], durationMs: 1 }));
+    expect(await replayRecalled({ sessionId: "s", theoremName: "new", theoremType: P(7).theoremType, recalled, useMathlib: true, count: false })).toBeUndefined();
+    const same = await replayRecalled({ sessionId: "s", theoremName: "again", theoremType: `  ${P(1).theoremType}`, recalled, useMathlib: true, count: false });
+    expect(same?.tactics).toBe(long);
+  });
+
   it("is off with PROOF_MEMORY_REPLAY=false", async () => {
     process.env.PROOF_MEMORY_REPLAY = "false";
     try {

@@ -19,6 +19,12 @@ export interface ReplayResult {
   tried: number;
 }
 
+/** Same statement up to whitespace and a leading `:`. */
+function sameStatement(a: string, b: string): boolean {
+  const norm = (t: string) => t.replace(/^\s*:\s*/, "").replace(/\s+/g, " ").trim();
+  return norm(a) === norm(b);
+}
+
 /** Whether the replay stage runs (PROOF_MEMORY_REPLAY, default on). */
 export function replayEnabled(): boolean {
   return process.env.PROOF_MEMORY_REPLAY !== "false";
@@ -26,7 +32,8 @@ export function replayEnabled(): boolean {
 
 /**
  * Replay up to `max` recalled proofs (in recall order) on the theorem; the first that verifies wins.
- * Scripts longer than 40 lines are skipped (a long script is specific to its theorem).
+ * Scripts longer than 40 lines are skipped (a long script is specific to its theorem) — unless
+ * the remembered statement is this one (the same problem asked again).
  */
 export async function replayRecalled(args: {
   sessionId: string;
@@ -46,7 +53,8 @@ export async function replayRecalled(args: {
   for (const entry of args.recalled) {
     if (tried >= (args.max ?? 3)) break;
     const tactics = entry.tactics.trim();
-    if (!tactics || seen.has(tactics) || tactics.split("\n").length > 40) continue;
+    const same = sameStatement(entry.theorem_type, args.theoremType);
+    if (!tactics || seen.has(tactics) || (!same && tactics.split("\n").length > 40)) continue;
     seen.add(tactics);
     tried++;
     const source = assembleLeanSource({ theoremName: args.theoremName, theoremType: args.theoremType, stepCodes: [tactics], useMathlib: args.useMathlib, opens: args.opens });

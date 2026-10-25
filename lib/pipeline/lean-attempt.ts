@@ -200,6 +200,7 @@ export function proofHints(theoremType: string, opts: { tooMany?: boolean; huge?
       ].join("\n"),
     );
   }
+  if (/\bncard\b|\.card\b/.test(t) && /Orbit|orbit|MulAction|Rot\b|Ref\b|rotat|reflect/.test(t)) hints.push(orbitHint());
   const orders = orderConditions(t);
   if (orders) hints.push(orderHint(orders));
   if (/∣/.test(t) && /\(\s*\w+\s*:\s*(ℕ|ℤ|Nat|Int)\s*\)|∀\s*\w+\s*:\s*(ℕ|ℤ)/.test(t) && /↔|∃/.test(t)) {
@@ -247,6 +248,36 @@ export function proofHints(theoremType: string, opts: { tooMany?: boolean; huge?
   }
   hints.push("Never write `sorry` or `admit`: a proof that contains them is rejected.");
   return hints;
+}
+
+/**
+ * Counting configurations up to rotation / reflection ("the number of orbits is 16"). `decide` on
+ * the set of orbits cannot work (a Set of Sets), and the kernel fails on Finsets of Finsets (a
+ * list of two Finset literals already gives "deep recursion"); the route below — representatives
+ * as lists, finite facts on lists — was checked in Lean on 5 of 15 seats around a table, no two
+ * adjacent, up to rotation and reflection (16 orbits).
+ */
+function orbitHint(): string {
+  return [
+    "Counting configurations up to rotation/reflection (the number of orbits): never `decide` / `rfl` the `Set.ncard` of a set of orbits, and never let the kernel decide anything over a Finset of Finsets or a List of Finsets (\"deep recursion\") — do the finite checks on `List (List (Fin n))`, one Finset at a time. The route (checked in Lean on 5 of 15 seats, no two adjacent, 16 orbits):",
+    "  intro Valid Rot Ref Orbit   -- the statement's lets",
+    "  have rr : ∀ j k s, Rot k (Rot j s) = Rot (j + k) s := by intro j k s; simp only [Rot, Finset.image_image]; congr 1; funext i; simp only [Function.comp_apply]; abel",
+    "  -- likewise Ref k (Rot j s) = Ref (k - j) s, Rot k (Ref j s) = Ref (j + k) s, Ref k (Ref j s) = Rot (k - j) s (`abel`, not `ring`, on Fin n), Rot 0 s = s (`simp only [Rot, add_zero, Finset.image_id']`)",
+    "  have oRot : ∀ j s, Orbit (Rot j s) = Orbit s  -- ext t; simp only [Orbit, Set.mem_ofPred_eq]; constructor; rintro ⟨hv, k, h | h⟩ … with the composition lemmas (`congr 1; abel` for the index); same for oRef",
+    "  have vRot : ∀ j s, Valid s → Valid (Rot j s)  -- card via Finset.card_image_of_injective _ (add_left_injective j); adjacency via add_right_cancel",
+    "  have mapRot : ∀ (l : List (Fin 15)) k, Rot k l.toFinset = (l.map (· + k)).toFinset := by intro l k; ext x; simp only [Rot, Finset.mem_image, List.mem_toFinset, List.mem_map]",
+    "  let srt : List (Fin 15) → List (Fin 15) := fun l => l.insertionSort (· ≤ ·)   -- not mergeSort: well-founded recursion, the kernel cannot run it",
+    "  have hsrt : ∀ l r, srt l = r → l.toFinset = r.toFinset := by intro l r h; rw [← h]; exact (List.toFinset_eq_of_perm _ _ (List.perm_insertionSort _ _)).symm",
+    "  let RL : List (List (Fin 15)) := [[0, 2, 4, 6, 8], …]   -- one sorted representative per orbit, from the solution",
+    "  have hRv : ∀ r ∈ RL, r.length = 5 ∧ r.Nodup ∧ ∀ i : Fin 15, i ∈ r → i + 1 ∉ r := by decide +kernel",
+    "  have hnd : RL.Nodup := by decide +kernel",
+    "  have hsep : ∀ r1 ∈ RL, ∀ r2 ∈ RL, ∀ k : Fin 15, ((r1.map (· + k)).toFinset = r2.toFinset → r1 = r2) ∧ ((r1.map (k - ·)).toFinset = r2.toFinset → r1 = r2) := by decide +kernel",
+    "  have hcov : ∀ l ∈ List.sublistsLen 4 (List.finRange 15).tail, (∀ i : Fin 15, i ∈ 0 :: l → i + 1 ∉ 0 :: l) → ∃ r ∈ RL, ∃ k : Fin 15, srt ((0 :: l).map (· + k)) = r ∨ srt ((0 :: l).map (k - ·)) = r := by decide +kernel",
+    "  -- every valid s: rotate it so that 0 ∈ s' (vRot (-i)), take l := (List.finRange 15).tail.filter (· ∈ s'), so s' = (0 :: l).toFinset (List.toFinset_cons, Finset.insert_erase) and l ∈ sublistsLen 4 (List.mem_sublistsLen, List.filter_sublist, List.toFinset_card_of_nodup); hcov + mapRot + hsrt give Orbit s = Orbit r.toFinset",
+    "  -- then {O | ∃ s, Valid s ∧ O = Orbit s} = (fun r => Orbit r.toFinset) '' {r | r ∈ RL}, InjOn from hsep (r₂.toFinset ∈ Orbit r₂.toFinset with k = 0), and",
+    "  rw [hset, hinj.ncard_image, show {r | r ∈ RL} = (RL.toFinset : Set (List (Fin 15))) by ext; simp, Set.ncard_coe_finset, List.toFinset_card_of_nodup hnd]",
+    "Plain `decide` hits maximum recursion depth here; `decide +kernel` does not. Quantify with `∀ i : Fin n, i ∈ r → …` rather than `∀ i ∈ r` over a Finset.",
+  ].join("\n");
 }
 
 /**
