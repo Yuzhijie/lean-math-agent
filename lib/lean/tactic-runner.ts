@@ -44,13 +44,15 @@ export async function openRunner(args: {
   label: string;
   /** Print every step when this env var is set. */
   debugEnv?: string;
+  /** `open … in` before the theorem (miniF2F statements need `Real`, `Nat`, …). */
+  opens?: string[];
 }): Promise<OpenedRunner | string> {
-  const { theoremName, theoremType, useMathlib, timeLimitMs, tacticTimeoutMs, label, debugEnv } = args;
+  const { theoremName, theoremType, useMathlib, timeLimitMs, tacticTimeoutMs, label, debugEnv, opens } = args;
   if (process.env.LEAN_SERVER_MODE === "spawn") return "needs the Lean REPL";
   let opened: Awaited<ReturnType<typeof import("./proof-state").openTheorem>>;
   try {
     const { openTheorem } = await import("./proof-state");
-    opened = await openTheorem(assembleLeanSource({ theoremName, theoremType, stepCodes: ["sorry"], useMathlib }), { tacticTimeoutMs });
+    opened = await openTheorem(assembleLeanSource({ theoremName, theoremType, stepCodes: ["sorry"], useMathlib, opens }), { tacticTimeoutMs });
   } catch (e) {
     if (e instanceof CancelledError) throw e;
     return `the statement did not open: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`;
@@ -104,8 +106,8 @@ export async function openRunner(args: {
  * The finished script as one declaration, with a heartbeat budget for all of its steps (each step
  * had its own in tactic mode; never 0, which the sanitizer refuses).
  */
-export function scriptSource(args: { theoremName: string; theoremType: string; tactics: string; useMathlib: boolean; heartbeats: number }): string {
-  const { theoremName, theoremType, tactics, useMathlib, heartbeats } = args;
+export function scriptSource(args: { theoremName: string; theoremType: string; tactics: string; useMathlib: boolean; heartbeats: number; opens?: string[] }): string {
+  const { theoremName, theoremType, tactics, useMathlib, heartbeats, opens } = args;
   const beats = Number.isFinite(heartbeats) && heartbeats > 0 ? Math.floor(heartbeats) : 4_000_000;
-  return assembleLeanSource({ theoremName, theoremType, stepCodes: [tactics], useMathlib }).replace(/^theorem /m, `set_option maxHeartbeats ${beats} in\ntheorem `);
+  return assembleLeanSource({ theoremName, theoremType, stepCodes: [tactics], useMathlib, opens }).replace(/^(open [^\n]* in\n)?theorem /m, (_m, open) => `set_option maxHeartbeats ${beats} in\n${open ?? ""}theorem `);
 }

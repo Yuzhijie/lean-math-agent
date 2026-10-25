@@ -31,6 +31,7 @@ import { hammerTheorem } from "../lean/hammer";
 import { geometryProof, looksGeometric } from "../lean/geometry";
 import { inductionProof, looksInductive } from "../lean/induction";
 import { combinatoricsProof, looksCombinatorial } from "../lean/combinatorics";
+import { autoProof } from "../lean/auto";
 import { rememberRepair } from "../lean/proof-memory";
 import { replayRecalled } from "../prover/replay";
 import { lt } from "../llm/output-locale";
@@ -278,6 +279,16 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
       failed: (r: string) => lt(`组合证明没有成功：${r}`, `The combinatorial proof did not work: ${r}`),
       title: lt("组合计数（程序写的证明）", "Combinatorics (proof written by the program)"),
       done: lt("✅ 完全形式化验证通过（组合计数）", "✅ Fully formally verified (combinatorics)"),
+    },
+    {
+      strategy: "auto" as const,
+      applies: !looksGeometric(theoremType),
+      prove: () => autoProof({ sessionId: session.id, theoremName, theoremType, expectedSignature: frozenSignature, useMathlib }),
+      trying: lt("尝试策略组合搜索（拆分目标、分情况、逐值检查，再用自动化策略收尾）", "Trying a search over tactic combinations (split the goal, cases, every value, then the automation closes each part)"),
+      passed: lt("✅ 策略组合搜索找到的证明通过 Lean 检查", "✅ The tactic-combination search found a proof that passed Lean"),
+      failed: (r: string) => lt(`策略组合搜索没有成功：${r}`, `The tactic-combination search did not work: ${r}`),
+      title: lt("策略组合搜索（程序找到的证明）", "Tactic-combination search (proof found by the program)"),
+      done: lt("✅ 完全形式化验证通过（策略组合搜索）", "✅ Fully formally verified (tactic-combination search)"),
     },
   ];
   for (const pp of programProvers) {

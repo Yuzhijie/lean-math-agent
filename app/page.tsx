@@ -1208,6 +1208,8 @@ export default function Home() {
                                               ? tr("数学归纳法（程序选归纳方式，逐个关闭奠基与归纳步）", "Induction (the program chose the scheme and closed the base and the step)")
                                               : leanProofAttempt.strategy === "combinatorics"
                                                 ? tr("组合计数（程序写的证明：轨道代表元、韦恩图分区或有限枚举，由 Lean 内核核对）", "Combinatorics (a proof the program wrote: orbit representatives, Venn regions or finite enumeration, checked by Lean's kernel)")
+                                                : leanProofAttempt.strategy === "auto"
+                                                  ? tr("策略组合搜索（程序拆分目标、分情况讨论，再用自动化策略逐个收尾）", "Tactic-combination search (the program split the goal into cases and closed each with automation)")
                                       : tr(
                                         `分步搜索（${leanProofAttempt.attempts ?? "?"} 次尝试）`,
                                         `Stepwise search (${leanProofAttempt.attempts ?? "?"} attempts)`,
