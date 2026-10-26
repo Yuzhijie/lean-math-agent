@@ -712,3 +712,25 @@ describe("backward compatibility", () => {
     expect(result.notes).toBe("ok");
   });
 });
+
+// ── 402: the balance does not cover max_tokens ───────────────────────
+
+describe("402 can only afford", () => {
+  const body402 = (n: number) => JSON.stringify({ error: { code: 402, message: `This request requires more credits, or fewer max_tokens. You requested up to 65536 tokens, but can only afford ${n}.` } });
+
+  it("retries once with an affordable max_tokens", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(errorResponse(402, body402(30582))).mockResolvedValueOnce(okResponse("hi"));
+    await expect(chatText({ messages: TEST_MESSAGES })).resolves.toBe("hi");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const second = JSON.parse(String((fetchMock.mock.calls[1][1] as RequestInit).body));
+    expect(second.max_tokens).toBe(Math.floor(30582 * 0.9));
+  });
+
+  it("explains a balance that is used up", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue(errorResponse(402, body402(1200)));
+    await expect(chatText({ messages: TEST_MESSAGES })).rejects.toThrow(/余额不足.*1200/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

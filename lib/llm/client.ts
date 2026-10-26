@@ -4,7 +4,7 @@ import { buildCacheKey, getGlobalCache } from "./cache";
 import { billingCapReached, costCapReached, parseAndRecordUsage, recordLatency, scopeCostCap, setPriceTable, type RawUsage } from "./usage-tracker";
 import { CancelledError, currentSignal, throwIfCancelled } from "../jobs";
 import { logLlm, logDebug, type LlmLogEntry } from "./logger";
-import { localizeMessages, outputLocale } from "./output-locale";
+import { localizeMessages, lt, outputLocale } from "./output-locale";
 
 export class LlmError extends Error {}
 /** The usage scope spent its cost cap (PROOF_COST_CAP_USD); not retried, not a fault of the model. */
@@ -418,6 +418,9 @@ async function rawChatMessages(
     let retriesUsed = 0;
     let endpointSucceeded = false;
     let retryAfterHeader: string | null = null;
+    // OpenRouter answers 402 "can only afford N" when the balance does not cover max_tokens (with
+    // none given it reserves the model's whole output limit): one retry asks for what is affordable.
+    let tokenCap: number | undefined;
 
     for (let attempt = 0; attempt <= config.maxHttpRetries; attempt++) {
       if (attempt > 0) {
@@ -441,7 +444,7 @@ async function rawChatMessages(
             "Content-Type": "application/json",
           },
           body: JSON.stringify(
-            buildRequestBody(config, endpoint, role, messages, { ...options, temperature: temp, jsonMode }),
+            capMaxTokens(buildRequestBody(config, endpoint, role, messages, { ...options, temperature: temp, jsonMode }), tokenCap),
           ),
           signal: jobSignal(AbortSignal.timeout(Math.min(remaining, requestTimeout))),
         });
@@ -517,6 +520,15 @@ async function rawChatMessages(
           retryAfterHeader = res.headers.get("retry-after");
         }
 
+        if (status === 402 && tokenCap === undefined) {
+          const cap = affordableTokens(body);
+          if (cap !== undefined) {
+            tokenCap = cap;
+            attempt--; // not a retry of the same request
+            continue;
+          }
+        }
+
         const retryable =
           status === 429 ||
           status === 500 ||
@@ -577,7 +589,36 @@ async function rawChatMessages(
   }
 
   // ── All endpoints exhausted ──────────────────────────────────────
+  if (/^LLM HTTP 402/.test(lastError)) throw new LlmError(creditMessage(lastError));
   throw new LlmError(lastError);
+}
+
+/** Smallest output budget worth asking for after a 402: below it answers are cut off anyway. */
+const MIN_AFFORDABLE_TOKENS = 4096;
+
+/** The "can only afford N" of an OpenRouter 402 body, less a margin; undefined when absent or too small. */
+export function affordableTokens(body: string): number | undefined {
+  const m = /can only afford (\d+)/i.exec(body);
+  if (!m) return undefined;
+  const n = Math.floor(Number(m[1]) * 0.9);
+  return n >= MIN_AFFORDABLE_TOKENS ? n : undefined;
+}
+
+/** The request body with its output budget at most `cap` (max_tokens added when it had none). */
+export function capMaxTokens(body: Record<string, unknown>, cap: number | undefined): Record<string, unknown> {
+  if (cap === undefined) return body;
+  const key = "max_completion_tokens" in body ? "max_completion_tokens" : "max_tokens";
+  const now = typeof body[key] === "number" ? (body[key] as number) : Infinity;
+  return { ...body, [key]: Math.min(now, cap) };
+}
+
+/** A 402 explained: the model provider's balance or the key's limit is used up. */
+function creditMessage(raw: string): string {
+  const afford = /can only afford (\d+)/i.exec(raw)?.[1];
+  return lt(
+    `模型服务的余额不足（HTTP 402${afford ? `，当前余额只够约 ${afford} 个 token` : ""}）：请在 OpenRouter 充值（openrouter.ai/settings/credits），或提高这个 API key 的额度上限。原始信息：${raw}`,
+    `The model provider's balance is too low (HTTP 402${afford ? `; it covers about ${afford} tokens` : ""}): add credits on OpenRouter (openrouter.ai/settings/credits) or raise this API key's limit. Raw message: ${raw}`,
+  );
 }
 
 // ── Backoff & timing helpers ──────────────────────────────────────────
