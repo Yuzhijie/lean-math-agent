@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { autoSearch } from "@/lib/lean/auto/search";
-import { finishers, splitters } from "@/lib/lean/auto/tactics";
+import { boundedVars, defInstances, finishers, splitters, sqrtArgs } from "@/lib/lean/auto/tactics";
+import { fracLean, linearValuesTactic, solveLinear } from "@/lib/lean/auto/linear";
 import { parseGoal } from "@/lib/lean/geometry/goal";
 import type { RunnerMark, TacticRunner } from "@/lib/lean/tactic-runner";
 
@@ -53,6 +54,30 @@ describe("tactic library", () => {
     expect(ex).toContain("use 21");
     const abs = splitters(parseGoal("x : ℝ\nh : |x - 1| < 2\n⊢ x < 3")!, fresh).map((s) => s.tactic);
     expect(abs.some((t) => t.startsWith("rcases abs_cases (x - 1)"))).toBe(true);
+  });
+});
+
+describe("facts the program works out", () => {
+  it("instances of definitions at the numbers the statement uses", () => {
+    const st = parseGoal("a b : ℝ\nf : ℝ → ℝ\nh₀ : ∀ (x : ℝ), f x = a * x ^ 4 - b * x ^ 2 + x + 5\nh₂ : f (-3) = 2\n⊢ f 3 = 8")!;
+    expect(defInstances(st)).toEqual(["h₀ (-3)", "h₀ 3"]);
+    const cond = parseGoal("f : ℤ → ℤ\nh₁ : ∀ (n : ℤ), Even n → f n = n ^ 2 - 4 * n - 1\n⊢ f 4 = -1")!;
+    expect(defInstances(cond)).toEqual(["h₁ 4 (by decide)"]);
+  });
+
+  it("square-root arguments, bounded unknowns (also inside ∧)", () => {
+    expect(sqrtArgs("h₁ : √(19 + 3 * y) = 7 ⊢ Real.sqrt x = 2")).toEqual(["(19 + 3 * y)", "x"]);
+    expect(boundedVars(parseGoal("a b : ℕ\nh₀ : 1 ≤ a ∧ a ≤ 9 ∧ b ≤ 9\n⊢ a + b = 16")!)).toEqual(["a", "b"]);
+  });
+
+  it("solves the linear system the hypotheses form", () => {
+    const st = parseGoal("a b c d : ℚ\nh₀ : 3 * a = b + c + d\nh₁ : 4 * b = a + c + d\nh₂ : 2 * c = a + b + d\nh₃ : 8 * a + 10 * b + 6 * c = 24\n⊢ ↑d.den + d.num = 28")!;
+    const sol = solveLinear(st);
+    expect(sol.map((s) => `${s.name}=${fracLean(s.value)}`)).toEqual(["a=1", "b=4 / 5", "c=4 / 3", "d=13 / 15"]);
+    let k = 0;
+    expect(linearValuesTactic(st, (b) => `${b}${++k}`)).toContain("have hv4 : d = 13 / 15 := (by linarith)");
+    // underdetermined: nothing fixed
+    expect(solveLinear(parseGoal("x y : ℝ\nh : x + y = 1\n⊢ x = 1")!)).toEqual([]);
   });
 });
 

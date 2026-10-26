@@ -9,6 +9,10 @@
 import { parseGoal } from "../geometry/goal";
 import type { TacticRunner } from "../tactic-runner";
 import { finishers, splitters, type Splitter } from "./tactics";
+import { certificateTactic } from "./certificate";
+import { linearValuesTactic } from "./linear";
+import { isInaccessible } from "../geometry/goal";
+import { topIndex } from "../combinatorics/lets";
 
 export interface AutoOptions {
   maxDepth?: number;
@@ -47,9 +51,14 @@ export async function autoSearch(run: TacticRunner, opts: AutoOptions): Promise<
     for (const f of finishers(st)) {
       if ((await apply(`· ${f}`)) && run.goals().length === n0 - 1) return true;
     }
+    // an equation that follows from the equation hypotheses: the coefficients computed exactly
+    const cert = Date.now() < opts.deadline ? await certificateTactic(st, 8).catch(() => undefined) : undefined;
+    if (cert && (await apply(`· ${cert}`)) && run.goals().length === n0 - 1) return true;
     if (depth < maxDepth) {
       const path = new Set(seen).add(key);
-      for (const sp of splitters(st, run.fresh)) {
+      const lin = linearValuesTactic(st, run.fresh);
+      const steps = [...(lin ? [{ tactic: lin, kind: "rewrite" as const }] : []), ...splitters(st, run.fresh)];
+      for (const sp of steps) {
         const mark = run.save();
         if (!(await apply(sp.tactic))) continue;
         const made = run.goals().length - (n0 - 1);
@@ -74,7 +83,23 @@ export async function autoSearch(run: TacticRunner, opts: AutoOptions): Promise<
     return false;
   }
 
+  /** Binders introduced and ∧ / ∃ hypotheses taken apart once, before the search (not a level of it). */
+  async function normalize(): Promise<void> {
+    for (let i = 0; i < 30 && run.goals().length; i++) {
+      const st = parseGoal(run.goals()[0]);
+      if (!st) return;
+      const t = st.target.trim();
+      const all = /^∀ \(?([A-Za-z_][\w'₀-₉]*)/.exec(t);
+      if (all && !st.hyps.some((h) => h.names.includes(all[1])) && (await apply(`intro ${all[1]}`))) continue;
+      if ((/^∀/.test(t) || (topIndex(t, "→") >= 0 && !/^¬/.test(t))) && (await apply(`intro ${run.fresh("h")}`))) continue;
+      const h = st.hyps.find((x) => x.names.length === 1 && !isInaccessible(x.names[0]) && !/^∀/.test(x.type.trim()) && (/^∃/.test(x.type.trim()) || topIndex(x.type, " ∧ ") >= 0));
+      if (h && (await apply(`obtain ⟨${run.fresh("h")}, ${run.fresh("h")}⟩ := ${h.names[0]}`))) continue;
+      return;
+    }
+  }
+
   try {
+    await normalize();
     const ok = await solveMain(0, new Set());
     return { ok: ok && run.goals().length === 0, stats };
   } catch (e) {
