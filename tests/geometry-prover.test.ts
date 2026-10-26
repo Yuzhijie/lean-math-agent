@@ -186,3 +186,16 @@ describe.skipIf(!sympy)("polynomial certificates (SymPy)", () => {
     expect(r.ok).toBe(false);
   });
 });
+
+describe("reduceSquares (nested roots)", () => {
+  it("(10 + 2√5)(10 − 2√5) reduces to 80 with cofactor −4 on √5² = 5", async () => {
+    const { reduceSquares } = await import("@/lib/lean/geometry/prove");
+    const { Poly, Frac } = await import("@/lib/lean/geometry/poly");
+    const s = Poly.variable(0);
+    const c = (n: number) => Poly.const(new Frac(BigInt(n)));
+    const args = new Map([[0, c(5)]]);
+    const r = reduceSquares(c(10).add(s.scale(new Frac(2n))).mul(c(10).sub(s.scale(new Frac(2n)))), args)!;
+    expect(r.r.constValue()?.toString()).toBe("80");
+    expect(r.cof.get(0)?.constValue()?.toString()).toBe("-4");
+  });
+});

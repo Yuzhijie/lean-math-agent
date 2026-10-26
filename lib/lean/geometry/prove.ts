@@ -25,7 +25,7 @@
  */
 import { ParseError, parseTerm, slice, unwrap, type Node } from "./expr";
 import { isInaccessible, parseGoal, type GoalState } from "./goal";
-import { NotPolynomial, Poly, toPoly, VarTable, hasNonConstDivision, isNumeric } from "./poly";
+import { Frac, NotPolynomial, Poly, toPoly, VarTable, hasNonConstDivision, isNumeric, type Atom } from "./poly";
 import { findCertificate } from "./certificate";
 
 export type { TacticRunner } from "../tactic-runner";
@@ -262,7 +262,7 @@ function factors(n: Node): Node[] {
 }
 
 /** Names of the facts this prover adds (hden3, hfac4, hm5, …). */
-const OWN = /^(hden|hfac|hm|hmul|hkey|hsq|habs|htrig|hpos|hnn)\d+$/;
+const OWN = /^(hden|hfac|hm|hmul|hkey|hsq|habs|htrig|hpos|hnn|hprod)\d+$/;
 
 /** Prove `D ≠ 0` for a denominator; returns the hypothesis name. */
 async function proveNonzero(run: TacticRunner, src: string, D: Node, f: Facts): Promise<string> {
@@ -397,17 +397,24 @@ async function atomFacts(run: TacticRunner, done: Set<string>): Promise<void> {
       if (!(e instanceof NotPolynomial)) throw e;
     }
   }
+  // the arguments of constant square roots as polynomials (this also meets nested atoms: √5 in √(10 + 2 * √5))
+  const argPolys = constantSqrtArgs(vars);
+  const sqNames = sqNamesOf(done);
   const trig = new Set<string>();
   for (const a of vars.atoms) {
     if (done.has(a.text) || !a.arg) continue;
     done.add(a.text);
     if (a.kind === "sqrt") {
-      await haveFirst(
-        run,
-        run.fresh("hsq"),
-        `(${a.text}) ^ 2 = ${a.arg}`,
-        positivityProofs(a.arg, f, false).map((p) => `Real.sq_sqrt ${p}`),
-      );
+      const name = run.fresh("hsq");
+      if (
+        await haveFirst(
+          run,
+          name,
+          `(${a.text}) ^ 2 = ${a.arg}`,
+          positivityProofs(a.arg, f, false).map((p) => `Real.sq_sqrt ${p}`),
+        )
+      )
+        sqNames.set(a.index, name);
     } else if (a.kind === "abs") {
       await run.apply(`have ${run.fresh("habs")} : (${a.text}) ^ 2 = (${a.arg}) ^ 2 := sq_abs _`);
     } else if ((a.kind === "sin" || a.kind === "cos") && !trig.has(a.arg)) {
@@ -415,6 +422,200 @@ async function atomFacts(run: TacticRunner, done: Set<string>): Promise<void> {
       await run.apply(`have ${run.fresh("htrig")} : Real.sin ${a.arg} ^ 2 + Real.cos ${a.arg} ^ 2 = 1 := Real.sin_sq_add_cos_sq _`);
     }
   }
+  await productFacts(run, vars, argPolys, sqNames, done);
+}
+
+/** Square-fact names per atom index, kept with the `done` set of one proof (atoms keep their index there). */
+const SQ_NAMES = new WeakMap<Set<string>, Map<number, string>>();
+function sqNamesOf(done: Set<string>): Map<number, string> {
+  let m = SQ_NAMES.get(done);
+  if (!m) SQ_NAMES.set(done, (m = new Map()));
+  return m;
+}
+
+/** √E atoms whose E has no variables (only numbers and other such roots) → E as a polynomial. */
+function constantSqrtArgs(vars: VarTable): Map<number, Poly> {
+  const out = new Map<number, Poly>();
+  for (let i = 0; i < vars.atoms.length; i++) {
+    const a = vars.atoms[i];
+    if (a.kind !== "sqrt" || !a.arg) continue;
+    const n = tryParse(a.arg);
+    if (!n) continue;
+    try {
+      const p = toPoly(a.arg, n, vars);
+      out.set(a.index, p);
+    } catch (e) {
+      if (!(e instanceof NotPolynomial)) throw e;
+    }
+  }
+  // only roots whose inner atoms are such roots too
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [i, p] of out)
+      if ([...p.vars()].some((v) => !out.has(v))) {
+        out.delete(i);
+        changed = true;
+      }
+  }
+  return out;
+}
+
+function monoExps(m: string): Map<number, number> {
+  const out = new Map<number, number>();
+  if (!m) return out;
+  for (const part of m.split("*")) {
+    const [v, e] = part.split("^");
+    out.set(Number(v.slice(1)), e ? Number(e) : 1);
+  }
+  return out;
+}
+
+function monoPoly(exps: Map<number, number>, c: Frac): Poly {
+  let p = Poly.const(c);
+  for (const [v, e] of exps) if (e > 0) p = p.mul(Poly.variable(v).pow(e));
+  return p;
+}
+
+/**
+ * p with every s² of a constant root s = √E replaced by E: p = r + Σ cof_s · (s² − E).
+ * Undefined when it does not settle (it always does for constant nested roots).
+ */
+export function reduceSquares(p: Poly, args: Map<number, Poly>): { r: Poly; cof: Map<number, Poly> } | undefined {
+  let r = p;
+  const cof = new Map<number, Poly>();
+  for (let step = 0; step < 500; step++) {
+    let hit: { m: string; c: Frac; v: number } | undefined;
+    for (const [m, c] of r.terms) {
+      for (const [v, e] of monoExps(m))
+        if (e >= 2 && args.has(v)) {
+          hit = { m, c, v };
+          break;
+        }
+      if (hit) break;
+    }
+    if (!hit) return { r, cof };
+    const exps = monoExps(hit.m);
+    exps.set(hit.v, exps.get(hit.v)! - 2);
+    const rest = monoPoly(exps, hit.c);
+    r = r.sub(monoPoly(monoExps(hit.m), hit.c)).add(rest.mul(args.get(hit.v)!));
+    cof.set(hit.v, (cof.get(hit.v) ?? new Poly()).add(rest));
+  }
+  return undefined;
+}
+
+function isqrt(n: bigint): bigint | undefined {
+  if (n < 0n) return undefined;
+  if (n < 2n) return n;
+  let x = BigInt(Math.floor(Math.sqrt(Number(n))));
+  while (x * x > n) x--;
+  while ((x + 1n) * (x + 1n) <= n) x++;
+  return x * x === n ? x : undefined;
+}
+
+/** q with q² = c for a positive rational c. */
+function ratSqrt(c: Frac): Frac | undefined {
+  if (c.n <= 0n) return undefined;
+  const n = isqrt(c.n);
+  const d = isqrt(c.d);
+  return n !== undefined && d !== undefined ? new Frac(n, d) : undefined;
+}
+
+/** r = λ·g for a rational λ, else undefined. */
+function ratio(r: Poly, g: Poly): Frac | undefined {
+  const first = [...g.terms.entries()][0];
+  if (!first) return undefined;
+  const rc = r.terms.get(first[0]);
+  if (!rc) return undefined;
+  const lam = rc.mul(first[1].inv());
+  return r.sub(g.scale(lam)).isZero() ? lam : undefined;
+}
+
+function fracLean(q: Frac): string {
+  return q.d === 1n ? q.n.toString() : `(${q.n} / ${q.d} : ℝ)`;
+}
+
+/**
+ * Products of constant square roots that simplify: √(10 + 2 * √5) * √(10 - 2 * √5) = 4 * √5 (a
+ * regular pentagon's coordinates). The algebra only knows each s² = E, which leaves the sign of
+ * s₁·s₂ open, so no certificate exists without this fact. Proved with Real.sqrt_mul and the
+ * square facts (linear_combination).
+ */
+async function productFacts(run: TacticRunner, vars: VarTable, args: Map<number, Poly>, sqNames: Map<number, string>, done: Set<string>): Promise<void> {
+  const roots: Atom[] = vars.atoms.filter((a) => args.has(a.index) && sqNames.has(a.index));
+  if (roots.length < 2 || roots.length > 8) return;
+  const names = vars.names;
+  const reduced = new Map<number, { r: Poly; cof: Map<number, Poly> }>();
+  for (const a of roots) {
+    const red = reduceSquares(args.get(a.index)!, args);
+    if (red) reduced.set(a.index, red);
+  }
+  const lc = (cofs: Map<number, Poly>[]): string | undefined => {
+    const total = new Map<number, Poly>();
+    for (const c of cofs) for (const [v, p] of c) total.set(v, (total.get(v) ?? new Poly()).add(p));
+    const parts: string[] = [];
+    for (const [v, p] of total) {
+      if (p.isZero()) continue;
+      const h = sqNames.get(v);
+      if (!h) return undefined;
+      parts.push(`(${p.toLean(names)}) * ${h}`);
+    }
+    return parts.length ? `linear_combination ${parts.join(" + ")}` : "ring";
+  };
+  for (let i = 0; i < roots.length; i++)
+    for (let j = i + 1; j < roots.length; j++) {
+      const a = roots[i];
+      const b = roots[j];
+      const key = `prod:${a.text}*${b.text}`;
+      if (done.has(key)) continue;
+      done.add(key);
+      const prod = reduceSquares(args.get(a.index)!.mul(args.get(b.index)!), args);
+      if (!prod || prod.r.isZero()) continue;
+      // √A·√B = q (A·B = q²) or q·√G (A·B = q²·G for another root √G)
+      let rhs: string | undefined;
+      let eq: string | undefined;
+      let finish: string[] = [];
+      const c = prod.r.constValue();
+      const q0 = c ? ratSqrt(c) : undefined;
+      if (q0) {
+        const proof = lc([prod.cof]);
+        if (!proof) continue;
+        rhs = fracLean(q0);
+        eq = `show (${a.arg}) * (${b.arg}) = (${rhs}) ^ 2 by ${proof}`;
+        finish = [`Real.sqrt_sq (by norm_num)`];
+      } else {
+        for (const t of roots) {
+          if (t.index === a.index || t.index === b.index) continue;
+          const g = reduced.get(t.index);
+          if (!g) continue;
+          const lam = ratio(prod.r, g.r);
+          const q = lam ? ratSqrt(lam) : undefined;
+          if (!q) continue;
+          const negG = new Map([...g.cof].map(([v, p]) => [v, p.scale(lam!).neg()] as [number, Poly]));
+          const proof = lc([prod.cof, negG]);
+          if (!proof) continue;
+          const ql = fracLean(q);
+          rhs = `${ql} * ${t.text}`;
+          eq = `show (${a.arg}) * (${b.arg}) = (${ql}) ^ 2 * (${t.arg}) by ${proof}`;
+          finish = [`Real.sqrt_mul (by positivity) (${t.arg})`, `Real.sqrt_sq (by norm_num)`];
+          break;
+        }
+      }
+      if (!rhs || !eq) continue;
+      const nonneg = (x: Atom) => [
+        `(show (0:ℝ) ≤ ${x.arg} by positivity)`,
+        `(show (0:ℝ) ≤ ${x.arg} by nlinarith [${[...sqNames.values()].join(", ")}, ${roots.map((r) => `Real.sqrt_nonneg (${r.arg})`).join(", ")}])`,
+      ];
+      const name = run.fresh("hprod");
+      const proofs = [...nonneg(a), ...nonneg(b)].map((p, k) => {
+        const first = k < 2 ? a : b;
+        const other = k < 2 ? b : a;
+        const swap = k < 2 ? "" : `rw [mul_comm]; `;
+        return `by ${swap}rw [← Real.sqrt_mul ${p} (${other.arg}), ${k < 2 ? eq : eq!.replace(`(${a.arg}) * (${b.arg})`, `(${b.arg}) * (${a.arg})`).replace(/ by (linear_combination|ring)/, " by $1")}, ${finish.join(", ")}]`;
+        void first;
+      });
+      await haveFirst(run, name, `${a.text} * ${b.text} = ${rhs}`, proofs);
+    }
 }
 
 /**
