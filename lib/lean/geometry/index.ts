@@ -33,7 +33,7 @@ function open(theoremName: string, theoremType: string, useMathlib: boolean, tim
     theoremType,
     useMathlib,
     timeLimitMs,
-    tacticTimeoutMs: Number(process.env.GEOMETRY_TACTIC_TIMEOUT_MS ?? 30_000),
+    tacticTimeoutMs: Number(process.env.GEOMETRY_TACTIC_TIMEOUT_MS ?? 60_000),
     label: "geometry",
     debugEnv: "GEOMETRY_DEBUG",
   });
@@ -48,7 +48,7 @@ export async function geometryProof(args: {
 }): Promise<{ proof?: GeometryProof; reason: string }> {
   const { sessionId, theoremName, theoremType, expectedSignature, useMathlib } = args;
   if (!looksGeometric(theoremType)) return { reason: "not a coordinate statement" };
-  const opened = await open(theoremName, theoremType, useMathlib, Number(process.env.GEOMETRY_TIME_LIMIT_MS ?? 180_000));
+  const opened = await open(theoremName, theoremType, useMathlib, Number(process.env.GEOMETRY_TIME_LIMIT_MS ?? 600_000));
   if (typeof opened === "string") return { reason: opened };
   const { run, script, session } = opened;
   try {
@@ -58,7 +58,9 @@ export async function geometryProof(args: {
     // The proof is checked as one declaration: its heartbeat budget covers every step (each step had
     // its own in tactic mode), so the declaration gets a larger one (never 0, which the sanitizer refuses).
     const source = scriptSource({ theoremName, theoremType, tactics, useMathlib, heartbeats: Number(process.env.GEOMETRY_MAX_HEARTBEATS ?? 1_000_000) * 4 });
-    const verification = await session.verify(sessionId, source, { theoremName, expectedSignature });
+    // the whole script at once (an angle-mode proof with case splits takes minutes on a slow machine)
+    const verifyMs = Number(process.env.GEOMETRY_VERIFY_TIMEOUT_MS ?? 300_000);
+    const verification = await session.verify(sessionId, source, { theoremName, expectedSignature, timeoutMs: Number.isFinite(verifyMs) && verifyMs > 0 ? verifyMs : 300_000 });
     if (!verification.ok && process.env.GEOMETRY_DEBUG) console.error(`[geometry] verify failed:\n${source}\n${verification.log}`);
     if (!verification.ok) return { reason: `the written proof did not verify: ${verification.log.split("\n")[0]?.slice(0, 160) ?? ""}` };
     return { proof: { verification, source, tactics }, reason: "" };

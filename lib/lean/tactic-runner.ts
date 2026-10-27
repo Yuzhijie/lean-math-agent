@@ -88,7 +88,7 @@ export async function openRunner(args: {
       const out = await session.apply(handle, tactic);
       // an error Lean recovered from (the state still comes back) is a failure too
       const r = out.ok && out.errors.length ? { ok: false as const, error: out.errors.join("\n"), durationMs: out.durationMs } : out;
-      if (debug) console.error(`[${label}] ${r.ok ? "ok  " : "FAIL"} ${tactic}${r.ok ? "" : `\n        ${r.error.split("\n")[0]}`}`);
+      if (debug) console.error(`[${label}] ${r.ok ? "ok  " : "FAIL"} ${(r.durationMs / 1000).toFixed(1)}s ${tactic}${r.ok ? "" : `\n        ${r.error.split("\n")[0]}`}`);
       if (!r.ok) {
         lastError = r.error;
         return false;

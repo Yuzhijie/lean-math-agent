@@ -133,12 +133,12 @@ def divide_square(q: Poly, p: Poly, v: int) -> tuple[Poly, Poly]:
     return quot, rem
 
 
-def linear_var(p: Poly) -> int | None:
+def linear_var(p: Poly, skip: set[int] | None = None) -> int | None:
     """A variable p is linear in with a constant coefficient and that appears nowhere else in p."""
     gens = p.gens
     best = None
     for v in range(len(gens)):
-        if p.degree(gens[v]) != 1:
+        if (skip and v in skip) or p.degree(gens[v]) != 1:
             continue
         a = p.coeff_monomial(gens[v])
         if a == 0:
@@ -150,6 +150,27 @@ def linear_var(p: Poly) -> int | None:
             if best is None or size < best[1]:
                 best = (v, size)
     return None if best is None else best[0]
+
+
+def rest_degree(p: Poly, v: int, skip: set[int]) -> int:
+    """Total degree of p without its x_v term, counting only variables outside `skip`."""
+    best = 0
+    for m in p.monoms():
+        if m[v]:
+            continue
+        best = max(best, sum(e for i, e in enumerate(m) if i not in skip))
+    return best
+
+
+def field_candidates_lower(work: list, field, deg: int) -> bool:
+    """Some trig-coefficient substitution has a rest of lower degree than `deg`."""
+    for it in work:
+        if it in (field.r1, field.r2):
+            continue
+        found = field_linear_var(it.poly, field)
+        if found is not None and rest_degree(it.poly, found[0], {field.ci, field.si}) < deg:
+            return True
+    return False
 
 
 def square_var(p: Poly) -> int | None:
@@ -231,7 +252,116 @@ def solve_cofactors(target: Poly, hyps: list[Poly], extra: int, max_unknowns: in
     return out
 
 
-def attempt(goal: Poly, items: list[Item], max_extra: int, max_unknowns: int, member_only: bool = False):
+class Field:
+    """The trigonometric field of the angle mode (lib/lean/geometry/angles.ts): variables c = cos θ,
+    s = sin θ with the hypotheses R1 = s² + c² − 1 and R2 = T_k(c) − 1/2 (both Items, so their use
+    is tracked). Normal forms have s-degree ≤ 1 and c-degree < k; a nonzero element is invertible
+    (every point of R1 = R2 = 0 is a conjugate of the true cos θ, sin θ)."""
+
+    def __init__(self, gens: list[Symbol], ci: int, si: int, r1: Item, r2: Item):
+        self.gens = gens
+        self.ci, self.si = ci, si
+        self.c, self.s = gens[ci], gens[si]
+        self.r1, self.r2 = r1, r2
+        self.k = r2.poly.degree(self.c)
+        if r1.poly.degree(self.s) != 2 or self.k < 1 or r2.poly.degree(self.s) > 0:
+            raise CertError("field: R1 must be quadratic in s, R2 a polynomial in c")
+        others = [g for i, g in enumerate(gens) if i not in (ci, si)]
+        self.order = [self.s, self.c, *others]
+
+    def only_field(self, p: Poly) -> bool:
+        return all(all(e == 0 for i, e in enumerate(m) if i not in (self.ci, self.si)) for m in p.monoms())
+
+    def reduce(self, p: Poly) -> tuple[Poly, Poly, Poly]:
+        """p = rem + q1 * R1 + q2 * R2 (lex s > c > the rest: R1, R2 are a Gröbner basis)."""
+        if p.is_zero:
+            return p, p, p
+        (q1, q2), rem = sympy.reduced(p.as_expr(), [self.r1.poly.as_expr(), self.r2.poly.as_expr()], *self.order, order="lex")
+        P = lambda e: Poly(e, *self.gens, domain=QQ)
+        return P(rem), P(q1), P(q2)
+
+    def reduce_item(self, it: Item, sign: int) -> Item:
+        """Reduce an item's polynomial. Hypotheses (sign −1) keep poly = Σ comb·h; the target (sign
+        +1) keeps goal = poly + Σ comb·h."""
+        rem, q1, q2 = self.reduce(it.poly)
+        if q1.is_zero and q2.is_zero:
+            return it
+        comb = add_comb(it.comb, self.r1.comb, sign * q1)
+        comb = add_comb(comb, self.r2.comb, sign * q2)
+        return Item(rem, comb)
+
+    def inverse(self, a: Poly) -> tuple[Poly, Poly, Poly] | None:
+        """w, mu1, mu2 with a * w - 1 = mu1 * R1 + mu2 * R2, or None (a is zero in the field)."""
+        a, _, _ = self.reduce(a)
+        if a.is_zero:
+            return None
+        basis = [self.s**i * self.c**j for i in range(2) for j in range(self.k)]
+        ys = sympy.symbols(f"y0:{len(basis)}")
+        w_expr = sum(y * b for y, b in zip(ys, basis))
+        prod = sympy.expand(a.as_expr() * w_expr)
+        _, rem = sympy.reduced(prod, [self.r1.poly.as_expr(), self.r2.poly.as_expr()], self.s, self.c, *ys, order="lex")
+        rp = Poly(rem, self.s, self.c)
+        eqs = []
+        for i in range(2):
+            for j in range(self.k):
+                coeff = rp.coeff_monomial(self.s**i * self.c**j)
+                eqs.append(coeff - (1 if (i, j) == (0, 0) else 0))
+        sol = sympy.linsolve(eqs, ys)
+        if not sol:
+            return None
+        vals = list(sol)[0]
+        if any(v.free_symbols for v in vals):
+            return None
+        w = Poly(sum(v * b for v, b in zip(vals, basis)), *self.gens, domain=QQ)
+        rem2, mu1, mu2 = self.reduce(a * w - Poly(1, *self.gens, domain=QQ))
+        if not rem2.is_zero:
+            return None
+        return w, mu1, mu2
+
+
+def shrink_field(comb: dict[str, Poly], originals: dict[str, Poly], field: Field) -> dict[str, Poly]:
+    """Each cofactor reduced modulo R1, R2: c_j = r_j + q1 R1 + q2 R2 gives c_j h_j = r_j h_j +
+    (q1 h_j) R1 + (q2 h_j) R2, so the excess moves to the relations' cofactors (a much smaller
+    `linear_combination` for Lean's `ring`)."""
+    r1 = next(iter(field.r1.comb))
+    r2 = next(iter(field.r2.comb))
+    out = dict(comb)
+    zero = Poly(0, *field.gens, domain=QQ)
+    for k in list(out):
+        if k in (r1, r2):
+            continue
+        rem, q1, q2 = field.reduce(out[k])
+        if q1.is_zero and q2.is_zero:
+            continue
+        out[k] = rem
+        out[r1] = out.get(r1, zero) + q1 * originals[k]
+        out[r2] = out.get(r2, zero) + q2 * originals[k]
+    # the relations' own cofactors: R1's modulo R2 (moved to R2's), then R2's modulo R1 by s only
+    return out
+
+
+def field_linear_var(p: Poly, field: Field) -> tuple[int, Poly, Poly] | None:
+    """A variable (not c, s) p is linear in, with a coefficient a in the field (not constant) and
+    the rest free of it: (v, a, rest)."""
+    gens = p.gens
+    best = None
+    for v in range(len(gens)):
+        if v in (field.ci, field.si) or p.degree(gens[v]) != 1:
+            continue
+        x = gens[v]
+        a = Poly(sympy.expand(p.as_expr()).coeff(x, 1), *gens, domain=QQ)
+        if a.is_zero or a.total_degree() == 0 or not field.only_field(a):
+            continue
+        rest = p - a * Poly(x, *gens, domain=QQ)
+        if rest.degree(x) > 0:
+            continue
+        size = len(rest.terms())
+        if best is None or size < best[3]:
+            best = (v, a, rest, size)
+    return None if best is None else best[:3]
+
+
+def attempt(goal: Poly, items: list[Item], max_extra: int, max_unknowns: int, member_only: bool = False, field: Field | None = None):
     """Coefficients (by hypothesis name) with goal = sum coef * h, or None. With member_only: True
     when the goal is in the ideal (Gröbner basis test), else False — no cofactors."""
     gens = goal.gens
@@ -257,20 +387,102 @@ def attempt(goal: Poly, items: list[Item], max_extra: int, max_unknowns: int, me
         if not q.is_zero:
             target.poly, target.comb = r, add_comb(target.comb, rule.comb, q)
 
-    for _ in range(60):
+    def field_reduce_all():
+        nonlocal work, target
+        if field is None:
+            return
+        work = [field.reduce_item(it, -1) if it not in (field.r1, field.r2) else it for it in work]
+        work = [it for it in work if not it.poly.is_zero or it in (field.r1, field.r2)]
+        t = field.reduce_item(target, 1)
+        target.poly, target.comb = t.poly, t.comb
+
+    if field is not None:
+        # the field relations stay as they are (they are the Items the reductions refer to)
+        work = [it for it in work if not (it.comb.keys() == field.r1.comb.keys() or it.comb.keys() == field.r2.comb.keys())]
+        work += [field.r1, field.r2]
+        field_reduce_all()
+
+    for _ in range(200):
         changed = False
+        # the substitution of lowest degree first (in the variables other than the field's): a
+        # coordinate from an angle equation, not from a length relation d² = …, which would make
+        # everything quartic
+        best = None
         for it in work:
-            v = linear_var(it.poly)
-            if v is not None:
-                reduce_all(it, divide_linear, v, keep_rule=False)
-                changed = True
-                break
-        if changed:
+            if field is not None and (it in (field.r1, field.r2) or field.only_field(it.poly)):
+                continue
+            skip = set() if field is None else {field.ci, field.si}
+            v = linear_var(it.poly, skip)
+            if v is None:
+                continue
+            key = (rest_degree(it.poly, v, skip), len(it.poly.terms()))
+            if best is None or key < best[0]:
+                best = (key, it, v)
+        if best is not None and (field is None or best[0][0] <= 1 or not field_candidates_lower(work, field, best[0][0])):
+            reduce_all(best[1], divide_linear, best[2], keep_rule=False)
+            field_reduce_all()
             continue
         for it in work:
+            if field is not None and (it in (field.r1, field.r2) or field.only_field(it.poly)):
+                continue  # the field's own reduction handles c and s
             v = square_var(it.poly)
             if v is not None and (any(o is not it and o.poly.degree(gens[v]) >= 2 for o in work) or target.poly.degree(gens[v]) >= 2):
                 reduce_all(it, divide_square, v, keep_rule=True)
+                changed = True
+                break
+        if changed:
+            field_reduce_all()
+            continue
+        if field is not None:
+            cands = []
+            for it in work:
+                if it in (field.r1, field.r2):
+                    continue
+                found = field_linear_var(it.poly, field)
+                if found is not None:
+                    cands.append(((rest_degree(it.poly, found[0], {field.ci, field.si}), len(it.poly.terms())), it, found))
+            cands.sort(key=lambda x: x[0])
+            for _key, it, found in cands:
+                v, a, rest = found
+                inv = field.inverse(a)
+                if inv is None:
+                    continue
+                w, mu1, mu2 = inv
+                x = Poly(gens[v], *gens, domain=QQ)
+                sub = (-(w * rest)).as_expr()
+                divisor = x + w * rest
+
+                def substitute(q: Poly) -> tuple[Poly, Poly] | None:
+                    # q = rem + Q * (x + w rest), and x + w rest = w * p - x * (mu1 R1 + mu2 R2)
+                    if q.degree(gens[v]) <= 0:
+                        return None
+                    rem = Poly(sympy.expand(q.as_expr().subs(gens[v], sub)), *gens, domain=QQ)
+                    Q = (q - rem).exquo(divisor)
+                    return rem, Q
+
+                nxt = []
+                for o in work:
+                    if o is it:
+                        continue
+                    r = substitute(o.poly)
+                    if r is None:
+                        nxt.append(o)
+                        continue
+                    rem, Q = r
+                    comb = add_comb(o.comb, it.comb, -(Q * w))
+                    comb = add_comb(comb, field.r1.comb, Q * x * mu1)
+                    comb = add_comb(comb, field.r2.comb, Q * x * mu2)
+                    if not rem.is_zero or o in (field.r1, field.r2):
+                        nxt.append(Item(rem, comb))
+                work = nxt
+                r = substitute(target.poly)
+                if r is not None:
+                    rem, Q = r
+                    comb = add_comb(target.comb, it.comb, Q * w)
+                    comb = add_comb(comb, field.r1.comb, -(Q * x * mu1))
+                    comb = add_comb(comb, field.r2.comb, -(Q * x * mu2))
+                    target.poly, target.comb = rem, comb
+                field_reduce_all()
                 changed = True
                 break
         if not changed:
@@ -362,8 +574,19 @@ def certificate(req: dict) -> dict:
             m = m * f
         return m
 
+    field = None
+    fspec = req.get("field")
+    if fspec is not None:
+        if not isinstance(fspec, dict) or fspec.get("c") not in index or fspec.get("s") not in index:
+            raise CertError("field: c and s must be variables")
+        byname = {next(iter(it.comb)): it for it in items}
+        r1, r2 = byname.get(fspec.get("r1")), byname.get(fspec.get("r2"))
+        if r1 is None or r2 is None:
+            raise CertError("field: r1 and r2 must be hypotheses")
+        field = Field(gens, index[fspec["c"]], index[fspec["s"]], r1, r2)
+
     def member(choice) -> bool:
-        return bool(attempt(product(choice) * goal, items, max_extra, max_unknowns, member_only=True))
+        return bool(attempt(product(choice) * goal, items, max_extra, max_unknowns, member_only=True, field=field))
 
     choice = None
     if member([]):
@@ -379,7 +602,9 @@ def certificate(req: dict) -> dict:
     if choice is None:
         return {"ok": False, "reason": "the goal does not follow from the equations (with up to three nondegeneracy factors)"}
     m = product(choice)
-    comb = attempt(m * goal, items, max_extra, max_unknowns)
+    comb = attempt(m * goal, items, max_extra, max_unknowns, field=field)
+    if comb is not None and field is not None:
+        comb = shrink_field(comb, originals, field)
     if comb is not None:
         rest = m * goal
         for k, c in comb.items():

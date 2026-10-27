@@ -18,6 +18,8 @@ export interface CertificateRequest {
   goal: Poly;
   multipliers: { name: string; poly: Poly }[];
   timeoutSec?: number;
+  /** The angle mode's trigonometric field: variables c = cos θ, s = sin θ and the hypotheses R1, R2 (angles.ts). */
+  field?: { c: number; s: number; r1: string; r2: string };
 }
 
 /** One factor of the multiplier: an irreducible factor of the candidate `source` (candidate = factor · cofactor). */
@@ -65,6 +67,16 @@ function prepare(req: CertificateRequest): Prepared {
       return { name: `m${i}`, poly: m.poly.rename(to).toSparse() };
     }),
     timeout: req.timeoutSec ?? 30,
+    ...(req.field && to.has(req.field.c) && to.has(req.field.s) && hyps.some((h) => h.name === req.field!.r1) && hyps.some((h) => h.name === req.field!.r2)
+      ? {
+          field: {
+            c: `v${to.get(req.field.c)}`,
+            s: `v${to.get(req.field.s)}`,
+            r1: `h${hyps.findIndex((h) => h.name === req.field!.r1)}`,
+            r2: `h${hyps.findIndex((h) => h.name === req.field!.r2)}`,
+          },
+        }
+      : {}),
   };
   return { body: JSON.stringify(body), back, hypName, multName };
 }
@@ -184,6 +196,11 @@ function runScript(prep: Prepared, timeoutMs: number): Promise<CertificateResult
 export async function findCertificate(req: CertificateRequest): Promise<CertificateResult> {
   const prep = prepare(req);
   const timeoutMs = ((req.timeoutSec ?? 30) + 10) * 1000;
+  // development: GEOMETRY_CERT_DUMP=<dir> keeps every request (to replay the Python side alone)
+  if (process.env.GEOMETRY_CERT_DUMP) {
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(path.join(process.env.GEOMETRY_CERT_DUMP, `cert-${Date.now()}.json`), prep.body);
+  }
   const url = process.env.COMPUTE_ENGINE_URL;
   if (url) {
     let res: Response | undefined;

@@ -27,6 +27,7 @@ import { ParseError, parseTerm, slice, unwrap, type Node } from "./expr";
 import { isInaccessible, parseGoal, type GoalState } from "./goal";
 import { Frac, NotPolynomial, Poly, toPoly, VarTable, hasNonConstDivision, isNumeric, type Atom } from "./poly";
 import { findCertificate } from "./certificate";
+import { angleProof } from "./angles";
 
 export type { TacticRunner } from "../tactic-runner";
 import type { TacticRunner } from "../tactic-runner";
@@ -46,7 +47,7 @@ export class Fail extends Error {}
  * mode each tactic gets its own budget, but the whole proof is checked as one declaration, so the
  * heavy steps carry a larger heartbeat limit of their own (never 0).
  */
-function heavy(tactic: string): string {
+export function heavy(tactic: string): string {
   const n = Number(process.env.GEOMETRY_MAX_HEARTBEATS ?? 1_000_000);
   return `set_option maxHeartbeats ${Number.isFinite(n) && n > 0 ? Math.floor(n) : 1_000_000} in ${tactic}`;
 }
@@ -179,7 +180,7 @@ async function reduceAngle(run: TacticRunner, st: GoalState, target: Node & { k:
 }
 
 /** Context hypotheses that are real equations / disequalities / strict inequalities. */
-interface Facts {
+export interface Facts {
   st: GoalState;
   realVars: Set<string>;
   eqs: { name: string; node: Node & { k: "bin" }; text: string }[];
@@ -188,7 +189,7 @@ interface Facts {
   lts: { name: string; lo: Node; hi: Node; text: string }[];
 }
 
-function readFacts(st: GoalState): Facts {
+export function readFacts(st: GoalState): Facts {
   const realVars = new Set(st.hyps.filter((h) => isReal(h.type) && h.value === undefined).flatMap((h) => h.names));
   const f: Facts = { st, realVars, eqs: [], nes: [], pointNes: [], lts: [] };
   for (const h of st.hyps) for (const name of h.names) {
@@ -229,7 +230,7 @@ function squareBases(src: string): string[] {
 }
 
 /** Proofs tried for `0 ≤ E` / `0 < E`. */
-function positivityProofs(E: string, f: Facts, strict: boolean): string[] {
+export function positivityProofs(E: string, f: Facts, strict: boolean): string[] {
   const rel = strict ? "<" : "≤";
   const out = [`(show (0:ℝ) ${rel} ${E} by positivity)`];
   // `0 < a` hypotheses as they are, `a < b` as `0 < b - a`; each also squared
@@ -248,7 +249,7 @@ function positivityProofs(E: string, f: Facts, strict: boolean): string[] {
 }
 
 /** `have name : stmt := proof` with the first proof Lean accepts. */
-async function haveFirst(run: TacticRunner, name: string, stmt: string, proofs: string[]): Promise<boolean> {
+export async function haveFirst(run: TacticRunner, name: string, stmt: string, proofs: string[]): Promise<boolean> {
   for (const p of proofs) if (await run.apply(heavy(`have ${name} : ${stmt} := ${p}`))) return true;
   return false;
 }
@@ -265,7 +266,7 @@ function factors(n: Node): Node[] {
 const OWN = /^(hden|hfac|hm|hmul|hkey|hsq|habs|htrig|hpos|hnn|hprod)\d+$/;
 
 /** Prove `D ≠ 0` for a denominator; returns the hypothesis name. */
-async function proveNonzero(run: TacticRunner, src: string, D: Node, f: Facts): Promise<string> {
+export async function proveNonzero(run: TacticRunner, src: string, D: Node, f: Facts): Promise<string> {
   const text = slice(src, D);
   const name = run.fresh("hden");
   const direct = [`(show (${text}) ≠ 0 by positivity)`, `(show (${text}) ≠ 0 by norm_num)`];
@@ -790,6 +791,18 @@ export async function proveGeometryGoals(run: TacticRunner): Promise<GeometryOut
         continue;
       }
       if (t.k === "bin" && t.op === "=" && isArccos(t.a)) {
+        // given angles that are multiples of π / N: the angle mode (angles.ts); else compare cosines
+        const mark = run.save();
+        const before = run.goals().length;
+        try {
+          await angleProof(run);
+          if (run.goals().length < before) continue;
+          throw new Fail("the angle goal stayed open");
+        } catch (e) {
+          if (!(e instanceof Fail)) throw e;
+          if (process.env.GEOMETRY_DEBUG) console.error(`[geometry] angle mode: ${e.message}`);
+          run.restore(mark);
+        }
         await reduceAngle(run, st, t);
         continue;
       }
