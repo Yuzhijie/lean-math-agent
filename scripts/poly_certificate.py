@@ -515,6 +515,104 @@ def attempt(goal: Poly, items: list[Item], max_extra: int, max_unknowns: int, me
     return None
 
 
+def field_chain(goal: Poly, items: list[Item], field: Field, originals: dict[str, Poly], deadline_steps: int = 80):
+    """The angle mode's certificate as a chain: each unknown fixed linearly by a hypothesis (a
+    constant coefficient, or a trig value inverted in the field) becomes a fact `v = e` proved from
+    the hypotheses and the earlier facts; the goal is then a combination of those facts and the
+    field relations. Every combination stays small (a direct certificate was 270 000 characters).
+    Returns (steps, coefficients) or None; steps are (name, var, expr, comb)."""
+    gens = goal.gens
+    one = Poly(1, *gens, domain=QQ)
+    r1n, r2n = next(iter(field.r1.comb)), next(iter(field.r2.comb))
+    work = [Item(it.poly, dict(it.comb)) for it in items if not it.poly.is_zero and next(iter(it.comb)) not in (r1n, r2n)]
+    target = Item(goal, {})
+
+    def red(it: Item, sign: int) -> Item:
+        return field.reduce_item(it, sign)
+
+    work = [red(it, -1) for it in work]
+    work = [it for it in work if not it.poly.is_zero]
+    target = red(target, 1)
+    steps: list[tuple[str, int, Poly, dict[str, Poly]]] = []
+    basis = dict(originals)
+    for n in range(deadline_steps):
+        if target.poly.is_zero:
+            return steps, target.comb
+        skip = {field.ci, field.si}
+        cands = []
+        for it in work:
+            if field.only_field(it.poly):
+                continue
+            v = linear_var(it.poly, skip)
+            if v is not None:
+                a = it.poly.coeff_monomial(gens[v])
+                rest = it.poly - Poly(a * gens[v], *gens, domain=QQ)
+                cands.append(((rest_degree(it.poly, v, skip), 0, len(it.poly.terms())), it, v, Poly(a, *gens, domain=QQ), rest))
+            f = field_linear_var(it.poly, field)
+            if f is not None:
+                cands.append(((rest_degree(it.poly, f[0], skip), 1, len(it.poly.terms())), it, f[0], f[1], f[2]))
+        if not cands:
+            return None
+        cands.sort(key=lambda c: c[0])
+        made = None
+        for _key, it, v, a, rest in cands:
+            x = Poly(gens[v], *gens, domain=QQ)
+            if a.total_degree() == 0:
+                c = a.coeff_monomial(1)
+                e = rest * (Rational(-1) / c)
+                comb = {k: q * (Rational(1) / c) for k, q in it.comb.items()}  # v − e = p / a
+            else:
+                inv = field.inverse(a)
+                if inv is None:
+                    continue
+                w, mu1, mu2 = inv
+                e = -(w * rest)
+                # v − e = w·p − v·(a·w − 1) = w·p − v·(mu1 R1 + mu2 R2)
+                comb = add_comb({}, it.comb, w)
+                comb = add_comb(comb, field.r1.comb, -(x * mu1))
+                comb = add_comb(comb, field.r2.comb, -(x * mu2))
+            e_red, q1, q2 = field.reduce(e)
+            # v − e_red = (v − e) + q1 R1 + q2 R2
+            comb = add_comb(comb, field.r1.comb, q1)
+            comb = add_comb(comb, field.r2.comb, q2)
+            made = (it, v, e_red, comb)
+            break
+        if made is None:
+            return None
+        it, v, e, comb = made
+        name = f"s{len(steps)}"
+        steps.append((name, v, e, comb))
+        sfact = Poly(gens[v], *gens, domain=QQ) - e
+        basis[name] = sfact
+        sitem = {name: one}
+        divisor = sfact
+
+        def substitute(q: Poly):
+            if q.degree(gens[v]) <= 0:
+                return None
+            rem = Poly(sympy.expand(q.as_expr().subs(gens[v], e.as_expr())), *gens, domain=QQ)
+            return rem, (q - rem).exquo(divisor)
+
+        nxt = []
+        for o in work:
+            if o is it:
+                continue
+            r = substitute(o.poly)
+            if r is None:
+                nxt.append(o)
+                continue
+            rem, Q = r
+            o2 = red(Item(rem, add_comb(o.comb, sitem, -Q)), -1)
+            if not o2.poly.is_zero:
+                nxt.append(o2)
+        work = nxt
+        r = substitute(target.poly)
+        if r is not None:
+            rem, Q = r
+            target = red(Item(rem, add_comb(target.comb, sitem, Q)), 1)
+    return None
+
+
 def certificate(req: dict) -> dict:
     names = req.get("vars")
     if not isinstance(names, list) or not names or len(names) > MAX_VARS or not all(isinstance(n, str) and NAME.match(n) for n in names):
@@ -584,6 +682,33 @@ def certificate(req: dict) -> dict:
         if r1 is None or r2 is None:
             raise CertError("field: r1 and r2 must be hypotheses")
         field = Field(gens, index[fspec["c"]], index[fspec["s"]], r1, r2)
+
+    if field is not None:
+        chained = field_chain(goal, items, field, originals)
+        if chained is not None:
+            steps, comb = chained
+            basis = dict(originals)
+            ok = True
+            for name, v, e, c in steps:
+                rest = Poly(gens[v], *gens, domain=QQ) - e
+                for k, q in c.items():
+                    rest -= q * basis[k]
+                if not rest.is_zero:
+                    ok = False
+                    break
+                basis[name] = Poly(gens[v], *gens, domain=QQ) - e
+            if ok:
+                rest = goal
+                for k, q in comb.items():
+                    rest -= q * basis[k]
+                ok = rest.is_zero
+            if ok:
+                return {
+                    "ok": True,
+                    "multiplier": [],
+                    "steps": [{"name": n, "var": names[v], "expr": from_poly(e, names), "coefficients": {k: from_poly(q, names) for k, q in c.items() if not q.is_zero}} for n, v, e, c in steps],
+                    "coefficients": {k: from_poly(q, names) for k, q in comb.items() if not q.is_zero},
+                }
 
     def member(choice) -> bool:
         return bool(attempt(product(choice) * goal, items, max_extra, max_unknowns, member_only=True, field=field))

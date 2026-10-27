@@ -385,8 +385,29 @@ async function haveByCertificate(run: TacticRunner, name: string, L: string, R: 
   }
   const cert = await findCertificate({ vars: vars.names.map((_, i) => `v${i}`), hyps, goal, multipliers: [], timeoutSec: 90, ...(field ? { field } : {}) });
   if (!cert.ok) throw new Fail(`${what}: ${cert.reason}`);
-  const combo = [...cert.coefficients].map(([h, c]) => `(${c.toLean(vars.names)}) * ${h}`).join(" + ") || "0";
-  await apply(run, heavy(`have ${name} : ${L} = ${R} := by linear_combination ${combo}`), what);
+  // a chain: one fact per unknown, `v = e`, each from the hypotheses and the facts before it
+  const stepName = new Map<string, string>();
+  const combo = (coefs: Map<string, Poly>) =>
+    [...coefs]
+      .map(([h, c]) => {
+        const ref = h.startsWith("step:") ? stepName.get(h.slice(5)) : h;
+        if (!ref) throw new Fail(`${what}: a step refers to an unknown fact`);
+        return `(${c.toLean(vars.names)}) * ${ref}`;
+      })
+      .join(" + ") || "0";
+  for (const st of cert.steps ?? []) {
+    const sname = run.fresh("hstep");
+    const stmt = `${vars.names[st.var]} = ${st.expr.toLean(vars.names)}`;
+    const t = heavy(`have ${sname} : ${stmt} := by linear_combination ${combo(st.coefficients)}`);
+    if (!(await run.apply(t))) throw new Fail(`${what} (step ${st.name}): ${run.lastError().split("\n")[0]}`);
+    stepName.set(st.name, sname);
+  }
+  const tactic = heavy(`have ${name} : ${L} = ${R} := by linear_combination ${combo(cert.coefficients)}`);
+  if (await run.apply(tactic)) return;
+  // tactic mode keeps the default heartbeat budget whatever the statement sets; the whole script
+  // is checked with a larger one, so a big certificate stands in as `sorry` here and is checked there
+  if (/maximum number of heartbeats/.test(run.lastError()) && (await run.apply(`have ${name} : ${L} = ${R} := sorry`, tactic))) return;
+  throw new Fail(`${what}: ${run.lastError().split("\n")[0]}`);
 }
 
 /**

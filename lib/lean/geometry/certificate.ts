@@ -29,8 +29,17 @@ export interface MultiplierFactor {
   cofactor: Poly;
 }
 
+/** A fact `var = expr` of a chain certificate (field mode), proved from the hypotheses and the earlier steps (keys `step:<name>`). */
+export interface CertificateStep {
+  name: string;
+  /** index of the variable in the caller's numbering */
+  var: number;
+  expr: Poly;
+  coefficients: Map<string, Poly>;
+}
+
 export type CertificateResult =
-  | { ok: true; multiplier: MultiplierFactor[]; coefficients: Map<string, Poly> }
+  | { ok: true; multiplier: MultiplierFactor[]; coefficients: Map<string, Poly>; steps?: CertificateStep[] }
   | { ok: false; reason: string };
 
 type Sparse = [string, Record<string, number>][];
@@ -82,15 +91,38 @@ function prepare(req: CertificateRequest): Prepared {
 }
 
 function parseAnswer(raw: unknown, prep: Prepared): CertificateResult {
-  const r = raw as { ok?: boolean; reason?: string; multiplier?: { source: string; factor: Sparse; cofactor: Sparse }[]; coefficients?: Record<string, Sparse> };
+  const r = raw as {
+    ok?: boolean;
+    reason?: string;
+    multiplier?: { source: string; factor: Sparse; cofactor: Sparse }[];
+    coefficients?: Record<string, Sparse>;
+    steps?: { name: string; var: string; expr: Sparse; coefficients: Record<string, Sparse> }[];
+  };
   if (!r || typeof r !== "object") return { ok: false, reason: "no answer" };
   if (!r.ok) return { ok: false, reason: r.reason ?? "no certificate" };
   const fromSparse = (sp: Sparse) => Poly.fromSparse(sp).rename(prep.back);
-  const coefficients = new Map<string, Poly>();
-  for (const [k, v] of Object.entries(r.coefficients ?? {})) {
-    const name = prep.hypName.get(k);
-    if (!name) return { ok: false, reason: `unknown hypothesis ${k} in the answer` };
-    coefficients.set(name, fromSparse(v));
+  const stepNames = new Set((r.steps ?? []).map((st) => st.name));
+  const readCoefficients = (raw: Record<string, Sparse>): Map<string, Poly> | string => {
+    const out = new Map<string, Poly>();
+    for (const [k, v] of Object.entries(raw)) {
+      const name = stepNames.has(k) ? `step:${k}` : prep.hypName.get(k);
+      if (!name) return `unknown hypothesis ${k} in the answer`;
+      out.set(name, fromSparse(v));
+    }
+    return out;
+  };
+  const coefficients = readCoefficients(r.coefficients ?? {});
+  if (typeof coefficients === "string") return { ok: false, reason: coefficients };
+  let steps: CertificateStep[] | undefined;
+  if (r.steps) {
+    steps = [];
+    for (const st of r.steps) {
+      const v = /^v(\d+)$/.exec(st.var);
+      const back = v ? prep.back.get(Number(v[1])) : undefined;
+      const c = readCoefficients(st.coefficients);
+      if (back === undefined || typeof c === "string") return { ok: false, reason: "a malformed step in the answer" };
+      steps.push({ name: st.name, var: back, expr: fromSparse(st.expr), coefficients: c });
+    }
   }
   const multiplier: MultiplierFactor[] = [];
   for (const m of r.multiplier ?? []) {
@@ -98,7 +130,7 @@ function parseAnswer(raw: unknown, prep: Prepared): CertificateResult {
     if (!source) return { ok: false, reason: `unknown multiplier ${m.source} in the answer` };
     multiplier.push({ source, factor: fromSparse(m.factor), cofactor: fromSparse(m.cofactor) });
   }
-  return { ok: true, multiplier, coefficients };
+  return { ok: true, multiplier, coefficients, ...(steps ? { steps } : {}) };
 }
 
 const MAX_OUTPUT = 8 * 1024 * 1024;

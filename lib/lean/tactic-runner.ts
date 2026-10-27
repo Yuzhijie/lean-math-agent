@@ -11,8 +11,12 @@ import { parseGoal } from "./geometry/goal";
 export interface TacticRunner {
   /** Open goals (pretty-printed, with their contexts). */
   goals(): string[];
-  /** Apply a tactic to the main goal; false (state unchanged) when Lean rejects it. */
-  apply(tactic: string): Promise<boolean>;
+  /**
+   * Apply a tactic to the main goal; false (state unchanged) when Lean rejects it. With `scriptAs`
+   * the script records that text instead (a `have … := sorry` stand-in for a step that needs more
+   * heartbeats than tactic mode gives, checked for real when the whole script is verified).
+   */
+  apply(tactic: string, scriptAs?: string): Promise<boolean>;
   lastError(): string;
   /** A fresh hypothesis name `base<n>` (unique within this proof). */
   fresh(base: string): string;
@@ -91,7 +95,7 @@ export async function openRunner(args: {
       goals = mark.goals;
       script.length = mark.length;
     },
-    async apply(tactic) {
+    async apply(tactic, scriptAs) {
       throwIfCancelled();
       if (Date.now() > deadline) throw new Error(`the ${label} prover ran out of time`);
       const out = await session.apply(handle, tactic);
@@ -104,7 +108,7 @@ export async function openRunner(args: {
       }
       handle = r.state;
       goals = r.goals;
-      script.push(tactic);
+      script.push(scriptAs ?? tactic);
       return true;
     },
   };
