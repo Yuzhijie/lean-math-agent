@@ -46,13 +46,22 @@ export async function openRunner(args: {
   debugEnv?: string;
   /** `open … in` before the theorem (miniF2F statements need `Real`, `Nat`, …). */
   opens?: string[];
+  /**
+   * Heartbeat budget of every tactic: `set_option maxHeartbeats N in` before the theorem (in
+   * tactic mode the budget is the opening command's; a `set_option … in` before a tactic does not
+   * raise it).
+   */
+  heartbeats?: number;
 }): Promise<OpenedRunner | string> {
-  const { theoremName, theoremType, useMathlib, timeLimitMs, tacticTimeoutMs, label, debugEnv, opens } = args;
+  const { theoremName, theoremType, useMathlib, timeLimitMs, tacticTimeoutMs, label, debugEnv, opens, heartbeats } = args;
   if (process.env.LEAN_SERVER_MODE === "spawn") return "needs the Lean REPL";
   let opened: Awaited<ReturnType<typeof import("./proof-state").openTheorem>>;
   try {
     const { openTheorem } = await import("./proof-state");
-    opened = await openTheorem(assembleLeanSource({ theoremName, theoremType, stepCodes: ["sorry"], useMathlib, opens }), { tacticTimeoutMs });
+    const source = heartbeats
+      ? scriptSource({ theoremName, theoremType, tactics: "sorry", useMathlib, heartbeats, opens })
+      : assembleLeanSource({ theoremName, theoremType, stepCodes: ["sorry"], useMathlib, opens });
+    opened = await openTheorem(source, { tacticTimeoutMs });
   } catch (e) {
     if (e instanceof CancelledError) throw e;
     return `the statement did not open: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`;

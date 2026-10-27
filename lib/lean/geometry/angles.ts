@@ -429,15 +429,15 @@ async function dotFact(ctx: Ctx, a: Angle, f: Facts, src: string): Promise<{ dot
   const x = `${a.N} / (${a.D})`;
   const tac = [
     `have ${dot} : ${a.N} = Real.cos (${a.alpha}) * (${a.D}) := by`,
-    `  have h1 : -1 ≤ ${x} := by`,
+    `  have harc1 : -1 ≤ ${x} := by`,
     `    by_contra hc`,
     `    rw [Real.arccos_of_le_neg_one (not_le.mp hc).le] at ${a.name}`,
     `    linarith only [Real.pi_pos, ${a.name}]`,
-    `  have h2 : ${x} ≤ 1 := by`,
+    `  have harc2 : ${x} ≤ 1 := by`,
     `    by_contra hc`,
     `    rw [Real.arccos_of_one_le (not_le.mp hc).le] at ${a.name}`,
     `    linarith only [Real.pi_pos, ${a.name}]`,
-    `  rw [← div_eq_iff ${hD}, ← ${a.name}, Real.cos_arccos h1 h2]`,
+    `  rw [← div_eq_iff ${hD}, ← ${a.name}, Real.cos_arccos harc1 harc2]`,
   ].join("\n");
   await apply(run, tac, `cos of the angle ${a.alpha}`);
   const dpos = run.fresh("hdpos");
@@ -515,7 +515,7 @@ async function sides(ctx: Ctx, angles: Ready[], i: number, goal: Ready, finish: 
 }
 
 /** Step 4: the asked angle. */
-async function closeGoal(ctx: Ctx, g: Angle, hDg: string): Promise<void> {
+async function closeGoal(ctx: Ctx, g: Angle): Promise<void> {
   const run = ctx.run;
   if (!g.cross) throw new Fail("the asked angle's vectors could not be read");
   const s = await proveSign(run, g.cross);
@@ -568,11 +568,7 @@ async function closeGoal(ctx: Ctx, g: Angle, hDg: string): Promise<void> {
     ];
   }
   await apply(run, lines.join("\n"), "the asked angle from its tangent");
-  await apply(
-    run,
-    `exact (congrArg Real.arccos ((div_eq_iff ${hDg}).mpr ${fin})).trans (Real.arccos_cos (by positivity) (by linarith only [Real.pi_pos]))`,
-    "the asked angle",
-  );
+  await apply(run, `exact ${fin}`, "the asked angle");
 }
 
 /**
@@ -600,6 +596,13 @@ export async function angleProof(run: TacticRunner): Promise<void> {
 
   // the goal's denominator first (the facts below do not change it)
   const hDg = await lengthsNonzero(run, st0.target, goal, f0);
+  // the goal becomes `dot = cos β * (|u| * |v|)` once, while the context is small (in a case of a
+  // split the same step took over a minute)
+  await apply(
+    run,
+    `refine (congrArg Real.arccos ((div_eq_iff ${hDg}).mpr ?_)).trans (Real.arccos_cos (by positivity) (by linarith only [Real.pi_pos]))`,
+    "the asked angle as an equation",
+  );
   // 1. cosines
   const ready: Ready[] = [];
   for (const a of hyps) {
@@ -642,7 +645,7 @@ export async function angleProof(run: TacticRunner): Promise<void> {
     await sinPos(ctx, a); // before any case split, so every case has it
   }
   // 3–4
-  await sides(ctx, ready, 0, { ...goal, dot: "", dpos: "" }, async () => closeGoal(ctx, goal, hDg));
+  await sides(ctx, ready, 0, { ...goal, dot: "", dpos: "" }, async () => closeGoal(ctx, goal));
 }
 
 export { isArccos as isArccosTerm };

@@ -33,9 +33,11 @@ function open(theoremName: string, theoremType: string, useMathlib: boolean, tim
     theoremType,
     useMathlib,
     timeLimitMs,
-    tacticTimeoutMs: Number(process.env.GEOMETRY_TACTIC_TIMEOUT_MS ?? 60_000),
+    tacticTimeoutMs: Number(process.env.GEOMETRY_TACTIC_TIMEOUT_MS ?? 180_000),
     label: "geometry",
     debugEnv: "GEOMETRY_DEBUG",
+    // certificates of the angle mode need more than the default 200000 per step
+    heartbeats: 4 * Number(process.env.GEOMETRY_MAX_HEARTBEATS ?? 1_000_000),
   });
 }
 
