@@ -19,6 +19,7 @@ import { lt } from "../llm/output-locale";
 import { geometryProof, looksGeometric } from "../lean/geometry";
 import { inductionProof, looksInductive } from "../lean/induction";
 import { combinatoricsProof, looksCombinatorial } from "../lean/combinatorics";
+import { looksOptimization, optimizationProof } from "../lean/optimize";
 import { autoProof } from "../lean/auto";
 import { assembleLeanSource } from "../lean/assemble";
 import { hammerTheorem } from "../lean/hammer";
@@ -733,7 +734,7 @@ export async function proveWithoutModel(args: {
   /** A power too big to compute is in the statement: skip what would evaluate it. */
   huge: boolean;
 }): Promise<{
-  proof?: { verification: LeanVerifyResult; source: string; tactics: string; strategy: "hammer" | "trivial" | "order" | "bounded" | "geometry" | "induction" | "combinatorics" | "auto"; attempts: number };
+  proof?: { verification: LeanVerifyResult; source: string; tactics: string; strategy: "hammer" | "trivial" | "order" | "bounded" | "geometry" | "induction" | "optimize" | "combinatorics" | "auto"; attempts: number };
   tried: string[];
 }> {
   const { sessionId, theoremName, theoremType, expectedSignature, useMathlib, huge } = args;
@@ -789,6 +790,16 @@ export async function proveWithoutModel(args: {
       return { proof: { verification, source, tactics, strategy: "induction", attempts: 1 }, tried };
     }
     tried.push(lt(`程序写的归纳证明（${ind.reason}）`, `an induction proof the program wrote (${ind.reason})`));
+  }
+
+  // "The largest / smallest value is M": the witness found by Lean, the bound decided over a box.
+  if (!huge && looksOptimization(theoremType)) {
+    const opt = await optimizationProof({ sessionId, theoremName, theoremType, expectedSignature, useMathlib });
+    if (opt.proof) {
+      const { verification, source, tactics } = opt.proof;
+      return { proof: { verification, source, tactics, strategy: "optimize", attempts: 1 }, tried };
+    }
+    tried.push(lt(`程序写的组合优化证明（${opt.reason}）`, `an optimization proof the program wrote (${opt.reason})`));
   }
 
   // Finite / counting statements: orbit representatives, Venn regions, kernel decision after rewriting.

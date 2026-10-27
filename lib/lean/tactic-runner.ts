@@ -56,8 +56,10 @@ export async function openRunner(args: {
    * raise it).
    */
   heartbeats?: number;
+  /** More `set_option … in` for the opening command (e.g. `pp.numericTypes true`: goals print `(12 : ℕ)`). */
+  options?: string[];
 }): Promise<OpenedRunner | string> {
-  const { theoremName, theoremType, useMathlib, timeLimitMs, tacticTimeoutMs, label, debugEnv, opens, heartbeats } = args;
+  const { theoremName, theoremType, useMathlib, timeLimitMs, tacticTimeoutMs, label, debugEnv, opens, heartbeats, options } = args;
   if (process.env.LEAN_SERVER_MODE === "spawn") return "needs the Lean REPL";
   let opened: Awaited<ReturnType<typeof import("./proof-state").openTheorem>>;
   try {
@@ -65,7 +67,8 @@ export async function openRunner(args: {
     const source = heartbeats
       ? scriptSource({ theoremName, theoremType, tactics: "sorry", useMathlib, heartbeats, opens })
       : assembleLeanSource({ theoremName, theoremType, stepCodes: ["sorry"], useMathlib, opens });
-    opened = await openTheorem(source, { tacticTimeoutMs });
+    const withOptions = options?.length ? source.replace(/^((?:set_option [^\n]* in\n)?(?:open [^\n]* in\n)?)theorem /m, (_m, pre) => `${options.map((o) => `set_option ${o} in\n`).join("")}${pre}theorem `) : source;
+    opened = await openTheorem(withOptions, { tacticTimeoutMs });
   } catch (e) {
     if (e instanceof CancelledError) throw e;
     return `the statement did not open: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`;

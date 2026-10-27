@@ -31,6 +31,7 @@ import { hammerTheorem } from "../lean/hammer";
 import { geometryProof, looksGeometric } from "../lean/geometry";
 import { inductionProof, looksInductive } from "../lean/induction";
 import { combinatoricsProof, looksCombinatorial } from "../lean/combinatorics";
+import { looksOptimization, optimizationProof } from "../lean/optimize";
 import { autoProof } from "../lean/auto";
 import { rememberRepair } from "../lean/proof-memory";
 import { replayRecalled } from "../prover/replay";
@@ -269,6 +270,16 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
       failed: (r: string) => lt(`归纳证明没有成功：${r}`, `The induction proof did not work: ${r}`),
       title: lt("数学归纳法（程序写的证明）", "Induction (proof written by the program)"),
       done: lt("✅ 完全形式化验证通过（数学归纳法）", "✅ Fully formally verified (induction)"),
+    },
+    {
+      strategy: "optimize" as const,
+      applies: looksOptimization(theoremType),
+      prove: () => optimizationProof({ sessionId: session.id, theoremName, theoremType, expectedSignature: frozenSignature, useMathlib }),
+      trying: lt("尝试程序写的组合优化证明（Lean 自己找取到最值的例子，再在有界范围内逐一核对上下界）", "Trying an optimization proof written by the program (Lean finds an example attaining the value, then the bound is checked over a finite range)"),
+      passed: lt("✅ 程序写出的组合优化证明通过 Lean 检查", "✅ The program's optimization proof passed Lean"),
+      failed: (r: string) => lt(`组合优化证明没有成功：${r}`, `The optimization proof did not work: ${r}`),
+      title: lt("组合优化（程序写的证明）", "Optimization (proof written by the program)"),
+      done: lt("✅ 完全形式化验证通过（组合优化）", "✅ Fully formally verified (optimization)"),
     },
     {
       strategy: "combinatorics" as const,
