@@ -4,6 +4,7 @@
  * code. Nothing is spent. Writes bench/LEAN-RECHECK.md.
  *
  *   --limit n        only the first n problems
+ *   --from n         start at the n-th problem (resume a run that stopped)
  *   --only-failed    skip problems that were proved when they were solved
  *   --out path       report path (default bench/LEAN-RECHECK.md)
  */
@@ -38,6 +39,9 @@ async function main(): Promise<void> {
   }
   let items = recheckItems(await listSessionsFromDisk());
   if (flag("only-failed")) items = items.filter((i) => i.before !== "proved");
+  // --from n: start at the n-th problem (1-based; to resume a run that stopped)
+  const from = Number(arg("from"));
+  if (arg("from") !== undefined && Number.isFinite(from) && from > 1) items = items.slice(from - 1);
   const limit = Number(arg("limit"));
   if (arg("limit") !== undefined && Number.isFinite(limit) && limit > 0) items = items.slice(0, limit);
   console.log(`${items.length} problem(s) with a stored statement`);
@@ -64,7 +68,7 @@ async function main(): Promise<void> {
       console.error(`  #${k + 1}: ${e instanceof Error ? e.message : String(e)}`);
     }
     results.push({ item, checked: true, ...(now ? { now } : {}), ms: Date.now() - started });
-    console.log(`#${k + 1} ${item.before.padEnd(12)} → ${now ? `proved (${now.strategy})` : "—"}  ${item.problem.slice(0, 60)}`);
+    console.log(`#${k + 1 + (Number(arg("from")) > 1 ? Number(arg("from")) - 1 : 0)} ${item.before.padEnd(12)} → ${now ? `proved (${now.strategy})` : "—"}  ${item.problem.slice(0, 60)}`);
   }
 
   let commit: string | undefined;
