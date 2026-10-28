@@ -437,24 +437,27 @@ async function rawChatMessages(
       if (remaining < 5_000) break;
 
       try {
+        // Node's fetch gives up when no response headers arrive within 5 minutes, and a server
+        // answering without streaming (Ollama) sends them only when the whole answer is ready: a
+        // call allowed longer than that streams, so the headers come at once and tokens as they go.
+        const stream = Math.min(remaining, requestTimeout) > STREAM_AFTER_MS;
+        const reqBody = capMaxTokens(buildRequestBody(config, endpoint, role, messages, { ...options, temperature: temp, jsonMode }), tokenCap);
         const res = await fetch(`${endpoint.baseUrl}/chat/completions`, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${endpoint.apiKey}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify(
-            capMaxTokens(buildRequestBody(config, endpoint, role, messages, { ...options, temperature: temp, jsonMode }), tokenCap),
-          ),
+          body: JSON.stringify(stream ? { ...reqBody, stream: true, stream_options: { include_usage: true } } : reqBody),
           signal: jobSignal(AbortSignal.timeout(Math.min(remaining, requestTimeout))),
         });
 
         if (res.ok) {
-          const latencyMs = Date.now() - startTime;
-          const data = (await res.json()) as {
+          const data = (stream ? await readStreamed(res) : await res.json()) as {
             choices?: { message?: { content?: string; reasoning?: string; reasoning_content?: string }; finish_reason?: string }[];
             usage?: RawUsage;
           };
+          const latencyMs = Date.now() - startTime;
           const choice = data.choices?.[0];
           // Local servers (Ollama, vLLM with a reasoning parser) put a thinking model's text in
           // `reasoning` and may leave `content` empty; a prover's answer is read from the whole text.
@@ -640,11 +643,73 @@ function isTimeoutError(error: unknown, message: string): boolean {
     error && typeof error === "object" && "name" in error
       ? String((error as { name: unknown }).name)
       : "";
+  // "fetch failed" whose cause is undici's own headers / body timeout (5 minutes without a byte)
+  const cause = error && typeof error === "object" && "cause" in error ? (error as { cause?: { code?: unknown } }).cause : undefined;
+  const code = cause && typeof cause === "object" ? String(cause.code ?? "") : "";
   return (
     name === "TimeoutError" ||
     name === "AbortError" ||
+    code === "UND_ERR_HEADERS_TIMEOUT" ||
+    code === "UND_ERR_BODY_TIMEOUT" ||
     message.includes("aborted due to timeout")
   );
+}
+
+/** Calls allowed longer than this stream (Node's fetch waits at most 5 minutes for the headers). */
+const STREAM_AFTER_MS = 240_000;
+
+/**
+ * An OpenAI-compatible streamed answer (`data: {…}` lines, `data: [DONE]`) put back together in
+ * the shape of a plain answer: content, reasoning (Ollama's `reasoning`, vLLM's
+ * `reasoning_content`), finish reason and usage (the last chunk with `include_usage`).
+ */
+export async function readStreamed(res: Response): Promise<{
+  choices: { message: { content: string; reasoning?: string }; finish_reason?: string }[];
+  usage?: RawUsage;
+}> {
+  let content = "";
+  let reasoning = "";
+  let finish: string | undefined;
+  let usage: RawUsage | undefined;
+  const take = (line: string) => {
+    const t = line.trim();
+    if (!t.startsWith("data:")) return;
+    const payload = t.slice(5).trim();
+    if (!payload || payload === "[DONE]") return;
+    let chunk: { choices?: { delta?: { content?: string | null; reasoning?: string | null; reasoning_content?: string | null }; finish_reason?: string | null }[]; usage?: RawUsage; error?: unknown };
+    try {
+      chunk = JSON.parse(payload);
+    } catch {
+      return; // a keep-alive or a partial line
+    }
+    if (chunk.error) throw new LlmError(`LLM stream error: ${JSON.stringify(chunk.error).slice(0, 300)}`);
+    const c = chunk.choices?.[0];
+    if (c?.delta?.content) content += c.delta.content;
+    const r = c?.delta?.reasoning ?? c?.delta?.reasoning_content;
+    if (r) reasoning += r;
+    if (c?.finish_reason) finish = c.finish_reason;
+    if (chunk.usage) usage = chunk.usage;
+  };
+  if (!res.body) {
+    for (const line of (await res.text()).split("\n")) take(line);
+  } else {
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buffer.indexOf("\n")) >= 0) {
+        take(buffer.slice(0, nl));
+        buffer = buffer.slice(nl + 1);
+      }
+    }
+    buffer += decoder.decode();
+    if (buffer) take(buffer);
+  }
+  return { choices: [{ message: { content, ...(reasoning ? { reasoning } : {}) }, ...(finish ? { finish_reason: finish } : {}) }], ...(usage ? { usage } : {}) };
 }
 
 /**

@@ -734,3 +734,42 @@ describe("402 can only afford", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
+
+// ── long calls stream (Node's fetch waits at most 5 minutes for the headers) ──
+
+describe("streaming for long calls", () => {
+  const sse = (chunks: unknown[]) =>
+    new Response(chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join("") + "data: [DONE]\n\n", { status: 200, headers: { "Content-Type": "text/event-stream" } });
+
+  it("a call allowed longer than 4 minutes streams and is put back together", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(
+      sse([
+        { choices: [{ delta: { reasoning: "think " } }] },
+        { choices: [{ delta: { content: "theorem " } }] },
+        { choices: [{ delta: { content: "done" }, finish_reason: "stop" }] },
+        { choices: [], usage: { prompt_tokens: 3, completion_tokens: 5, total_tokens: 8 } },
+      ]),
+    );
+    await expect(chatText({ messages: TEST_MESSAGES, timeoutMs: 600_000 })).resolves.toBe("theorem done");
+    const body = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body));
+    expect(body.stream).toBe(true);
+    expect(body.stream_options).toEqual({ include_usage: true });
+    expect(getUsageSummary().totalCompletionTokens).toBe(5); // the usage chunk at the end of the stream
+  });
+
+  it("short calls do not stream", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(okResponse("x"));
+    await chatText({ messages: TEST_MESSAGES, timeoutMs: 60_000 });
+    expect(JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body)).stream).toBeUndefined();
+  });
+
+  it("undici's headers timeout counts as a timeout: no retry on the same endpoint", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const err = Object.assign(new TypeError("fetch failed"), { cause: { code: "UND_ERR_HEADERS_TIMEOUT" } });
+    fetchMock.mockRejectedValue(err);
+    await expect(chatText({ messages: TEST_MESSAGES, timeoutMs: 60_000 })).rejects.toThrow(/fetch failed/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
