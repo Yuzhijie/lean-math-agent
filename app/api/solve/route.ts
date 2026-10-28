@@ -375,7 +375,7 @@ async function handleOptimizationProblem(
   const leanProofAttempt: LeanProofAttempt = {
     attempted: false,
     success: false,
-    failure_reason: lt("组合优化问题的 Lean 形式化需要复杂的归纳论证，当前自动证明能力有限", "Formalizing combinatorial optimization problems in Lean requires intricate inductive arguments, beyond current automated proving"),
+    failure_reason: lt("尚未开始：在 Lean 标签页手动开始形式化证明", "Not started: start the formal proof from the Lean tab"),
   };
 
   updateSession(session.id, {
@@ -488,7 +488,7 @@ async function handleFindAllProblem(
   const leanProofAttempt: LeanProofAttempt = {
     attempted: false,
     success: false,
-    failure_reason: lt("求所有值问题的 Lean 形式化需要完备性证明，当前自动证明能力有限", "Formalizing find-all-values problems in Lean requires a completeness proof, beyond current automated proving"),
+    failure_reason: lt("尚未开始：在 Lean 标签页手动开始形式化证明", "Not started: start the formal proof from the Lean tab"),
   };
 
   updateSession(session.id, {
