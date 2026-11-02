@@ -2,7 +2,7 @@ import { getSessionForRequest, createSessionForRequest } from "@/lib/session-acc
 import { NextResponse } from "next/server";
 import { getSession, updateSession, saveSessionToDisk } from "@/lib/session-store";
 import { LlmError } from "@/lib/llm/client";
-import { CancelledError, runJob, solveTimeLimitMs, TimeLimitError, TooManyJobsError } from "@/lib/jobs";
+import { CancelledError, closeJobEvents, publishJobEvent, runJob, solveTimeLimitMs, TimeLimitError, TooManyJobsError } from "@/lib/jobs";
 import { timeLimitMessage } from "@/lib/pipeline/time-limit";
 import { admitSolve, recordSpend, runCostCap } from "@/lib/quota";
 import { withUsageScope } from "@/lib/llm/usage-tracker";
@@ -84,7 +84,9 @@ async function handlePOST(req: Request) {
 
   // Create a TransformStream for SSE
   const encoder = new TextEncoder();
-  // Cancelled when the client goes away (stream cancelled / request aborted) or via /api/jobs/:id/cancel.
+  // The client going away (stream cancelled / request aborted) leaves the job running for the detach grace
+  // period, so a reloaded page can follow it again (GET /api/jobs/:id/events); cancelled when nobody does,
+  // or at once via /api/jobs/:id/cancel.
   const gone = new AbortController();
   const stream = new ReadableStream({
     cancel() {
@@ -92,7 +94,10 @@ async function handlePOST(req: Request) {
     },
     async start(controller) {
       let closed = false;
+      let jobId: string | undefined;
       const emit = (data: Record<string, unknown>) => {
+        // Every frame is kept on the job (for a page that attaches later), whether or not this client is still here.
+        if (jobId) publishJobEvent(jobId, data);
         if (closed) return;
         try {
           controller.enqueue(encoder.encode(sseFrame(data)));
@@ -109,9 +114,13 @@ async function handlePOST(req: Request) {
             kind: "solve",
             sessionId: sess.id,
             signal: gone.signal,
+            detachable: true,
             maxActive: admit.concurrent,
             timeLimitMs: solveTimeLimitMs(),
-            onStart: (job) => emit({ type: "job", job_id: job.id, session_id: sess.id }),
+            onStart: (job) => {
+              jobId = job.id;
+              emit({ type: "job", job_id: job.id, session_id: sess.id, problem_text: sess.problem_text });
+            },
             onQueued: (position) => {
               updateSession(sess.id, { pipeline_stage: "queued" });
               emit({ type: "progress", stage: "queued", position, detail: lt(`排队中：前面还有 ${position - 1} 个求解`, `Queued: ${position - 1} solve(s) ahead`) });
@@ -131,6 +140,7 @@ async function handlePOST(req: Request) {
         }
       } finally {
         closed = true;
+        if (jobId) closeJobEvents(jobId);
         try {
           controller.close();
         } catch {

@@ -45,6 +45,8 @@ export interface ProofSessionState {
   runMetrics: RunMetrics | null;
   /** The running solve's job (for cancelling) and its place in the queue while waiting. */
   jobId: string | null;
+  /** The running solve's session (known from its first frame; restored after a reload). */
+  jobSessionId: string | null;
   queuePosition: number | null;
   /** The user asked to cancel and the server has not confirmed yet. */
   cancelling: boolean;
@@ -155,7 +157,9 @@ export type Action =
       /** Place in the queue (stage "queued"). */
       position?: number;
     }
-  | { type: "SOLVE_JOB"; jobId: string; sessionId?: string }
+  | { type: "SOLVE_JOB"; jobId: string; sessionId?: string; problemText?: string }
+  /** Frames of the running solve are about to be replayed (a reconnect): the timeline starts over. */
+  | { type: "SOLVE_REPLAY" }
   | { type: "SOLVE_CANCELLING" }
   | { type: "SOLVE_CANCELLED"; detail: string }
 
@@ -210,6 +214,7 @@ export const INITIAL_STATE: ProofSessionState = {
   solveEvents: [],
   runMetrics: null,
   jobId: null,
+  jobSessionId: null,
   queuePosition: null,
   cancelling: false,
   problemFigures: null,
@@ -435,7 +440,16 @@ export function reducer(
 
     case "SOLVE_JOB":
       // The session id is taken from the result (setting it early would skip the tab choice on arrival).
-      return { ...state, jobId: action.jobId };
+      return {
+        ...state,
+        jobId: action.jobId,
+        jobSessionId: action.sessionId ?? null,
+        // After a reload the box is empty until the session loads; the job knows its problem.
+        problemText: state.problemText.trim() || !action.problemText ? state.problemText : action.problemText,
+      };
+
+    case "SOLVE_REPLAY":
+      return { ...state, solveEvents: [], queuePosition: null };
 
     case "SOLVE_CANCELLING":
       return { ...state, cancelling: true };

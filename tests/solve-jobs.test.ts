@@ -15,6 +15,7 @@ vi.mock("@/lib/db", () => ({ prisma: { subscription: { findUnique: async () => n
 import { POST as solveStream } from "@/app/api/solve-stream/route";
 import { POST as cancel } from "@/app/api/jobs/[id]/cancel/route";
 import { GET as jobs } from "@/app/api/jobs/route";
+import { GET as jobEvents } from "@/app/api/jobs/[id]/events/route";
 import { getSession } from "@/lib/session-store";
 import { _resetJobsForTests } from "@/lib/jobs";
 import { _resetQuotaForTests } from "@/lib/quota";
@@ -34,14 +35,20 @@ async function frames(res: Response, until: (f: Record<string, unknown>) => bool
   const out: Array<Record<string, unknown>> = [];
   for (;;) {
     const { done, value } = await reader.read();
-    if (done) return out;
+    if (done) {
+      reader.releaseLock();
+      return out;
+    }
     buf += dec.decode(value, { stream: true });
     const parts = buf.split("\n\n");
     buf = parts.pop() ?? "";
     for (const p of parts) {
       const f = JSON.parse(p.slice(6)) as Record<string, unknown>;
       out.push(f);
-      if (until(f)) return out;
+      if (until(f)) {
+        reader.releaseLock();
+        return out;
+      }
     }
   }
 }
@@ -60,6 +67,35 @@ describe("solve jobs over the stream", () => {
     const rest = await frames(reader, () => false);
     expect(rest.at(-1)).toMatchObject({ type: "cancelled" });
     expect(getSession(session_id)?.pipeline_stage).toBe("cancelled");
+  });
+
+  it("a page that went away can follow the job again; nobody coming back cancels it after the grace period", async () => {
+    process.env.SOLVE_DETACH_GRACE_MS = "60";
+    const res = await solveStream(post({ problem_text: "prove that 2 + 2 = 4" }));
+    const first = await frames(res, (f) => f.type === "job");
+    const { job_id, session_id } = first[0] as { job_id: string; session_id: string };
+    await res.body!.cancel(); // the tab was closed
+    await new Promise((r) => setTimeout(r, 20));
+    expect((await (await jobs()).json()).jobs[0]).toMatchObject({ id: job_id, state: "running" });
+    // Someone else's page cannot follow it.
+    ownerMock.mockResolvedValueOnce("mallory");
+    expect((await jobEvents(new Request("http://x"), { params: Promise.resolve({ id: job_id }) })).status).toBe(404);
+    // The reopened page gets the frames so far (the job id first) and stays attached past the grace period.
+    const ac = new AbortController();
+    const again = await jobEvents(new Request("http://x", { signal: ac.signal }), { params: Promise.resolve({ id: job_id }) });
+    expect(again.headers.get("content-type")).toContain("text/event-stream");
+    const replay = await frames(again, (f) => f.type === "job");
+    expect(replay[0]).toMatchObject({ type: "job", job_id, session_id, problem_text: "prove that 2 + 2 = 4" });
+    await new Promise((r) => setTimeout(r, 120));
+    expect((await (await jobs()).json()).jobs[0]).toMatchObject({ id: job_id, state: "running" });
+    // That page goes away too: the grace period runs out and the job is cancelled.
+    ac.abort();
+    await again.body!.cancel().catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 150));
+    expect((await (await jobs()).json()).jobs[0]).toMatchObject({ id: job_id, state: "cancelled" });
+    expect(getSession(session_id)?.pipeline_stage).toBe("cancelled");
+    expect((await jobEvents(new Request("http://x"), { params: Promise.resolve({ id: "unknown" }) })).status).toBe(404);
+    delete process.env.SOLVE_DETACH_GRACE_MS;
   });
 
   it("over quota: 429 with the reason, before anything starts", async () => {

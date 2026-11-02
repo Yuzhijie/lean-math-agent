@@ -250,6 +250,142 @@ export function useProofActions(
     }
   }, [dispatch, state.sessionId, tr]);
 
+  // ── The solve stream (SSE): started by solveAll, or followed again after a reload (resumeSolve) ──
+
+  /** Reads frames until the result / cancel / error; `ended` false when the connection dropped first. */
+  const readSolveStream = useCallback(async (res: Response): Promise<{ ended: boolean; jobId?: string }> => {
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No response body");
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let ended = false;
+      let jobId: string | undefined;
+
+      while (true) {
+        let chunk: ReadableStreamReadResult<Uint8Array>;
+        try {
+          chunk = await reader.read();
+        } catch {
+          break; // network error: the connection is gone
+        }
+        const { done, value } = chunk;
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // Process complete SSE frames
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? ""; // Keep incomplete frame in buffer
+
+        for (const frame of frames) {
+          const dataLine = frame
+            .split("\n")
+            .find((line) => line.startsWith("data: "));
+          if (!dataLine) continue;
+
+          try {
+            const event = JSON.parse(dataLine.slice(6)) as Record<string, unknown>;
+
+            if (event.type === "job") {
+              jobId = event.job_id as string;
+              dispatch({ type: "SOLVE_JOB", jobId: event.job_id as string, sessionId: event.session_id as string | undefined, problemText: event.problem_text as string | undefined });
+            } else if (event.type === "cancelled") {
+              dispatch({ type: "SOLVE_CANCELLED", detail: (event.detail as string) ?? tr("已取消", "Cancelled") });
+              return { ended: true, jobId };
+            } else if (event.type === "progress") {
+              dispatch({
+                type: "SOLVE_PROGRESS",
+                stage: event.stage as string,
+                detail: event.detail as string,
+                position: event.position as number | undefined,
+              });
+            } else if (event.type === "result") {
+              ended = true;
+              const data = event.data as Record<string, unknown>;
+
+              // Handle autoformalize_failed in result
+              if (data.error === "autoformalize_failed") {
+                dispatch({
+                  type: "REQUEST_ERROR",
+                  message: "autoformalize_failed",
+                  autoformalizeDetail: (data.detail as string) ?? undefined,
+                  validationResults:
+                    (data.validation_results as Array<{
+                      layer: number;
+                      pass: boolean;
+                      detail: string;
+                    }>) ?? undefined,
+                });
+                return { ended: true, jobId };
+              }
+
+              dispatch({
+                type: "SOLVE_OK",
+                sessionId: data.session_id as string,
+                problemType: data.problem_type as "computational" | "theorem",
+                nlSolution: data.nl_solution as NaturalLanguageSolution | undefined,
+                leanProofAttempt: data.lean_proof_attempt as LeanProofAttempt | undefined,
+                methods: data.methods as MethodOption[] | undefined,
+                methodScores: data.method_scores as MethodScore[] | undefined,
+                recommendedMethodId:
+                  (data.recommended_method_id as string) ?? undefined,
+                steps: data.steps as ProofStep[] | undefined,
+                assembledLean: data.assembled_lean as string | undefined,
+                buildStatus: data.build_status as BuildStatus | undefined,
+                buildLog: data.build_log as string | undefined,
+                solveEvents: (data.pipeline_events as Array<{ stage: string; detail: string }> | undefined) ?? [],
+                metrics: data.metrics as RunMetrics | undefined,
+                figureDescription: data.figure_description as string | undefined,
+              });
+            } else if (event.type === "error") {
+              throw new Error((event.error as string) ?? "solve pipeline failed");
+            }
+          } catch (parseError) {
+            // If it's a re-thrown error from the error event, propagate it
+            if (parseError instanceof SyntaxError) continue;
+            throw parseError;
+          }
+        }
+      }
+      return { ended, jobId };
+  }, [dispatch, tr]);
+
+  /**
+   * Follow a solve stream to its end. When the connection drops first, the job is still running on the
+   * server for a while (SOLVE_DETACH_GRACE_MS): its frames are fetched again from GET /api/jobs/:id/events
+   * (a few tries), the timeline rebuilt from the replay.
+   */
+  const followSolveStream = useCallback(
+    async (first: Response): Promise<void> => {
+      let res = first;
+      let known: string | undefined;
+      for (;;) {
+        const r = await readSolveStream(res);
+        if (r.ended) return;
+        known = r.jobId ?? known;
+        let next: Response | null = null;
+        for (let attempt = 1; known && attempt <= 5 && !next; attempt++) {
+          await new Promise((ok) => setTimeout(ok, 1500 * attempt));
+          const again = await fetch(`/api/jobs/${encodeURIComponent(known)}/events`).catch(() => null);
+          if (again?.ok && again.headers.get("content-type")?.includes("text/event-stream")) next = again;
+          else if (again?.status === 404) break; // the server no longer has it
+        }
+        if (!next) {
+          throw new Error(
+            tr(
+              "与服务器的连接中断了，求解没能接着进行。可以重新求解，已完成的结果在历史记录里。",
+              "The connection to the server was lost and the solve could not be followed. Solve again; finished results are in the history.",
+            ),
+          );
+        }
+        dispatch({ type: "SOLVE_REPLAY" });
+        res = next;
+      }
+    },
+    [dispatch, readSolveStream, tr],
+  );
+
   // ── Solve all (one-click, streaming) ─────────────────────────────
 
   const solveAll = useCallback(async () => {
@@ -285,98 +421,38 @@ export function useProofActions(
         );
       }
 
-      // Read SSE stream
-      const reader = res.body?.getReader();
-      if (!reader) throw new Error("No response body");
-
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-
-        // Process complete SSE frames
-        const frames = buffer.split("\n\n");
-        buffer = frames.pop() ?? ""; // Keep incomplete frame in buffer
-
-        for (const frame of frames) {
-          const dataLine = frame
-            .split("\n")
-            .find((line) => line.startsWith("data: "));
-          if (!dataLine) continue;
-
-          try {
-            const event = JSON.parse(dataLine.slice(6)) as Record<string, unknown>;
-
-            if (event.type === "job") {
-              dispatch({ type: "SOLVE_JOB", jobId: event.job_id as string, sessionId: event.session_id as string | undefined });
-            } else if (event.type === "cancelled") {
-              dispatch({ type: "SOLVE_CANCELLED", detail: (event.detail as string) ?? tr("已取消", "Cancelled") });
-              return;
-            } else if (event.type === "progress") {
-              dispatch({
-                type: "SOLVE_PROGRESS",
-                stage: event.stage as string,
-                detail: event.detail as string,
-                position: event.position as number | undefined,
-              });
-            } else if (event.type === "result") {
-              const data = event.data as Record<string, unknown>;
-
-              // Handle autoformalize_failed in result
-              if (data.error === "autoformalize_failed") {
-                dispatch({
-                  type: "REQUEST_ERROR",
-                  message: "autoformalize_failed",
-                  autoformalizeDetail: (data.detail as string) ?? undefined,
-                  validationResults:
-                    (data.validation_results as Array<{
-                      layer: number;
-                      pass: boolean;
-                      detail: string;
-                    }>) ?? undefined,
-                });
-                return;
-              }
-
-              dispatch({
-                type: "SOLVE_OK",
-                sessionId: data.session_id as string,
-                problemType: data.problem_type as "computational" | "theorem",
-                nlSolution: data.nl_solution as NaturalLanguageSolution | undefined,
-                leanProofAttempt: data.lean_proof_attempt as LeanProofAttempt | undefined,
-                methods: data.methods as MethodOption[] | undefined,
-                methodScores: data.method_scores as MethodScore[] | undefined,
-                recommendedMethodId:
-                  (data.recommended_method_id as string) ?? undefined,
-                steps: data.steps as ProofStep[] | undefined,
-                assembledLean: data.assembled_lean as string | undefined,
-                buildStatus: data.build_status as BuildStatus | undefined,
-                buildLog: data.build_log as string | undefined,
-                solveEvents: (data.pipeline_events as Array<{ stage: string; detail: string }> | undefined) ?? [],
-                metrics: data.metrics as RunMetrics | undefined,
-                figureDescription: data.figure_description as string | undefined,
-              });
-            } else if (event.type === "error") {
-              throw new Error((event.error as string) ?? "solve pipeline failed");
-            }
-          } catch (parseError) {
-            // If it's a re-thrown error from the error event, propagate it
-            if (parseError instanceof SyntaxError) continue;
-            throw parseError;
-          }
-        }
-      }
+      await followSolveStream(res);
     } catch (e) {
       dispatch({
         type: "REQUEST_ERROR",
         message: e instanceof Error ? e.message : tr("求解失败", "Failed to solve"),
       });
     }
-  }, [dispatch, state.problemText, figures, figureText, tr]);
+  }, [dispatch, state.problemText, figures, figureText, tr, followSolveStream]);
+
+  // ── Follow a running solve again (the page was reloaded or reopened) ──
+  // The server keeps a solve running for a while after its page went away (SOLVE_DETACH_GRACE_MS);
+  // GET /api/jobs/:id/events replays its frames and follows the rest. False when the job is gone.
+
+  const resumeSolve = useCallback(
+    async (jobId: string): Promise<boolean> => {
+      const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/events`).catch(() => null);
+      if (!res?.ok || !res.headers.get("content-type")?.includes("text/event-stream")) return false;
+      lastActionRef.current = solveAll;
+      dispatch({ type: "REQUEST", operation: "solve-all" });
+      dispatch({ type: "SOLVE_REPLAY" });
+      try {
+        await followSolveStream(res);
+      } catch (e) {
+        dispatch({
+          type: "REQUEST_ERROR",
+          message: e instanceof Error ? e.message : tr("求解失败", "Failed to solve"),
+        });
+      }
+      return true;
+    },
+    [dispatch, followSolveStream, solveAll, tr],
+  );
 
   // ── Cancel the running solve ─────────────────────────────────────
   // The server stops the job at its next model call or stage; the stream then ends with `cancelled`.
@@ -432,8 +508,33 @@ export function useProofActions(
 
   // ── Load session from history ────────────────────────────────────
 
-  const loadSession = useCallback(
+  /**
+   * A formal proof that was still running when the page went away (the request goes on without it):
+   * shown as running, the session is read again every few seconds until the result is stored.
+   */
+  const waitForLeanAttempt = useCallback(
     async (sessionId: string) => {
+      dispatch({ type: "REQUEST", operation: "lean-attempt" });
+      const until = Date.now() + 45 * 60_000; // the attempt has its own limits; a stage left by a server restart must not hang the page
+      while (Date.now() < until) {
+        await new Promise((ok) => setTimeout(ok, 5000));
+        const res = await fetch(`/api/session/${encodeURIComponent(sessionId)}`).catch(() => null);
+        if (!res) continue;
+        if (!res.ok) break;
+        const s = (await res.json()) as { pipeline_stage?: string; lean_proof_attempt?: LeanProofAttempt };
+        if (s.pipeline_stage === "lean_attempting") continue;
+        if (s.lean_proof_attempt) dispatch({ type: "LEAN_ATTEMPT_OK", leanProofAttempt: s.lean_proof_attempt });
+        else dispatch({ type: "REQUEST_DONE" });
+        return;
+      }
+      dispatch({ type: "REQUEST_ERROR", message: tr("形式化证明中断了，可以再试一次", "The formal proof was interrupted; try again") });
+    },
+    [dispatch, tr],
+  );
+
+  /** Opens a stored session; returns its pipeline stage (undefined when it could not be loaded). */
+  const loadSession = useCallback(
+    async (sessionId: string): Promise<string | undefined> => {
       dispatch({ type: "REQUEST", operation: "load-session" });
       try {
         const res = await fetch(`/api/session/${sessionId}`);
@@ -451,6 +552,7 @@ export function useProofActions(
           nl_solution?: NaturalLanguageSolution;
           lean_proof_attempt?: LeanProofAttempt;
           computation_result?: unknown;
+          pipeline_stage?: string;
         }>(res);
 
         const solvedProblemType: "computational" | "theorem" | null =
@@ -478,11 +580,13 @@ export function useProofActions(
           solvedProblemType,
           solveEvents: [],
         });
+        return data.pipeline_stage ?? "idle";
       } catch (e) {
         dispatch({
           type: "REQUEST_ERROR",
           message: e instanceof Error ? e.message : tr("加载会话失败", "Failed to load session"),
         });
+        return undefined;
       }
     },
     [dispatch, tr],
@@ -508,6 +612,8 @@ export function useProofActions(
     switchMethod,
     useGeneratedProblem,
     loadSession,
+    resumeSolve,
+    waitForLeanAttempt,
     retryLastAction,
   };
 }

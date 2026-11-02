@@ -6,7 +6,9 @@
  * most JOBS_PER_USER jobs running or waiting (default 2).
  *
  * A job is cancelled by its owner (POST /api/jobs/:id/cancel), or when the client that started it
- * goes away. The cancel signal travels with the job (AsyncLocalStorage): the LLM client refuses new
+ * goes away — for a `detachable` job only after SOLVE_DETACH_GRACE_MS (default 2 minutes) with no
+ * page watching it: a page that was reloaded or reopened attaches again (attachJob, GET
+ * /api/jobs/:id/events), gets the events so far and follows the rest. The cancel signal travels with the job (AsyncLocalStorage): the LLM client refuses new
  * calls and aborts the one in flight, Lean verification refuses to start, and the theorem pipeline
  * stops at the next stage boundary — so a cancelled job stops spending money within one call.
  */
@@ -58,11 +60,25 @@ export interface JobInfo {
   endedAt?: number;
 }
 
+/** A progress / result frame the job's stream sent (replayed to a page that attaches later). */
+export type JobEvent = Record<string, unknown>;
+
 interface Job extends JobInfo {
   controller: AbortController;
   start?: () => void;
   onQueued?: (position: number) => void;
+  /** Frames sent so far (the first one and the latest MAX_EVENTS) and the pages following them. */
+  events: JobEvent[];
+  listeners: Set<(e: JobEvent | null) => void>;
+  /** Connections watching a detachable job; at 0 the grace timer runs. */
+  watchers: number;
+  detachable: boolean;
+  graceTimer?: ReturnType<typeof setTimeout>;
+  /** No more frames will come (the stream finished). */
+  closed?: boolean;
 }
+
+const MAX_EVENTS = 400;
 
 const jobs = new Map<string, Job>();
 const queue: Job[] = [];
@@ -95,7 +111,7 @@ export function isCancelled(e: unknown): boolean {
 }
 
 function info(j: Job): JobInfo {
-  const { controller: _c, start: _s, onQueued: _q, ...rest } = j;
+  const { controller: _c, start: _s, onQueued: _q, events: _e, listeners: _l, watchers: _w, detachable: _d, graceTimer: _g, closed: _x, ...rest } = j;
   return { ...rest, ...(j.state === "queued" ? { position: queue.indexOf(j) + 1 } : {}) };
 }
 
@@ -133,6 +149,11 @@ export async function runJob<T>(
     maxActive?: number;
     /** Stop the job this long after it started running (not counting the queue): TimeLimitError. */
     timeLimitMs?: number;
+    /**
+     * The client going away (`signal`) does not cancel at once: the job keeps running for
+     * SOLVE_DETACH_GRACE_MS so a reopened page can attach again; cancelled when nobody did.
+     */
+    detachable?: boolean;
     onStart?: (job: JobInfo) => void;
     onQueued?: (position: number) => void;
   },
@@ -142,12 +163,26 @@ export async function runJob<T>(
   const active = [...jobs.values()].filter((j) => j.owner === opts.owner && (j.state === "queued" || j.state === "running")).length;
   const limit = opts.maxActive === undefined ? perUser() : opts.maxActive < 0 ? Infinity : Math.max(1, opts.maxActive);
   if (active >= limit) throw new TooManyJobsError(limit);
-  const job: Job = { id: randomUUID(), owner: opts.owner, kind: opts.kind, sessionId: opts.sessionId, state: "queued", createdAt: Date.now(), controller: new AbortController(), onQueued: opts.onQueued };
+  const detachable = !!opts.detachable && detachGraceMs() > 0;
+  const job: Job = {
+    id: randomUUID(),
+    owner: opts.owner,
+    kind: opts.kind,
+    sessionId: opts.sessionId,
+    state: "queued",
+    createdAt: Date.now(),
+    controller: new AbortController(),
+    onQueued: opts.onQueued,
+    events: [],
+    listeners: new Set(),
+    watchers: 1,
+    detachable,
+  };
   jobs.set(job.id, job);
   const outer = opts.signal;
-  const onOuterAbort = () => job.controller.abort();
+  const onOuterAbort = () => (detachable ? release(job) : job.controller.abort());
   if (outer) {
-    if (outer.aborted) job.controller.abort();
+    if (outer.aborted) onOuterAbort();
     else outer.addEventListener("abort", onOuterAbort, { once: true });
   }
   opts.onStart?.(info(job));
@@ -198,11 +233,79 @@ export async function runJob<T>(
     throw e;
   } finally {
     if (timer) clearTimeout(timer);
+    if (job.graceTimer) clearTimeout(job.graceTimer);
     job.endedAt = Date.now();
     outer?.removeEventListener("abort", onOuterAbort);
     running--;
     next();
   }
+}
+
+/** How long a detachable job keeps running with no page watching it (SOLVE_DETACH_GRACE_MS; 0 = cancel at once). */
+export function detachGraceMs(): number {
+  const raw = process.env.SOLVE_DETACH_GRACE_MS;
+  const v = raw === undefined || raw.trim() === "" ? 120_000 : Number(raw);
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
+/** One watcher fewer; with none left, a running job is cancelled after the grace period. */
+function release(job: Job): void {
+  job.watchers = Math.max(0, job.watchers - 1);
+  if (job.watchers > 0 || job.endedAt || job.graceTimer) return;
+  job.graceTimer = setTimeout(() => {
+    job.graceTimer = undefined;
+    if (job.watchers === 0 && !job.endedAt) job.controller.abort();
+  }, detachGraceMs());
+  job.graceTimer.unref?.();
+}
+
+/** Record a frame of the job's stream and pass it to the pages following it. */
+export function publishJobEvent(id: string, event: JobEvent): void {
+  const j = jobs.get(id);
+  if (!j || j.closed) return;
+  j.events.push(event);
+  // Keep the first frame (the job id) and the latest ones; progress in between is only history.
+  if (j.events.length > MAX_EVENTS) j.events.splice(1, j.events.length - MAX_EVENTS);
+  for (const l of j.listeners) l(event);
+}
+
+/** The job's stream is over: followers are told (null) and dropped. */
+export function closeJobEvents(id: string): void {
+  const j = jobs.get(id);
+  if (!j || j.closed) return;
+  j.closed = true;
+  for (const l of j.listeners) l(null);
+  j.listeners.clear();
+}
+
+/**
+ * Follow one of `owner`'s jobs from another connection (a reloaded page): the frames so far, then
+ * `listener` for each new one and null at the end. While attached, the job is not cancelled for
+ * having no watcher. Undefined when there is no such job (someone else's, or forgotten).
+ */
+export function attachJob(id: string, owner: string, listener: (e: JobEvent | null) => void): { events: JobEvent[]; closed: boolean; detach: () => void } | undefined {
+  const j = jobs.get(id);
+  if (!j || j.owner !== owner) return undefined;
+  const events = [...j.events];
+  if (j.closed) return { events, closed: true, detach: () => undefined };
+  j.listeners.add(listener);
+  j.watchers++;
+  if (j.graceTimer) {
+    clearTimeout(j.graceTimer);
+    j.graceTimer = undefined;
+  }
+  let done = false;
+  return {
+    events,
+    closed: false,
+    detach: () => {
+      if (done) return;
+      done = true;
+      j.listeners.delete(listener);
+      if (j.detachable) release(j);
+      else j.watchers = Math.max(0, j.watchers - 1);
+    },
+  };
 }
 
 /** Cancel a job of `owner`; false when there is no such job (or it is someone else's) or it already ended. */

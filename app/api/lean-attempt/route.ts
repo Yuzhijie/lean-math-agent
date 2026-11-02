@@ -25,14 +25,21 @@ async function handlePOST(req: Request) {
     return NextResponse.json({ lean_proof_attempt: session.lean_proof_attempt });
   }
   return withUsageScope(async (metrics) => {
+    // A page reopened meanwhile sees this stage and waits for the result (the request goes on without its client).
     updateSession(session.id, { pipeline_stage: "lean_attempting" });
-    const attempt = await attemptLeanFormalization(session.problem_text, {
-      answers: answerCandidates(session),
-      solution: session.nl_solution,
-      sessionId: session.id,
-      // "Try again" after a failure searches harder than the first attempt.
-      ...(session.lean_proof_attempt?.attempted ? { budget: "normal" } : {}),
-    });
+    let attempt;
+    try {
+      attempt = await attemptLeanFormalization(session.problem_text, {
+        answers: answerCandidates(session),
+        solution: session.nl_solution,
+        sessionId: session.id,
+        // "Try again" after a failure searches harder than the first attempt.
+        ...(session.lean_proof_attempt?.attempted ? { budget: "normal" } : {}),
+      });
+    } catch (e) {
+      updateSession(session.id, { pipeline_stage: "complete" });
+      throw e;
+    }
     updateSession(session.id, { lean_proof_attempt: attempt, pipeline_stage: "complete" });
     return NextResponse.json({ lean_proof_attempt: attempt, metrics: metrics() });
   });

@@ -59,6 +59,7 @@ import {
 import { generationPrintHref, stashWorksheet } from "@/lib/bank/worksheet";
 import { ProblemExamples } from "./components/ProblemExamples";
 import Link from "next/link";
+import { addressFor, parseResumeView, RESUME_KEY, serializeResumeView, viewToRestore, type ResumeView } from "@/lib/resume-view";
 
 export default function Home() {
   const { tr, locale } = useI18n();
@@ -94,6 +95,8 @@ export default function Home() {
     switchMethod,
     useGeneratedProblem: loadGeneratedProblem,
     loadSession,
+    resumeSolve,
+    waitForLeanAttempt,
     retryLastAction,
   } = useProofActions(state, dispatch);
 
@@ -117,6 +120,7 @@ export default function Home() {
     solveEvents,
     runMetrics,
     jobId,
+    jobSessionId,
     queuePosition,
     cancelling,
   } = state;
@@ -289,12 +293,15 @@ export default function Home() {
   // figures as ?bank=<id>&fig=<asset>… (images cut from the original page).
   const applyProblemFromBank = applyProblem;
   const problemParamHandled = useRef(false);
+  // The page was opened with a problem (?problem=…): that wins over restoring the last view.
+  const cameWithProblem = useRef(false);
   useEffect(() => {
     if (problemParamHandled.current) return;
     problemParamHandled.current = true;
     const url = new URL(window.location.href);
     const text = url.searchParams.get("problem");
     if (!text?.trim()) return;
+    cameWithProblem.current = true;
     dispatch({ type: "SET_PROBLEM_TEXT", text });
     const bankId = url.searchParams.get("bank");
     // A question generated on the bank page: its figure is fetched from the generation (?gen&cand).
@@ -331,19 +338,81 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Auto-select tab when session data changes (e.g., after loading history)
+  // Auto-select tab when session data changes (e.g., after loading history); a restored page goes back to its tab.
   const prevSessionId = useRef(state.sessionId);
+  const restoreTab = useRef<string | null>(null);
   useEffect(() => {
     if (state.sessionId && state.sessionId !== prevSessionId.current) {
       prevSessionId.current = state.sessionId;
-      if (state.nlSolution) setActiveTab("solution");
+      if (restoreTab.current) {
+        setActiveTab(restoreTab.current);
+        restoreTab.current = null;
+      } else if (state.nlSolution) setActiveTab("solution");
       else if (state.methods.length > 0) setActiveTab("methods");
       else if (state.leanProofAttempt) setActiveTab("lean");
     }
   }, [state.sessionId, state.nlSolution, state.methods.length, state.leanProofAttempt]);
 
+  // ── Back to where the page was (reload, crashed tab, reopened browser) ──
+  // The view (session, running solve, tab, workspace, the text being typed) is kept in this browser and the
+  // session in the address; on open it is restored: a solve still running on the server is followed again,
+  // a formal proof still running is waited for, a finished session is shown on its tab.
+  const restored = useRef(false);
+  useEffect(() => {
+    if (restored.current) return;
+    restored.current = true;
+    // The ?problem= handler above has already run and taken the parameter out of the address.
+    if (cameWithProblem.current) return;
+    let stored: ResumeView | undefined;
+    try {
+      stored = parseResumeView(localStorage.getItem(RESUME_KEY));
+    } catch {
+      /* storage unavailable */
+    }
+    const view = viewToRestore(window.location.href, stored);
+    if (!view) return;
+    if (view.workspace) pickWorkspace(view.workspace);
+    if (view.problemText?.trim()) dispatch({ type: "SET_PROBLEM_TEXT", text: view.problemText });
+    if (view.tab) restoreTab.current = view.tab;
+    void (async () => {
+      if (view.jobId && (await resumeSolve(view.jobId))) return;
+      if (!view.sessionId) return;
+      const stage = await loadSession(view.sessionId);
+      if (stage === "lean_attempting") void waitForLeanAttempt(view.sessionId);
+      else if (view.jobId && stage && !["complete", "failed", "cancelled", "idle"].includes(stage)) {
+        dispatch({ type: "REQUEST_ERROR", message: tr("上次的求解在页面关闭后中断了，可以重新求解。", "The last solve stopped after the page was closed; solve again.") });
+      }
+    })();
+    // Runs once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const viewSessionId = state.sessionId ?? (jobId ? jobSessionId : null) ?? undefined;
+  // The first run sees the state from before the restore (the sample text): writing it would replace the view being restored.
+  const viewWritten = useRef(false);
+  useEffect(() => {
+    if (!viewWritten.current) {
+      viewWritten.current = true;
+      return;
+    }
+    const tab = viewSessionId ? activeTab : undefined;
+    try {
+      localStorage.setItem(
+        RESUME_KEY,
+        serializeResumeView({ sessionId: viewSessionId, jobId: jobId ?? undefined, tab, workspace, problemText: state.problemText }),
+      );
+    } catch {
+      /* storage unavailable or full */
+    }
+    const next = addressFor(window.location.href, viewSessionId, tab);
+    if (next !== window.location.pathname + window.location.search + window.location.hash) {
+      window.history.replaceState(window.history.state, "", next);
+    }
+  }, [viewSessionId, jobId, activeTab, workspace, state.problemText]);
+
   const handleLoadSession = (sessionId: string) => {
-    void loadSession(sessionId);
+    void loadSession(sessionId).then((stage) => {
+      if (stage === "lean_attempting") void waitForLeanAttempt(sessionId);
+    });
     removeFigure();
     setHistoryOpen(false);
     if (!window.matchMedia("(min-width: 1280px)").matches) setWorkspace("solve");
