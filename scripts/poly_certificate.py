@@ -145,8 +145,9 @@ def linear_var(p: Poly, skip: set[int] | None = None) -> int | None:
             continue
         rest = p - Poly(a * gens[v], *gens, domain=QQ)
         if rest.degree(gens[v]) <= 0:
-            # prefer the variable whose elimination leaves the fewest terms
-            size = len(rest.terms())
+            # prefer a square-root atom (√(b²) = b keeps b, not the root), then the variable whose
+            # elimination leaves the fewest terms
+            size = (0 if v in ROOTS else 1, len(rest.terms()))
             if best is None or size < best[1]:
                 best = (v, size)
     return None if best is None else best[0]
@@ -173,9 +174,15 @@ def field_candidates_lower(work: list, field, deg: int) -> bool:
     return False
 
 
+# Square-root atoms of the current request (s with s² = E): a relation b² + c² = s² reduces s, not b.
+ROOTS: set[int] = set()
+
+
 def square_var(p: Poly) -> int | None:
     gens = p.gens
-    for v in range(len(gens)):
+    for v in sorted(ROOTS, reverse=True) + list(range(len(gens))):
+        if v >= len(gens):
+            continue
         if p.degree(gens[v]) != 2:
             continue
         a = p.coeff_monomial(gens[v] ** 2)
@@ -361,6 +368,77 @@ def field_linear_var(p: Poly, field: Field) -> tuple[int, Poly, Poly] | None:
     return None if best is None else best[:3]
 
 
+def root_relation(work: list[Item], v: int, gens) -> Item | None:
+    """The relation s² = E for the square-root atom v (constant coefficient of s², E free of s)."""
+    for o in work:
+        p = o.poly
+        if p.degree(gens[v]) != 2:
+            continue
+        a = p.coeff_monomial(gens[v] ** 2)
+        if a == 0:
+            continue
+        rest = p - Poly(a * gens[v] ** 2, *gens, domain=QQ)
+        if rest.degree(gens[v]) <= 0:
+            return o
+    return None
+
+
+def conjugates(work: list[Item], gens) -> list[Item]:
+    """
+    For a hypothesis linear in a square-root atom s (s² = E known), p = g · (A·s + R): the product with the
+    conjugate A·s − R is g · (A²·E − R²) after the square relations — the root is gone. "Equal angles"
+    give such hypotheses (|u₁|·dot₂ = |u₂|·dot₁), and the conclusion follows only from their squares;
+    the plain linear-algebra search would need cofactors of a degree beyond its size limit.
+    """
+    out = []
+    for it in work:
+        p = it.poly
+        for v in sorted(ROOTS):
+            if v >= len(gens) or p.degree(gens[v]) != 1:
+                continue
+            rel = root_relation(work, v, gens)
+            if rel is None or rel is it:
+                continue
+            x = Poly(gens[v], *gens, domain=QQ)
+            # p = A·s + R, A and R free of s (sympy's multivariate div follows the term order, not s)
+            a_terms, r_terms = {}, {}
+            for mono, coef in p.terms():
+                if mono[v] == 1:
+                    m = list(mono)
+                    m[v] = 0
+                    a_terms[tuple(m)] = coef
+                else:
+                    r_terms[mono] = coef
+            if not a_terms or not r_terms:
+                continue
+            A = Poly.from_dict(a_terms, *gens, domain=QQ)
+            R = Poly.from_dict(r_terms, *gens, domain=QQ)
+            g = A.gcd(R)
+            if g.total_degree() > 0:
+                A = A.quo(g)
+                R = R.quo(g)
+            conj = A * x - R
+            item = Item(p * conj, {k: c * conj for k, c in it.comb.items()})
+            # lower every square root's square (s² = E) in the product, tracking the combination
+            for _ in range(6):
+                lowered = False
+                for w in sorted(ROOTS):
+                    if w >= len(gens) or item.poly.degree(gens[w]) < 2:
+                        continue
+                    rw = root_relation(work, w, gens)
+                    if rw is None:
+                        continue
+                    q, r = divide_square(item.poly, rw.poly, w)
+                    item = Item(r, add_comb(item.comb, rw.comb, -q))
+                    lowered = True
+                if not lowered:
+                    break
+            if not item.poly.is_zero:
+                out.append(item)
+            break
+    return out
+
+
 def attempt(goal: Poly, items: list[Item], max_extra: int, max_unknowns: int, member_only: bool = False, field: Field | None = None):
     """Coefficients (by hypothesis name) with goal = sum coef * h, or None. With member_only: True
     when the goal is in the ideal (Gröbner basis test), else False — no cofactors."""
@@ -368,6 +446,7 @@ def attempt(goal: Poly, items: list[Item], max_extra: int, max_unknowns: int, me
     zero = Poly(0, *gens, domain=QQ)
     target = Item(goal, {})  # invariant: original goal = target.poly + sum target.comb[k] * h_k
     work = [Item(it.poly, dict(it.comb)) for it in items if not it.poly.is_zero]
+    conjugated = False
 
     def reduce_all(rule: Item, divide, v: int, keep_rule: bool):
         nonlocal work
@@ -433,6 +512,14 @@ def attempt(goal: Poly, items: list[Item], max_extra: int, max_unknowns: int, me
         if changed:
             field_reduce_all()
             continue
+        if ROOTS and field is None and not conjugated:
+            # once the linear substitutions are done (a hypothesis g·(A·s + R) shows its common factor g
+            # only then): products with the conjugates, roots squared away
+            conjugated = True
+            extra_items = conjugates(work, gens)
+            if extra_items:
+                work += extra_items
+                continue
         if field is not None:
             cands = []
             for it in work:
@@ -504,6 +591,27 @@ def attempt(goal: Poly, items: list[Item], max_extra: int, max_unknowns: int, me
         return member
     if not member:
         return None
+    # cheap first: one hypothesis divides the target exactly (e.g. a conjugate product)
+    for it in work:
+        if it.poly.is_zero or it.poly.total_degree() == 0:
+            continue
+        try:
+            q = target.poly.exquo(it.poly)
+        except Exception:
+            continue
+        return add_comb(dict(target.comb), it.comb, q)
+    # then only the hypotheses whose variables all occur in the target (smaller systems), then all
+    tvars = {i for mono in target.poly.monoms() for i, e in enumerate(mono) if e}
+    inside = [k for k, it in enumerate(work) if {i for mono in it.poly.monoms() for i, e in enumerate(mono) if e} <= tvars]
+    if inside and len(inside) < len(work):
+        for extra in range(max_extra + 1):
+            cof = solve_cofactors(target.poly, [work[k].poly for k in inside], extra, max_unknowns)
+            if cof is not None:
+                comb = dict(target.comb)
+                for c, k in zip(cof, inside):
+                    if not c.is_zero:
+                        comb = add_comb(comb, work[k].comb, c)
+                return comb
     for extra in range(max_extra + 1):
         cof = solve_cofactors(target.poly, hyps, extra, max_unknowns)
         if cof is not None:
@@ -613,12 +721,87 @@ def field_chain(goal: Poly, items: list[Item], field: Field, originals: dict[str
     return None
 
 
+MAX_NEEDED_VARS = 14
+
+
+def needed_factors(goal: Poly, hyps: list[Poly], gens: list[Symbol], known: set, sqrt_vars: set[int] | None = None) -> list[Poly]:
+    """
+    Factors a multiplier would need when no candidate product works: the lowest-degree element q of the
+    ideal quotient (I : g) that is not in I (q·g ∈ I), with square relations s² = E applied, split into
+    irreducible factors other than the known candidates. The caller tries to prove each one nonzero
+    (e.g. b²(1 − t) + c²t for 0 < t < 1, the "other root" an equal-angle condition leaves) and asks again.
+    I : g comes from eliminating w in ⟨w·hᵢ, (1 − w)·g⟩ (= I ∩ ⟨g⟩), each element divided by g.
+    """
+    if len(gens) > MAX_NEEDED_VARS or goal.is_zero:
+        return []
+    w = Symbol("_w")
+    exprs = [h.as_expr() for h in hyps if not h.is_zero]
+    g = goal.as_expr()
+    gb_w = groebner([w * e for e in exprs] + [(1 - w) * g], w, *gens, order="lex")
+    gb_i = groebner(exprs, *gens, order="grevlex") if exprs else None
+    def root_var(h: Poly) -> int | None:
+        # the square-root atom s of a relation s² = E (E free of s); with `sqrt_vars` only those atoms
+        for v in sorted(sqrt_vars or [], reverse=True):
+            if h.degree(gens[v]) != 2 or h.coeff_monomial(gens[v] ** 2) == 0:
+                continue
+            rest = h - Poly(h.coeff_monomial(gens[v] ** 2) * gens[v] ** 2, *gens, domain=QQ)
+            if rest.degree(gens[v]) <= 0:
+                return v
+        return None if sqrt_vars else square_var(h)
+
+    squares = [(h, v) for h in hyps if (v := root_var(h)) is not None]
+
+    def reduce_squares(p: Poly) -> Poly:
+        # s² = E: lower every power of s ≥ 2 (E does not contain s)
+        for _ in range(8):
+            changed = False
+            for h, v in squares:
+                if p.degree(gens[v]) >= 2:
+                    _q, r = divide_square(p, h, v)
+                    if r != p:
+                        p = r
+                        changed = True
+            if not changed:
+                break
+        return p
+
+    cands: list[Poly] = []
+    for e in gb_w.exprs:
+        if e.has(w):
+            continue
+        q, r = sympy.div(e, g, *gens)
+        if r != 0 or q == 0:
+            continue
+        qp = reduce_squares(Poly(q, *gens, domain=QQ))
+        if qp.is_zero or qp.total_degree() == 0:
+            continue
+        if gb_i is not None and gb_i.reduce(qp.as_expr())[1] == 0:
+            continue  # in I already: says nothing
+        cands.append(qp)
+    roots = set(sqrt_vars or [])
+
+    def hard(f: Poly) -> bool:
+        # a sum with square-root atoms in it: hard to show nonzero (a lone √E, or a polynomial without
+        # roots, is what positivity / nlinarith can do)
+        return len(f.terms()) > 1 and any(f.degree(gens[v]) > 0 for v in roots)
+
+    options = []
+    for qp in cands[:12]:
+        out = [f for f, _e in qp.factor_list()[1] if f.total_degree() > 0 and f.monic().as_expr() not in known]
+        if out and len(out) <= 4:
+            options.append((sum(hard(f) for f in out), sum(f.total_degree() for f in out), out))
+    options.sort(key=lambda o: (o[0], o[1]))
+    return options[0][2] if options else []
+
+
 def certificate(req: dict) -> dict:
     names = req.get("vars")
     if not isinstance(names, list) or not names or len(names) > MAX_VARS or not all(isinstance(n, str) and NAME.match(n) for n in names):
         raise CertError("vars: a list of plain identifiers")
     gens = [Symbol(n) for n in names]
     index = {n: i for i, n in enumerate(names)}
+    ROOTS.clear()
+    ROOTS.update(index[v] for v in (req.get("sqrt_vars") or []) if isinstance(v, str) and v in index)
     hyps_in = req.get("hyps") or []
     mults_in = req.get("multipliers") or []
     if not isinstance(hyps_in, list) or not isinstance(mults_in, list):
@@ -725,7 +908,13 @@ def certificate(req: dict) -> dict:
             if choice is not None:
                 break
     if choice is None:
-        return {"ok": False, "reason": "the goal does not follow from the equations (with up to three nondegeneracy factors)"}
+        out = {"ok": False, "reason": "the goal does not follow from the equations (with up to three nondegeneracy factors)"}
+        if req.get("needed"):
+            known = {f.monic().as_expr() for _n, f, _c in factors}
+            needed = needed_factors(goal, list(originals.values()), gens, known, set(ROOTS))
+            if needed:
+                out["needed"] = [from_poly(f, names) for f in needed]
+        return out
     m = product(choice)
     comb = attempt(m * goal, items, max_extra, max_unknowns, field=field)
     if comb is not None and field is not None:

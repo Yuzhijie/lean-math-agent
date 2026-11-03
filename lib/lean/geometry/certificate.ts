@@ -20,6 +20,12 @@ export interface CertificateRequest {
   timeoutSec?: number;
   /** The angle mode's trigonometric field: variables c = cos θ, s = sin θ and the hypotheses R1, R2 (angles.ts). */
   field?: { c: number; s: number; r1: string; r2: string };
+  /**
+   * On failure, also return the factors a multiplier would need (the ideal quotient I : g), for the
+   * caller to prove nonzero and ask again. `sqrtVars`: the square-root atoms (s² = E reduces s).
+   */
+  needed?: boolean;
+  sqrtVars?: number[];
 }
 
 /** One factor of the multiplier: an irreducible factor of the candidate `source` (candidate = factor · cofactor). */
@@ -40,7 +46,7 @@ export interface CertificateStep {
 
 export type CertificateResult =
   | { ok: true; multiplier: MultiplierFactor[]; coefficients: Map<string, Poly>; steps?: CertificateStep[] }
-  | { ok: false; reason: string };
+  | { ok: false; reason: string; needed?: Poly[] };
 
 type Sparse = [string, Record<string, number>][];
 
@@ -76,6 +82,8 @@ function prepare(req: CertificateRequest): Prepared {
       return { name: `m${i}`, poly: m.poly.rename(to).toSparse() };
     }),
     timeout: req.timeoutSec ?? 30,
+    ...(req.needed ? { needed: true } : {}),
+    ...(req.sqrtVars?.length ? { sqrt_vars: req.sqrtVars.filter((v) => to.has(v)).map((v) => `v${to.get(v)}`) } : {}),
     ...(req.field && to.has(req.field.c) && to.has(req.field.s) && hyps.some((h) => h.name === req.field!.r1) && hyps.some((h) => h.name === req.field!.r2)
       ? {
           field: {
@@ -97,10 +105,14 @@ function parseAnswer(raw: unknown, prep: Prepared): CertificateResult {
     multiplier?: { source: string; factor: Sparse; cofactor: Sparse }[];
     coefficients?: Record<string, Sparse>;
     steps?: { name: string; var: string; expr: Sparse; coefficients: Record<string, Sparse> }[];
+    needed?: Sparse[];
   };
   if (!r || typeof r !== "object") return { ok: false, reason: "no answer" };
-  if (!r.ok) return { ok: false, reason: r.reason ?? "no certificate" };
   const fromSparse = (sp: Sparse) => Poly.fromSparse(sp).rename(prep.back);
+  if (!r.ok) {
+    const needed = Array.isArray(r.needed) ? r.needed.slice(0, 4).map(fromSparse) : undefined;
+    return { ok: false, reason: r.reason ?? "no certificate", ...(needed?.length ? { needed } : {}) };
+  }
   const stepNames = new Set((r.steps ?? []).map((st) => st.name));
   const readCoefficients = (raw: Record<string, Sparse>): Map<string, Poly> | string => {
     const out = new Map<string, Poly>();

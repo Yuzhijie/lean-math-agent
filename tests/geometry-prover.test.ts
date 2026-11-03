@@ -179,6 +179,43 @@ describe.skipIf(!sympy)("polynomial certificates (SymPy)", () => {
     expect(ds[1]).toBeCloseTo(1, 9);
   });
 
+  it("names the factor a multiplier needs when no candidate works (u² = v² ⇒ u = v needs u + v ≠ 0)", async () => {
+    const vars = new VarTable(new Set(["u", "v"]));
+    const P = (s: string) => toPoly(s, parseTerm(s), vars);
+    const r = await findCertificate({ vars: [], hyps: [{ name: "h", poly: P("u ^ 2 - v ^ 2") }], goal: P("u - v"), multipliers: [], needed: true });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.needed?.map((p) => p.sub(P("u + v")).isZero())).toEqual([true]);
+  });
+
+  it("equal angles in a right triangle: the conjugate removes the roots (BD · AC² = DC · AB²)", async () => {
+    // A = (0,0), B = (b,0), C = (0,c), D = (b(1-t), c t); ∠BAD = ∠ACB as |AC|·|CB|·dot₁ = |AB|·|AD|·dot₂
+    const vars = new VarTable(new Set(["b", "c", "t"]));
+    const P = (s: string) => toPoly(s, parseTerm(s), vars);
+    const AB = "√(b ^ 2)", AC = "√(c ^ 2)", BC = "√(b ^ 2 + c ^ 2)", AD = "√((b * (1 - t)) ^ 2 + (c * t) ^ 2)";
+    const BD = "√((b * t) ^ 2 + (c * t) ^ 2)", DC = "√((b * (1 - t)) ^ 2 + (c * (1 - t)) ^ 2)";
+    const hyps = [
+      { name: "hang", poly: P(`b ^ 2 * (1 - t) * ${AC} * ${BC} - c ^ 2 * ${AB} * ${AD}`) },
+      ...[AB, AC, BC, AD, BD, DC].map((r, i) => {
+        const arg = r.slice(2, -1);
+        return { name: `hsq${i}`, poly: P(`${r} ^ 2 - (${arg})`) };
+      }),
+      { name: "hsrb", poly: P(`${AB} - b`) },
+      { name: "hsrc", poly: P(`${AC} - c`) },
+    ];
+    const goal = P(`${BD} * ${AC} ^ 2 - ${DC} * ${AB} ^ 2`).mul(P(`${BD} * ${AC} ^ 2 + ${DC} * ${AB} ^ 2`));
+    const multipliers = ["b", "c", "t", "1 - t"].map((m, i) => ({ name: `hm${i}`, poly: P(m) }));
+    const sqrtVars = vars.atoms.filter((a) => a.kind === "sqrt").map((a) => a.index);
+    const r = await findCertificate({ vars: [], hyps, goal, multipliers, sqrtVars, timeoutSec: 60 });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    let m = Poly.const(new Frac(1n));
+    for (const f of r.multiplier) m = m.mul(f.factor);
+    let rest = m.mul(goal);
+    for (const h of hyps) if (r.coefficients.has(h.name)) rest = rest.sub(r.coefficients.get(h.name)!.mul(h.poly));
+    expect(rest.isZero()).toBe(true);
+  }, 120_000);
+
   it("says so when the goal does not follow", async () => {
     const vars = new VarTable(new Set(["t"]));
     const P = (s: string) => toPoly(s, parseTerm(s), vars);

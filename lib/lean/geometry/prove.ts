@@ -263,7 +263,7 @@ function factors(n: Node): Node[] {
 }
 
 /** Names of the facts this prover adds (hden3, hfac4, hm5, …). */
-const OWN = /^(hden|hfac|hm|hmul|hkey|hsq|habs|htrig|hpos|hnn|hprod)\d+$/;
+const OWN = /^(hden|hfac|hm|hmul|hkey|hsq|habs|htrig|hpos|hnn|hprod|hsr|hcb|hang)\d+$/;
 
 /** Prove `D ≠ 0` for a denominator; returns the hypothesis name. */
 export async function proveNonzero(run: TacticRunner, src: string, D: Node, f: Facts): Promise<string> {
@@ -416,6 +416,7 @@ async function atomFacts(run: TacticRunner, done: Set<string>): Promise<void> {
         )
       )
         sqNames.set(a.index, name);
+      await sqrtOfSquare(run, a.arg, a.text, f);
     } else if (a.kind === "abs") {
       await run.apply(`have ${run.fresh("habs")} : (${a.text}) ^ 2 = (${a.arg}) ^ 2 := sq_abs _`);
     } else if ((a.kind === "sin" || a.kind === "cos") && !trig.has(a.arg)) {
@@ -424,6 +425,42 @@ async function atomFacts(run: TacticRunner, done: Set<string>): Promise<void> {
     }
   }
   await productFacts(run, vars, argPolys, sqNames, done);
+}
+
+/**
+ * `√E = X` (or `-X`) when E is X² as a polynomial and the sign of X is known: lengths along an axis,
+ * √((0 - b) ^ 2 + (0 - 0) ^ 2) = b for 0 < b. The certificate then substitutes the root away; with
+ * √(b²) and √(c²) kept as unknowns, "∠BAD = ∠ACB ⇒ AD ⊥ BC" needed b² · c² · … as a multiplier.
+ */
+async function sqrtOfSquare(run: TacticRunner, arg: string, root: string, f: Facts): Promise<void> {
+  const argNode = tryParse(arg);
+  if (!argNode) return;
+  const table = new VarTable(f.realVars); // one numbering for E and X
+  let E: Poly;
+  try {
+    E = toPoly(arg, argNode, table);
+  } catch (e) {
+    if (e instanceof NotPolynomial) return;
+    throw e;
+  }
+  for (const X of squareBases(arg)) {
+    const xNode = tryParse(X);
+    if (!xNode) continue;
+    let px: Poly;
+    try {
+      px = toPoly(X, xNode, table);
+    } catch (e) {
+      if (e instanceof NotPolynomial) continue;
+      throw e;
+    }
+    if (px.constValue() !== undefined || !px.mul(px).sub(E).isZero()) continue;
+    const square = `rw [show (${arg}) = (${X}) ^ 2 by ring]`;
+    const name = run.fresh("hsr");
+    const pos = positivityProofs(X, f, false).map((p) => `(by ${square}; exact Real.sqrt_sq ${p})`);
+    if (await haveFirst(run, name, `${root} = ${X}`, pos)) return;
+    const neg = positivityProofs(`-(${X})`, f, false).map((p) => `(by ${square}; rw [Real.sqrt_sq_eq_abs]; exact abs_of_nonpos (neg_nonneg.mp ${p}))`);
+    if (await haveFirst(run, name, `${root} = -(${X})`, neg)) return;
+  }
 }
 
 /** Square-fact names per atom index, kept with the `done` set of one proof (atoms keep their index there). */
@@ -724,7 +761,25 @@ async function closeEquationOnce(run: TacticRunner): Promise<void> {
     return;
   }
   if (!vars.names.length) throw new Fail("the goal is a false numeric identity");
-  const cert = await findCertificate({ vars: vars.names.map((_, i) => `v${i}`), hyps, goal, multipliers: mults });
+  const sqrtVars = vars.atoms.filter((a) => a.kind === "sqrt").map((a) => a.index);
+  let cert = await findCertificate({ vars: vars.names.map((_, i) => `v${i}`), hyps, goal, multipliers: mults, needed: true, sqrtVars });
+  if (!cert.ok && cert.needed?.length) {
+    // The goal follows once some other factor is known nonzero (the ideal quotient names it, e.g. the
+    // positive b²(1 − t) + c²t an equal-angle condition leaves): prove each in Lean, then ask again.
+    const extra: { name: string; poly: Poly; text: string }[] = [];
+    for (const p of cert.needed) {
+      const text = p.toLean(vars.names);
+      const name = await factorNonzero(run, text, readFacts(state(run)));
+      if (process.env.GEOMETRY_DEBUG) console.error(`[geometry]   needed factor ${text}: ${name ?? "not shown nonzero"}`);
+      if (!name) {
+        extra.length = 0;
+        break;
+      }
+      extra.push({ name, poly: p, text: `(${text})` });
+    }
+    if (extra.length) cert = await findCertificate({ vars: vars.names.map((_, i) => `v${i}`), hyps, goal, multipliers: [...mults, ...extra], sqrtVars });
+    if (cert.ok) mults.push(...extra);
+  }
   if (!cert.ok) throw new NoCertificate(`no polynomial certificate: ${cert.reason}`);
   const names = vars.names;
   const combo = [...cert.coefficients].map(([h, c]) => `(${c.toLean(names)}) * ${h}`).join(" + ") || "0";
@@ -764,13 +819,137 @@ async function closeEquationOnce(run: TacticRunner): Promise<void> {
   if (run.goals().length >= before) throw new Fail("the goal stayed open");
 }
 
+/** `F ≠ 0` for a factor the certificate needs (positive or negative); the hypothesis name, or undefined. */
+async function factorNonzero(run: TacticRunner, text: string, f: Facts): Promise<string | undefined> {
+  for (const negate of [false, true]) {
+    const src = negate ? `-(${text})` : text;
+    const node = tryParse(src);
+    if (!node) return undefined;
+    const mark = run.save();
+    try {
+      const h = await proveNonzero(run, src, node, f);
+      if (!negate) return h;
+      const name = run.fresh("hm");
+      if (await run.apply(`have ${name} : (${text}) ≠ 0 := fun h0 => ${h} (by linear_combination (-1 : ℝ) * h0)`)) return name;
+      run.restore(mark);
+    } catch (e) {
+      if (!(e instanceof Fail)) throw e;
+      run.restore(mark);
+    }
+  }
+  return undefined;
+}
+
+/** `N / D` with `D = √A * √B` (an angle's cosine as the statement writes it). */
+function cosineParts(src: string, x: Node): { N: string; Dnode: Node; D: string; A?: string; B?: string; cross?: string } | undefined {
+  const frac = unwrap(x);
+  if (frac.k !== "bin" || frac.op !== "/") return undefined;
+  const den = unwrap(frac.b);
+  const out: { N: string; Dnode: Node; D: string; A?: string; B?: string; cross?: string } = { N: slice(src, frac.a), Dnode: frac.b, D: slice(src, frac.b) };
+  if (den.k === "bin" && den.op === "*") {
+    const s1 = unwrap(den.a);
+    const s2 = unwrap(den.b);
+    if (s1.k === "sqrt" && s2.k === "sqrt") {
+      out.A = slice(src, s1.a);
+      out.B = slice(src, s2.a);
+    }
+  }
+  // N = a1 * b1 + a2 * b2: the cross product a1 * b2 - a2 * b1 (Lagrange: A·B − N² = cross²)
+  const num = unwrap(frac.a);
+  if (num.k === "bin" && num.op === "+") {
+    const l = unwrap(num.a);
+    const r = unwrap(num.b);
+    if (l.k === "bin" && l.op === "*" && r.k === "bin" && r.op === "*") {
+      out.cross = `(${slice(src, l.a)}) * (${slice(src, r.b)}) - (${slice(src, r.a)}) * (${slice(src, l.b)})`;
+    }
+  }
+  return out;
+}
+
+/** `-1 ≤ N / D ∧ N / D ≤ 1` by Cauchy–Schwarz; the hypothesis name, or undefined. */
+async function cosineBounds(run: TacticRunner, c: { N: string; D: string; A?: string; B?: string; cross?: string }): Promise<string | undefined> {
+  if (!c.A || !c.B || !c.cross) return undefined;
+  const name = run.fresh("hcb");
+  const X = `(${c.N}) / (${c.D})`;
+  const tac = [
+    `have ${name} : -1 ≤ ${X} ∧ ${X} ≤ 1 := by`,
+    `  refine abs_le.mp ?_`,
+    `  rw [abs_div, abs_of_nonneg (by positivity : (0:ℝ) ≤ ${c.D}), ← Real.sqrt_mul (by positivity : (0:ℝ) ≤ ${c.A}) (${c.B})]`,
+    `  exact div_le_one_of_le₀ (Real.abs_le_sqrt (by nlinarith [sq_nonneg (${c.cross})])) (Real.sqrt_nonneg _)`,
+  ].join("\n");
+  // (a multi-line `have` cannot carry `set_option … in`: it breaks the indentation)
+  return (await run.apply(tac)) ? name : undefined;
+}
+
+/**
+ * Given angles become equations the certificate search can use: two equal angles
+ * `Real.arccos (N₁ / D₁) = Real.arccos (N₂ / D₂)` give `N₁ * D₂ = N₂ * D₁`, and a given value
+ * `Real.arccos (N / D) = c` gives `N = Real.cos c * D` (equal cosines; each argument is in
+ * [-1, 1] by Cauchy–Schwarz, and the lengths are not zero). Without this, a problem such as
+ * "∠BAD = ∠ACB in a right triangle ⇒ AD ⊥ BC" had no certificate and went on to the model provers.
+ * Only for goals that are not angles themselves (those go to the angle mode / cosine comparison).
+ */
+async function angleHypotheses(run: TacticRunner, done: Set<string>): Promise<void> {
+  if (!run.goals().length) return;
+  const st = state(run);
+  if (st.target.includes("Real.arccos")) return;
+  for (const h of st.hyps) {
+    const name = h.names[0];
+    if (!name || isInaccessible(name) || done.has(name) || h.value !== undefined) continue;
+    const t = tryParse(h.type);
+    if (!t || t.k !== "bin" || t.op !== "=") continue;
+    const xa = isArccos(t.a);
+    if (!xa) continue;
+    done.add(name);
+    const left = cosineParts(h.type, xa);
+    if (!left) continue;
+    const xb = isArccos(t.b);
+    const right = xb ? cosineParts(h.type, xb) : undefined;
+    if (xb && !right) continue;
+    const mark = run.save();
+    try {
+      const b1 = await cosineBounds(run, left);
+      if (!b1) throw new Fail("no bounds for the first angle");
+      const d1 = await proveNonzero(run, h.type, left.Dnode, readFacts(state(run)));
+      const fact = run.fresh("hang");
+      if (right) {
+        const b2 = await cosineBounds(run, right);
+        if (!b2) throw new Fail("no bounds for the second angle");
+        const d2 = await proveNonzero(run, h.type, right.Dnode, readFacts(state(run)));
+        const tac = [
+          `have ${fact} : (${left.N}) * (${right.D}) = (${right.N}) * (${left.D}) := by`,
+          `  have h' := congrArg Real.cos ${name}`,
+          `  rw [Real.cos_arccos ${b1}.1 ${b1}.2, Real.cos_arccos ${b2}.1 ${b2}.2, div_eq_div_iff ${d1} ${d2}] at h'`,
+          `  exact h'`,
+        ].join("\n");
+        if (!(await run.apply(tac))) throw new Fail(`equal angles: ${run.lastError().split("\n")[0]}`);
+      } else {
+        const c = slice(h.type, t.b);
+        const tac = [
+          `have ${fact} : ${left.N} = Real.cos (${c}) * (${left.D}) := by`,
+          `  have h' := congrArg Real.cos ${name}`,
+          `  rw [Real.cos_arccos ${b1}.1 ${b1}.2, div_eq_iff ${d1}] at h'`,
+          `  exact h'`,
+        ].join("\n");
+        if (!(await run.apply(tac))) throw new Fail(`given angle: ${run.lastError().split("\n")[0]}`);
+      }
+    } catch (e) {
+      if (!(e instanceof Fail)) throw e;
+      if (process.env.GEOMETRY_DEBUG) console.error(`[geometry] angle hypothesis ${name}: ${e.message}`);
+      run.restore(mark);
+    }
+  }
+}
+
 /** Prove the main goal and everything it splits into. */
 export async function proveGeometryGoals(run: TacticRunner): Promise<GeometryOutcome> {
   let atomsDone = new Set<string>();
   let trigDone = new Set<string>();
   let goalsBefore = run.goals().length;
+  const anglesDone = new Set<string>();
   try {
     await normalize(run);
+    await angleHypotheses(run, anglesDone);
     for (let guard = 0; run.goals().length && guard < 40; guard++) {
       const st = state(run);
       const t = tryParse(st.target);
@@ -784,6 +963,7 @@ export async function proveGeometryGoals(run: TacticRunner): Promise<GeometryOut
         const before = st.target;
         await normalize(run);
         if (state(run).target === before) throw new Fail("could not introduce the hypotheses");
+        await angleHypotheses(run, anglesDone);
         continue;
       }
       if (t.k === "bin" && t.op === "=" && unwrap(t.a).k === "pair") {
@@ -811,8 +991,11 @@ export async function proveGeometryGoals(run: TacticRunner): Promise<GeometryOut
         continue;
       }
       if (t.k === "bin" && t.op === "=") {
-        // facts added for another goal (another branch of a conjunction) are not in this one's context
-        if (run.goals().length !== goalsBefore) {
+        // facts added for another goal (another branch of a conjunction) are not in this one's context —
+        // also when the count is back where it was (branch 1 closed, branch 2 split again)
+        const inContext = new Set(st.hyps.flatMap((h) => h.names));
+        const stale = [...sqNamesOf(atomsDone).values()].some((n) => !inContext.has(n));
+        if (run.goals().length !== goalsBefore || stale) {
           atomsDone = new Set();
           trigDone = new Set();
           goalsBefore = run.goals().length;
