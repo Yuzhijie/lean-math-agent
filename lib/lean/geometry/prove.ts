@@ -123,6 +123,7 @@ export async function normalize(run: TacticRunner): Promise<void> {
     if (!done) break;
   }
   // split the remaining points into coordinates
+  const coords = new Set<string>();
   {
     const st = state(run);
     const taken = allNames(st);
@@ -132,13 +133,36 @@ export async function normalize(run: TacticRunner): Promise<void> {
         if (isInaccessible(p)) continue;
         const x = fresh(`${p}x`, taken);
         const y = fresh(`${p}y`, taken);
-        await run.apply(`obtain ⟨${x}, ${y}⟩ := ${p}`);
+        if (await run.apply(`obtain ⟨${x}, ${y}⟩ := ${p}`)) {
+          coords.add(x);
+          coords.add(y);
+        }
       }
     }
   }
   await run.apply(PAIR_SIMP);
   if (!run.goals().length) return;
   await splitAndName(run);
+  // coordinates the statement defines one by one (D.1 = (1 - t) * B.1 + t * C.1): substituted, so
+  // the point is its formula everywhere (fewer unknowns, and D ≠ A becomes a fact about t)
+  for (let round = 0; round < 16 && coords.size && run.goals().length; round++) {
+    const st = state(run);
+    let done = false;
+    for (const h of st.hyps) {
+      const t = tryParse(h.type);
+      if (!t || t.k !== "bin" || t.op !== "=" || isInaccessible(h.names[0] ?? "")) continue;
+      const a = unwrap(t.a);
+      const b = unwrap(t.b);
+      const side = a.k === "ident" && coords.has(a.name) ? { v: a.name, e: slice(h.type, t.b) } : b.k === "ident" && coords.has(b.name) ? { v: b.name, e: slice(h.type, t.a) } : undefined;
+      if (!side || new RegExp(`(^|[^\\w.'])${side.v}($|[^\\w'])`).test(side.e)) continue;
+      if (await run.apply(`subst ${h.names[0]}`)) {
+        coords.delete(side.v);
+        done = true;
+        break;
+      }
+    }
+    if (!done) break;
+  }
 }
 
 async function splitAndName(run: TacticRunner): Promise<void> {
@@ -265,6 +289,53 @@ function factors(n: Node): Node[] {
 /** Names of the facts this prover adds (hden3, hfac4, hm5, …). */
 const OWN = /^(hden|hfac|hm|hmul|hkey|hsq|habs|htrig|hpos|hnn|hprod|hsr|hcb|hang)\d+$/;
 
+/**
+ * `0 < u² + v²` from a `≠` hypothesis that fails when u = v = 0: two points are distinct because the
+ * triangle is not degenerate (`(B - A) × (C - A) ≠ 0` gives A ≠ B). The cofactors writing the
+ * hypothesis's two sides' difference in u and v come from the certificate search.
+ */
+async function distinctProofs(E: string, f: Facts): Promise<string[]> {
+  const n = tryParse(E);
+  const u0 = n ? unwrap(n) : undefined;
+  if (!u0 || u0.k !== "bin" || u0.op !== "+") return [];
+  const sq = (x: Node) => {
+    const y = unwrap(x);
+    return y.k === "bin" && y.op === "^" && unwrap(y.b).k === "num" && (unwrap(y.b) as { text: string }).text === "2" ? slice(E, y.a) : undefined;
+  };
+  const u = sq(u0.a);
+  const v = sq(u0.b);
+  if (!u || !v || !f.nes.length) return [];
+  const out: string[] = [];
+  for (const h of f.nes.slice(0, 4)) {
+    const vars = new VarTable(f.realVars);
+    let goal: Poly, pu: Poly, pv: Poly;
+    try {
+      goal = toPoly(h.text, h.a, vars).sub(toPoly(h.text, h.b, vars));
+      pu = toPoly(u, tryParse(u)!, vars);
+      pv = toPoly(v, tryParse(v)!, vars);
+    } catch {
+      continue;
+    }
+    // the statement's equations too (D = (1 - t)·B + t·C on BC: D = A would put A on BC)
+    const eqs: { name: string; poly: Poly }[] = [];
+    for (const e of f.eqs.slice(0, 20)) {
+      try {
+        eqs.push({ name: e.name, poly: toPoly(e.text, e.node.a, vars).sub(toPoly(e.text, e.node.b, vars)) });
+      } catch {
+        /* not polynomial */
+      }
+    }
+    const cert = await findCertificate({ vars: [], hyps: [{ name: "hu", poly: pu }, { name: "hv", poly: pv }, ...eqs], goal, multipliers: [] });
+    if (!cert.ok || cert.multiplier.length) continue;
+    // one line: a multi-line term cannot carry the `set_option … in` the caller puts in front
+    // linear_combination takes hypothesis names, not inline proofs
+    const zero = (x: string) => `(by nlinarith only [h0, sq_nonneg (${u}), sq_nonneg (${v})])`;
+    const combo = [...cert.coefficients].map(([k, c]) => `(${c.toLean(vars.names)}) * ${k}`).join(" + ") || "0";
+    out.push(`(lt_of_le_of_ne (by positivity) (fun h0 => ${h.name} (by have hu : (${u}) = 0 := ${zero(u)}; have hv : (${v}) = 0 := ${zero(v)}; linear_combination ${combo})))`);
+  }
+  return out;
+}
+
 /** Prove `D ≠ 0` for a denominator; returns the hypothesis name. */
 export async function proveNonzero(run: TacticRunner, src: string, D: Node, f: Facts): Promise<string> {
   const text = slice(src, D);
@@ -280,6 +351,7 @@ export async function proveNonzero(run: TacticRunner, src: string, D: Node, f: F
     if (fac.k === "sqrt" || (fac.k === "app" && fac.fn === "Real.sqrt")) {
       const E = slice(src, fac.k === "sqrt" ? fac.a : fac.args[0]);
       for (const p of positivityProofs(E, f, true)) proofs.push(`(Real.sqrt_pos.mpr ${p}).ne'`);
+      for (const p of await distinctProofs(E, f)) proofs.push(`(Real.sqrt_pos.mpr ${p}).ne'`);
       // √E = √F with √F known positive
       for (const e of f.eqs) {
         const l = slice(e.text, e.node.a);
@@ -932,6 +1004,7 @@ async function angleHypotheses(run: TacticRunner, done: Set<string>): Promise<vo
           `  exact h'`,
         ].join("\n");
         if (!(await run.apply(tac))) throw new Fail(`given angle: ${run.lastError().split("\n")[0]}`);
+        await run.apply(`simp only [Real.cos_pi_div_two, Real.cos_pi_div_three, Real.cos_pi_div_four, Real.cos_pi_div_six, Real.cos_pi, Real.cos_zero] at ${fact}`);
       }
     } catch (e) {
       if (!(e instanceof Fail)) throw e;
@@ -956,6 +1029,11 @@ export async function proveGeometryGoals(run: TacticRunner): Promise<GeometryOut
       if (!t) throw new Fail(`cannot read the goal ${st.target.slice(0, 80)}`);
       if (t.k === "bin" && t.op === "∧") {
         if (!(await run.apply("refine ⟨?_, ?_⟩"))) throw new Fail("could not split the conjunction");
+        continue;
+      }
+      if (t.k === "bin" && t.op === "↔") {
+        // both directions, each an implication (introduced below)
+        if (!(await run.apply("constructor"))) throw new Fail("could not split the equivalence");
         continue;
       }
       if ((t.k === "quant" && t.q === "∀") || (t.k === "bin" && t.op === "→")) {
@@ -984,6 +1062,8 @@ export async function proveGeometryGoals(run: TacticRunner): Promise<GeometryOut
           run.restore(mark);
         }
         await reduceAngle(run, st, t);
+        // the goal is no angle any more: given angles (e.g. a bisector's equal angles) become equations
+        await angleHypotheses(run, anglesDone);
         continue;
       }
       if (t.k === "bin" && t.op === "=" && isArccos(t.b) && !isArccos(t.a)) {
