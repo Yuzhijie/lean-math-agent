@@ -75,6 +75,13 @@ export function loadWholeProofConfig(overrides: Partial<WholeProofConfig> = {}):
   };
 }
 
+/** Time a native (local) prover gets for the whole stage: WHOLE_PROOF_NATIVE_MAX_MS, default 5 minutes; 0 = no cap. */
+export function nativeStageCapMs(): number {
+  const raw = process.env.WHOLE_PROOF_NATIVE_MAX_MS;
+  const v = raw === undefined || raw.trim() === "" ? 300_000 : Number(raw);
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
 /** Whether the whole-proof stage is enabled (WHOLE_PROOF_ENABLED, default true). */
 export function wholeProofEnabled(): boolean {
   return process.env.WHOLE_PROOF_ENABLED !== "false";
@@ -187,6 +194,11 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
   // first, long output); a chat model gets our instructions, goal state and premises.
   const native = proverPromptStyle() === "native";
   const nativeSettings = native ? nativeProverSettings() : undefined;
+  // A slow local prover: the whole stage (every round, every call) ends WHOLE_PROOF_NATIVE_MAX_MS after it
+  // started (default 5 min; 0 = no cap, each call waits up to LLM_PROVER_TIMEOUT_MS) — a solve once spent
+  // over 20 minutes here on a theorem the model could not prove.
+  const nativeCap = native ? nativeStageCapMs() : 0;
+  const nativeLeft = () => (nativeCap > 0 ? nativeCap - (Date.now() - started) : Infinity);
   const nativeRequest = native
     ? nativeProverPrompt({ theoremName: args.theoremName, theoremType: args.theoremType, problemText: args.problemText, opens: args.opens })
     : "";
@@ -220,6 +232,10 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
       costCapped = true;
       break;
     }
+    if (round > 0 && nativeLeft() < 60_000) {
+      log.push(`round ${round}: the local prover's time for this stage (${Math.round(nativeCap / 60_000)} min) is used up`);
+      break;
+    }
     if (round > 0 && timeLeft() < expectedLatencyMs("prover") * 0.8) {
       // A repair round that cannot finish is wasted tokens (aborted calls
       // still bill what they generated).
@@ -237,6 +253,7 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
         ? undefined
         : Math.max(30_000, Math.min(timeLeft(), 180_000));
     if (cfg.strictBudget) timeoutMs = Math.max(30_000, Math.min(timeoutMs ?? Infinity, timeLeft()));
+    if (nativeSettings && nativeCap > 0) timeoutMs = Math.max(30_000, Math.min(timeoutMs ?? Infinity, nativeLeft()));
     const waitMin = timeoutMs !== undefined ? Math.round(timeoutMs / 60_000) : 0;
     progress({
       round,

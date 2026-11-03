@@ -110,7 +110,8 @@ describe("whole-proof loop with a native prover", () => {
     expect(first.messages[0].role).toBe("user");
     expect(first.messages[0].content).toContain("Complete the following Lean 4 code:");
     expect(first.maxTokens).toBe(16384);
-    expect(first.timeoutMs).toBe(600000);
+    expect(first.timeoutMs).toBeLessThanOrEqual(300_000); // the stage cap (WHOLE_PROOF_NATIVE_MAX_MS) is below LLM_PROVER_TIMEOUT_MS
+    expect(first.timeoutMs).toBeGreaterThan(290_000);
     const second = seen[1];
     expect(second.messages.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
     expect(second.messages[1].content).toContain("rfl_bad");

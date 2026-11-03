@@ -255,9 +255,26 @@ describe("proveWholeTheorem", () => {
 });
 
 describe("time limits with a slow local prover", () => {
-  it("a native prover's first call gets LLM_PROVER_TIMEOUT_MS, but a sketch hole keeps to its budget", async () => {
+  it("a native prover's stage is capped (WHOLE_PROOF_NATIVE_MAX_MS, default 5 min)", async () => {
     process.env.LLM_PROVER_MODEL = "goedel-prover-v2-8b";
     process.env.LLM_PROVER_TIMEOUT_MS = "900000";
+    try {
+      sampleMock.mockResolvedValue([]);
+      const details: string[] = [];
+      await proveWholeTheorem({ sessionId: "s", theoremName: NAME, theoremType: TYPE, onProgress: (p) => p.detail && details.push(p.detail), config: { samples: 1, rounds: 0, timeBudgetMs: 180_000 } });
+      expect(sampleMock.mock.calls[0][0].timeoutMs).toBeLessThanOrEqual(300_000);
+      expect(sampleMock.mock.calls[0][0].timeoutMs).toBeGreaterThan(290_000);
+      expect(details.join(" ")).toMatch(/goedel-prover-v2-8b.*5/);
+    } finally {
+      delete process.env.LLM_PROVER_MODEL;
+      delete process.env.LLM_PROVER_TIMEOUT_MS;
+    }
+  });
+
+  it("a native prover's first call gets LLM_PROVER_TIMEOUT_MS without the cap, but a sketch hole keeps to its budget", async () => {
+    process.env.LLM_PROVER_MODEL = "goedel-prover-v2-8b";
+    process.env.LLM_PROVER_TIMEOUT_MS = "900000";
+    process.env.WHOLE_PROOF_NATIVE_MAX_MS = "0";
     try {
       sampleMock.mockResolvedValue([]);
       const details: string[] = [];
@@ -270,6 +287,7 @@ describe("time limits with a slow local prover", () => {
     } finally {
       delete process.env.LLM_PROVER_MODEL;
       delete process.env.LLM_PROVER_TIMEOUT_MS;
+      delete process.env.WHOLE_PROOF_NATIVE_MAX_MS;
     }
   });
 });
