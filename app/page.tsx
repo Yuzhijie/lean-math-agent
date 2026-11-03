@@ -59,7 +59,7 @@ import {
 import { generationPrintHref, stashWorksheet } from "@/lib/bank/worksheet";
 import { ProblemExamples } from "./components/ProblemExamples";
 import Link from "next/link";
-import { addressFor, parseResumeView, RESUME_KEY, serializeResumeView, viewToRestore, type ResumeView } from "@/lib/resume-view";
+import { addressFor, fromEarlierRun, parseResumeView, RESUME_KEY, serializeResumeView, viewToRestore, type ResumeView } from "@/lib/resume-view";
 
 export default function Home() {
   const { tr, locale } = useI18n();
@@ -356,58 +356,98 @@ export default function Home() {
   // ── Back to where the page was (reload, crashed tab, reopened browser) ──
   // The view (session, running solve, tab, workspace, the text being typed) is kept in this browser and the
   // session in the address; on open it is restored: a solve still running on the server is followed again,
-  // a formal proof still running is waited for, a finished session is shown on its tab.
+  // a formal proof still running is waited for, a finished session is shown on its tab. Only within one run of
+  // the server: a view from before a restart is cleared (GET /api/boot gives the run's id).
   const restored = useRef(false);
+  const bootRef = useRef<string | undefined>(undefined);
+  // the view is saved (and the address rewritten) only after the restore has read both — bumped when it is done
+  const [restoreDone, setRestoreDone] = useState(false);
   useEffect(() => {
     if (restored.current) return;
     restored.current = true;
-    // The ?problem= handler above has already run and taken the parameter out of the address.
-    if (cameWithProblem.current) return;
-    let stored: ResumeView | undefined;
-    try {
-      stored = parseResumeView(localStorage.getItem(RESUME_KEY));
-    } catch {
-      /* storage unavailable */
-    }
-    const view = viewToRestore(window.location.href, stored);
-    if (!view) return;
-    if (view.workspace) pickWorkspace(view.workspace);
-    if (view.problemText?.trim()) dispatch({ type: "SET_PROBLEM_TEXT", text: view.problemText });
-    if (view.tab) restoreTab.current = view.tab;
+    // the address as the page was opened (read before anything rewrites it)
+    const href = window.location.href;
     void (async () => {
-      if (view.jobId && (await resumeSolve(view.jobId))) return;
-      if (!view.sessionId) return;
-      const stage = await loadSession(view.sessionId);
-      if (stage === "lean_attempting") void waitForLeanAttempt(view.sessionId);
-      else if (view.jobId && stage && !["complete", "failed", "cancelled", "idle"].includes(stage)) {
-        dispatch({ type: "REQUEST_ERROR", message: tr("上次的求解在页面关闭后中断了，可以重新求解。", "The last solve stopped after the page was closed; solve again.") });
+      try {
+        await restoreView(href);
+      } finally {
+        setRestoreDone(true);
       }
     })();
     // Runs once on mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const viewSessionId = state.sessionId ?? (jobId ? jobSessionId : null) ?? undefined;
-  // The first run sees the state from before the restore (the sample text): writing it would replace the view being restored.
-  const viewWritten = useRef(false);
-  useEffect(() => {
-    if (!viewWritten.current) {
-      viewWritten.current = true;
-      return;
+  const restoreView = async (href: string) => {
+    {
+      const boot = await fetch("/api/boot", { cache: "no-store" })
+        .then((r) => (r.ok ? (r.json() as Promise<{ boot?: string }>) : undefined))
+        .then((d) => d?.boot)
+        .catch(() => undefined);
+      bootRef.current = boot;
+      let stored: ResumeView | undefined;
+      try {
+        stored = parseResumeView(localStorage.getItem(RESUME_KEY));
+      } catch {
+        /* storage unavailable */
+      }
+      if (fromEarlierRun(stored, boot)) {
+        // the server was restarted since: the old view and the session it put in the address go
+        try {
+          localStorage.removeItem(RESUME_KEY);
+        } catch {
+          /* storage unavailable */
+        }
+        window.history.replaceState(window.history.state, "", addressFor(href, undefined, undefined));
+        return;
+      }
+      // the server cannot be asked (nothing to restore from), or the page came with a problem (?problem=,
+      // handled above, which has already taken the parameter out of the address)
+      if (!boot || cameWithProblem.current) return;
+      const view = viewToRestore(href, stored, boot);
+      if (!view) return;
+      if (view.workspace) pickWorkspace(view.workspace);
+      if (view.problemText?.trim()) dispatch({ type: "SET_PROBLEM_TEXT", text: view.problemText });
+      if (view.tab) restoreTab.current = view.tab;
+      if (view.jobId) {
+        const job = await fetch("/api/jobs", { cache: "no-store" })
+          .then((r) => (r.ok ? (r.json() as Promise<{ jobs?: { id: string }[] }>) : undefined))
+          .catch(() => undefined);
+        if (job?.jobs?.some((j) => j.id === view.jobId)) {
+          // following the solve lasts until it ends: saving the view starts now (its first frame comes at once)
+          setRestoreDone(true);
+          if (await resumeSolve(view.jobId)) return;
+        }
+      }
+      if (!view.sessionId) return;
+      const stage = await loadSession(view.sessionId);
+      setRestoreDone(true);
+      if (stage === "lean_attempting") void waitForLeanAttempt(view.sessionId);
+      else if (view.jobId && stage && !["complete", "failed", "cancelled", "idle"].includes(stage)) {
+        dispatch({ type: "REQUEST_ERROR", message: tr("上次的求解在页面关闭后中断了，可以重新求解。", "The last solve stopped after the page was closed; solve again.") });
+      }
     }
+  };
+  const viewSessionId = state.sessionId ?? (jobId ? jobSessionId : null) ?? undefined;
+  // Before the restore is done the state is the page's initial one (the sample text): writing it would replace the view.
+  useEffect(() => {
+    if (!restoreDone) return;
     const tab = viewSessionId ? activeTab : undefined;
-    try {
-      localStorage.setItem(
-        RESUME_KEY,
-        serializeResumeView({ sessionId: viewSessionId, jobId: jobId ?? undefined, tab, workspace, problemText: state.problemText }),
-      );
-    } catch {
-      /* storage unavailable or full */
+    // written once the server's run id is known: a view is restored only within the run it was written in
+    if (bootRef.current) {
+      try {
+        localStorage.setItem(
+          RESUME_KEY,
+          serializeResumeView({ sessionId: viewSessionId, jobId: jobId ?? undefined, tab, workspace, problemText: state.problemText, boot: bootRef.current }),
+        );
+      } catch {
+        /* storage unavailable or full */
+      }
     }
     const next = addressFor(window.location.href, viewSessionId, tab);
     if (next !== window.location.pathname + window.location.search + window.location.hash) {
       window.history.replaceState(window.history.state, "", next);
     }
-  }, [viewSessionId, jobId, activeTab, workspace, state.problemText]);
+  }, [restoreDone, viewSessionId, jobId, activeTab, workspace, state.problemText]);
 
   const handleLoadSession = (sessionId: string) => {
     void loadSession(sessionId).then((stage) => {

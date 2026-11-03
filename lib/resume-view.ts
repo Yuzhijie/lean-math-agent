@@ -3,7 +3,8 @@
  * workspace and the problem text being typed. Written to localStorage as the page changes and
  * read when the page opens, so a reload, a crashed tab or a reopened browser comes back to the same
  * place; the session is also in the address (?session=…), so a reloaded tab keeps its own session
- * when several are open.
+ * when several are open. Only within one run of the server: the view records the server's start id
+ * (GET /api/boot), and after a restart it is dropped — the page starts fresh.
  */
 
 export type Workspace = "solve" | "bank" | "builtin";
@@ -15,6 +16,8 @@ export interface ResumeView {
   tab?: string;
   workspace?: Workspace;
   problemText?: string;
+  /** The server run it was written in (GET /api/boot). */
+  boot?: string;
   /** When it was written (ms). */
   at: number;
 }
@@ -44,6 +47,7 @@ export function parseResumeView(raw: string | null | undefined, now = Date.now()
   if (typeof o.tab === "string" && /^[a-z_-]{1,30}$/.test(o.tab)) out.tab = o.tab;
   if (typeof o.workspace === "string" && (WORKSPACES as string[]).includes(o.workspace)) out.workspace = o.workspace as Workspace;
   if (typeof o.problemText === "string") out.problemText = o.problemText.slice(0, MAX_TEXT);
+  if (typeof o.boot === "string" && ID.test(o.boot)) out.boot = o.boot;
   return out;
 }
 
@@ -54,13 +58,24 @@ export function serializeResumeView(v: Omit<ResumeView, "at">, now = Date.now())
   if (v.tab) out.tab = v.tab;
   if (v.workspace) out.workspace = v.workspace;
   if (v.problemText) out.problemText = v.problemText.slice(0, MAX_TEXT);
+  if (v.boot) out.boot = v.boot;
   return JSON.stringify(out);
 }
 
-/** The view to restore: the address's ?session= (with ?tab=) wins over storage; nothing when the address brings a problem. */
-export function viewToRestore(href: string, stored: ResumeView | undefined): ResumeView | undefined {
+/** A view written before the server's last restart (or without a run id): not restored. */
+export function fromEarlierRun(stored: ResumeView | undefined, boot: string | undefined): boolean {
+  return !!stored && !!boot && stored.boot !== boot;
+}
+
+/**
+ * The view to restore: the address's ?session= (with ?tab=) wins over storage; nothing when the
+ * address brings a problem, or when the stored view is from before a server restart (then the
+ * address's session, which that view put there, goes too).
+ */
+export function viewToRestore(href: string, stored: ResumeView | undefined, boot?: string): ResumeView | undefined {
   const url = new URL(href);
   if (url.searchParams.get("problem")) return undefined;
+  if (fromEarlierRun(stored, boot)) return undefined;
   const session = url.searchParams.get("session");
   if (session && ID.test(session)) {
     const tab = url.searchParams.get("tab") ?? undefined;

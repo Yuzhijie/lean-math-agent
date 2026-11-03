@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { _resetJobsForTests, attachJob, CancelledError, closeJobEvents, publishJobEvent, runJob, throwIfCancelled, type JobEvent } from "@/lib/jobs";
-import { addressFor, parseResumeView, RESUME_MAX_AGE_MS, serializeResumeView, viewToRestore } from "@/lib/resume-view";
+import { addressFor, fromEarlierRun, parseResumeView, RESUME_MAX_AGE_MS, serializeResumeView, viewToRestore } from "@/lib/resume-view";
 
 beforeEach(() => {
   _resetJobsForTests();
@@ -107,6 +107,20 @@ describe("the page's resume view", () => {
     const other = viewToRestore("http://x/?session=s2", stored)!;
     expect(other.sessionId).toBe("s2");
     expect(other.jobId).toBeUndefined();
+  });
+
+  it("only within one run of the server: after a restart nothing is restored", () => {
+    const now = 1_700_000_000_000;
+    const stored = parseResumeView(serializeResumeView({ sessionId: "s1", tab: "lean", boot: "run-a" }, now), now)!;
+    expect(stored.boot).toBe("run-a");
+    expect(fromEarlierRun(stored, "run-a")).toBe(false);
+    expect(viewToRestore("http://x/?session=s1&tab=lean", stored, "run-a")).toMatchObject({ sessionId: "s1", tab: "lean" });
+    // restarted: neither the stored view nor the session it put in the address
+    expect(fromEarlierRun(stored, "run-b")).toBe(true);
+    expect(viewToRestore("http://x/", stored, "run-b")).toBeUndefined();
+    expect(viewToRestore("http://x/?session=s1&tab=lean", stored, "run-b")).toBeUndefined();
+    // a view written before run ids existed counts as an earlier run
+    expect(fromEarlierRun({ at: now, sessionId: "s1" }, "run-b")).toBe(true);
   });
 
   it("writes the session and tab into the address, keeping other parameters", () => {
