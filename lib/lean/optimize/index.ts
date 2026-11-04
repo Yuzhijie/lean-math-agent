@@ -10,12 +10,33 @@ import { looksGeometric } from "../geometry";
 import type { LeanVerifyResult } from "../sandbox";
 import { openRunner, scriptSource } from "../tactic-runner";
 import { proveOptimization } from "./prove";
+import { colourFamily, familyEvalCommand, familyScript, maxFamily, parseFamily, readFamilyGraph } from "./family";
+import type { ProofSession } from "../proof-state";
 
 /** IsGreatest / IsLeast / bounds, or a conjunction of an ∃ and a ∀ (attained + bound). */
 export function looksOptimization(theoremType: string): boolean {
   if (looksGeometric(theoremType) || /ℝ|ℚ|ℂ/.test(theoremType)) return false;
   if (/\b(IsGreatest|IsLeast|upperBounds|lowerBounds)\b/.test(theoremType)) return true;
   return /∃[\s\S]*∧[\s\S]*∀|∀[\s\S]*∧[\s\S]*∃/.test(theoremType) && /[≤≥<>]/.test(theoremType);
+}
+
+/** The family route: the compatibility graph from Lean, a largest family, a colouring with M colours. */
+async function familyProof(session: ProofSession, fam: NonNullable<ReturnType<typeof parseFamily>>): Promise<{ tactics?: string; reason: string; counterexample?: string }> {
+  const msgs = await session.evaluate(familyEvalCommand(fam), Number(process.env.OPTIMIZE_EVAL_TIMEOUT_MS ?? 60_000));
+  const err = msgs.find((m) => m.severity === "error");
+  if (err) return { reason: `the family's subsets could not be listed: ${err.data.split("\n")[0]}` };
+  const g = msgs.map((m) => readFamilyGraph(m.data)).find((x) => x);
+  if (!g) return { reason: "no subset table from Lean" };
+  if (g.sets.length > 128) return { reason: "more than 7 elements in the ground set" };
+  const best = maxFamily(g, fam.M + 1);
+  if (best.length > fam.M) {
+    const text = best.map((i) => `{${g.sets[i].join(", ")}}`).join(", ");
+    return { reason: `a family of ${best.length} members fits: ${text}`, counterexample: `${best.length} > ${fam.M}: ${text}` };
+  }
+  if (best.length < fam.M) return { reason: `the largest family found has ${best.length} members, not ${fam.M}` };
+  const colours = colourFamily(g, fam.M);
+  if (!colours) return { reason: `no colouring of the subsets with ${fam.M} colours (the bound needs another argument)` };
+  return { tactics: familyScript(fam, g, best, colours), reason: "" };
 }
 
 export interface OptimizationProof {
@@ -30,7 +51,7 @@ export async function optimizationProof(args: {
   theoremType: string;
   expectedSignature?: string;
   useMathlib: boolean;
-}): Promise<{ proof?: OptimizationProof; reason: string }> {
+}): Promise<{ proof?: OptimizationProof; reason: string; counterexample?: string }> {
   const { sessionId, theoremName, theoremType, expectedSignature, useMathlib } = args;
   if (!looksOptimization(theoremType)) return { reason: "not an optimization statement" };
   const heartbeats = Number(process.env.OPTIMIZE_MAX_HEARTBEATS ?? 4_000_000);
@@ -49,6 +70,18 @@ export async function optimizationProof(args: {
   if (typeof opened === "string") return { reason: opened };
   const { run, script, session } = opened;
   try {
+    // "largest family of subsets": a colouring the kernel checks (family.ts), before the generic search
+    const fam = parseFamily(theoremType);
+    if (fam) {
+      const f = await familyProof(session, fam);
+      if (f.tactics) {
+        const source = scriptSource({ theoremName, theoremType, tactics: f.tactics, useMathlib, heartbeats });
+        const verification = await session.verify(sessionId, source, { theoremName, expectedSignature, timeoutMs: Number(process.env.OPTIMIZE_VERIFY_TIMEOUT_MS ?? 300_000) });
+        if (verification.ok) return { proof: { verification, source, tactics: f.tactics }, reason: "" };
+        if (process.env.OPTIMIZE_DEBUG) console.error(`[optimize] family proof did not verify:\n${source}\n${verification.log}`);
+      } else if (f.counterexample) return { reason: f.reason, counterexample: f.counterexample };
+      else if (process.env.OPTIMIZE_DEBUG) console.error(`[optimize] family: ${f.reason}`);
+    }
     const r = await proveOptimization(run, session);
     if (!r.ok) return { reason: r.reason ?? "not proved" };
     const tactics = script.join("\n");

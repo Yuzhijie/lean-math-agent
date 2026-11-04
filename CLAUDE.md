@@ -19,7 +19,7 @@ AI-powered Lean 4 math theorem prover + problem solver. Single-page Next.js app.
 | Lean | Lean 4 + Mathlib v4.33.1 + Batteries + Aesop; verification via persistent `leanprover-community/repl` workers (env reuse, sorry goals, tactic mode, axiom + statement checks), `lake env lean` fallback |
 | Compute | Python SymPy HTTP microservice (9 endpoints) |
 | State | Sessions in SQLite (`.data/sessions.db`, each owned by a user; JSON files with SESSION_BACKEND=json), in-memory cache |
-| Tests | Vitest 5 (132 test files) |
+| Tests | Vitest 5 (133 test files) |
 
 ## Project Structure
 
@@ -249,6 +249,7 @@ lib/
     optimize/                       # Combinatorial optimization proofs the program writes (strategy "optimize"; proveWithoutModel and the theorem pipeline, stage "optimize" before "combinatorics"): `IsGreatest S M` / `IsLeast S M`, `M ∈ upperBounds S`, `(∃ attained) ∧ (∀ bound)`; checked in Lean on 15 statements (products with a fixed sum, coin counts, LP over ℕ, divisor counts, subsets without neighbours, knapsack over Finset (Fin 5), assignments Fin 3 → Fin 3, independent sets, ℤ quadratics, sets behind a let)
       index.ts                      # optimizationProof / looksOptimization (no ℝ/ℚ/ℂ; OPTIMIZE_TIME_LIMIT_MS 180000, _TACTIC_TIMEOUT_MS 120000, _EVAL_TIMEOUT_MS 60000, _VERIFY_TIMEOUT_MS 300000, _MAX_HEARTBEATS 4000000, _MAX_BOX 300000, _DEBUG); opened with `pp.numericTypes true` (goals print `(12 : ℕ)`: the witness search then elaborates the conditions with the statement's types — `12 = ∑ …` alone was "typeclass instance problem is stuck")
       prove.ts                      # the loop: IsGreatest/IsLeast → refine ⟨?_, ?_⟩; upper/lowerBounds → rw [mem_upperBounds]; ∀/→ → intro, then the set's membership (Set.mem_setOf_eq, sets behind lets unfolded), casesm ∧/∃, rename, `subst` x = f; ∃ → the witness (Lean's own search, below) then `refine ⟨w…, ?_⟩` and decide/norm_num; a conjunction is split (`P ∧ ∀ x, A → B` is a conjunction: ∧ before →; ∃ before ∧); a bound → the box: each ℕ/ℤ variable bounded by omega with the smallest candidate from the statement's numbers (a minimum `c ≤ x` first by_contra + push_neg), finite types (Fin, Bool, Finset (Fin n), Fin n → Fin m) enumerated, `s ⊆ X` by X.powerset; `have key : ∀ a ∈ Finset.Icc lo hi, …, H → G := by decide +kernel` and the hypotheses applied; no box → nlinarith with squares around the statement's numbers
+      family.ts                     # "largest family of subsets" (`IsGreatest {t | ∃ F : Finset (Finset ℕ), (∀ A ∈ F, A ⊆ U) ∧ (∀ A ∈ F, ∀ B ∈ F, P A B) ∧ (∀ A ∈ F, R A) ∧ t = F.card} M`, ground set ≤ 7 elements), tried before the generic loop: Lean computes the compatibility graph of U's subsets from the statement's own conditions (familyEvalCommand, `#eval`; sublists of U.sort — Finset.toList is noncomputable), the program finds a largest family (maxFamily: the witness; more than M members → reported as a counterexample) and colours the subsets with M colours so that compatible subsets differ (colourFamily, DSATUR); the proof: the colouring checked by `decide +kernel` over all pairs of subsets, then Finset.card_le_card_of_injOn into range M. Eventown on 6 points (pairwise even intersections ≤ 8 — its textbook proof is linear algebra over 𝔽₂; the attempt had failed after 15 minutes) in 9 s; also antichains (Sperner, 4 points), intersecting families, Oddtown; when no colouring with M colours exists (Eventown on 7 points) it says so and the other routes run
       domain.ts                     # splitExists (binders, typed groups, binder predicates ⊆ ∈ < ≤), candidates per type (ℕ / ℤ in a growing range, Fin, Bool, Finset (Fin n) by bit masks, subsets of X via X.sort, Fin n → Fin m by digits → witness `![…]`), searchProgram (`#eval Id.run do` loops, first tuple printed `w₁¦w₂`; the statement's lets as lets) and readSearchOutput, boxKey / boxSize / boundCandidates
     auto/                           # Tactic-combination search, no model (strategy "auto"; the generic fallback after the program provers in proveWithoutModel and the theorem pipeline, stage "auto")
       index.ts                      # autoProof (AUTO_TIME_LIMIT_MS default 60000 — the search starts no new work after it —, AUTO_TACTIC_TIMEOUT_MS 10000, AUTO_MAX_DEPTH 3, AUTO_MAX_HEARTBEATS, AUTO_DEBUG; `opens` for miniF2F-style statements): opens the statement, searches, verifies the linear script as a whole
@@ -337,7 +338,7 @@ nginx.conf                          # 80 → https redirect (+ ACME), 443 TLS (c
 docs/BETA-DEPLOY.md                 # Invite-only beta deployment guide (Chinese)
 .dockerignore                       # Docker build exclusions
 
-tests/                              # 132 Vitest test files (unit + fake REPL + real-Lean integration)
+tests/                              # 133 Vitest test files (unit + fake REPL + real-Lean integration)
 components/ui/                      # 16 shadcn/ui primitives (+avatar, dropdown-menu, label)
 ```
 
