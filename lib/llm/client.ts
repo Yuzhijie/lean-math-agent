@@ -32,6 +32,11 @@ export interface CallOptions {
    * switch): for transcription, where the output must be in the source's language.
    */
   keepLanguage?: boolean;
+  /**
+   * The timeout is a limit the caller chose (a stage's time is used up), not a fault: a timeout is
+   * logged at info level with this note instead of as an error.
+   */
+  timeoutIsLimit?: string;
 }
 
 // ── Message types for multi-turn conversations ────────────────────────
@@ -577,7 +582,8 @@ async function rawChatMessages(
     // ── Log endpoint failure before trying next fallback ─────────
     if (!endpointSucceeded) {
       const latencyMs = Date.now() - startTime;
-      logLlm("error", config.logLevel, {
+      const limit = options.timeoutIsLimit && /timeout|timed out|aborted/i.test(lastError);
+      logLlm(limit ? "info" : "error", config.logLevel, {
         model: endpoint.model,
         endpoint: endpoint.baseUrl,
         messageCount: messages.length,
@@ -586,7 +592,7 @@ async function rawChatMessages(
         cacheHit: false,
         fallbackUsed: isFallback,
         httpRetries: retriesUsed,
-        error: lastError,
+        error: limit ? `${lastError} (${options.timeoutIsLimit})` : lastError,
       });
     }
   }

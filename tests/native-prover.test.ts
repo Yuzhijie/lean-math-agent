@@ -118,6 +118,27 @@ describe("whole-proof loop with a native prover", () => {
     expect(second.messages[2].content).toContain("does not compile");
   });
 
+  it("asks a local prover for its samples one at a time, each with the stage's time left", async () => {
+    process.env.LLM_PROVER_MODEL = "goedel-prover-v2-8b";
+    const calls: { n: number; timeoutMs?: number; timeoutIsLimit?: string }[] = [];
+    let running = 0;
+    let overlap = false;
+    sampleMock.mockImplementation(async (a: { n: number; timeoutMs?: number; timeoutIsLimit?: string }) => {
+      calls.push({ n: a.n, timeoutMs: a.timeoutMs, timeoutIsLimit: a.timeoutIsLimit });
+      running++;
+      if (running > 1) overlap = true;
+      await new Promise((r) => setTimeout(r, 5));
+      running--;
+      return [`\`\`\`lean4\ntheorem t (n : ℕ) : n + 0 = n := by\n  bad${calls.length}\n\`\`\``];
+    });
+    verifyMock.mockResolvedValue(result({ log: "error: unknown tactic", messages: [{ severity: "error", message: "unknown tactic", line: 4, column: 2 }] }));
+    await proveWholeTheorem({ sessionId: "s", theoremName: "t", theoremType: "(n : ℕ) : n + 0 = n", config: { samples: 2, rounds: 0, timeBudgetMs: 3_600_000, suggest: false } });
+    expect(calls.map((c) => c.n)).toEqual([1, 1]);
+    expect(overlap).toBe(false);
+    expect(calls[0].timeoutIsLimit).toBeTruthy();
+    expect(calls[1].timeoutMs!).toBeLessThanOrEqual(calls[0].timeoutMs!);
+  });
+
   it("keeps the chat prompt for a general model", async () => {
     sampleMock.mockResolvedValueOnce(["```lean\ntheorem t (n : ℕ) : n + 0 = n := by\n  simp\n```"]);
     verifyMock.mockResolvedValue(result({ ok: true, status: "ok", signatureMatch: true }));

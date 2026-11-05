@@ -268,14 +268,43 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
     });
     let samples: string[];
     try {
-      samples = await sampleText({
-        messages,
-        n: cfg.samples,
-        role: "prover",
-        temperature: nativeSettings?.temperature ?? cfg.temperature,
-        maxTokens: nativeSettings ? Math.max(cfg.maxTokens, nativeSettings.maxTokens) : cfg.maxTokens,
-        timeoutMs,
-      });
+      if (nativeSettings && nativeCap > 0) {
+        // A local prover serves one request at a time at full speed: k calls in parallel share it,
+        // and under the stage's time cap every one of them was cut off (two 16k-token proofs from an
+        // 8B model in 5 minutes: both aborted, nothing to check). One at a time, each with the time left.
+        samples = [];
+        let lastError: unknown;
+        for (let i = 0; i < cfg.samples; i++) {
+          const left = nativeLeft();
+          if (i > 0 && left < 90_000) break;
+          try {
+            const got = await sampleText({
+              messages,
+              n: 1,
+              role: "prover",
+              temperature: nativeSettings.temperature ?? cfg.temperature,
+              maxTokens: Math.max(cfg.maxTokens, nativeSettings.maxTokens),
+              timeoutMs: Math.max(30_000, Math.min(timeoutMs ?? Infinity, left)),
+              timeoutIsLimit: lt(`本地证明模型这一阶段的时间（${Math.round(nativeCap / 60_000)} 分钟）用完`, `the local prover's time for this stage (${Math.round(nativeCap / 60_000)} min) is used up`),
+            });
+            samples.push(...got);
+          } catch (e) {
+            if (e instanceof CostCapError || (e instanceof LlmError && /LLM_API_KEY/.test(String(e.message)))) throw e;
+            lastError = e;
+            break;
+          }
+        }
+        if (!samples.length) throw lastError instanceof Error ? lastError : new LlmError(String(lastError ?? "no sample"));
+      } else {
+        samples = await sampleText({
+          messages,
+          n: cfg.samples,
+          role: "prover",
+          temperature: nativeSettings?.temperature ?? cfg.temperature,
+          maxTokens: nativeSettings ? Math.max(cfg.maxTokens, nativeSettings.maxTokens) : cfg.maxTokens,
+          timeoutMs,
+        });
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       log.push(`round ${round}: sampling failed: ${msg}`);
