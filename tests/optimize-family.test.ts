@@ -30,6 +30,15 @@ describe("largest family of subsets", () => {
     expect(parseFamily(": IsGreatest {n : ℕ | n < 5} 4")).toBeUndefined();
   });
 
+  it("takes the members' type as the ground set when no condition names one (Finset (Fin 6))", () => {
+    const st = parseFamily(": IsGreatest {n : ℕ | ∃ F : Finset (Finset (Fin 6)), (∀ A ∈ F, ∀ B ∈ F, Even ((A ∩ B).card)) ∧ n = F.card} 8")!;
+    expect(st.domain).toBe("(Finset.univ : Finset (Fin 6))");
+    expect(st.domainItem.kind).toBe("univ");
+    expect(st.items).toBe(1);
+    // over ℕ a ground set is still needed
+    expect(parseFamily(": IsGreatest {n : ℕ | ∃ F : Finset (Finset ℕ), (∀ A ∈ F, ∀ B ∈ F, Even ((A ∩ B).card)) ∧ n = F.card} 8")).toBeUndefined();
+  });
+
   it("reads Lean's table back", () => {
     const g = readFamilyGraph('"[]|1|11\\n[1]|0|10\\n"')!;
     expect(g.sets).toEqual([[], [1]]);

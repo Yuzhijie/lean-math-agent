@@ -23,7 +23,7 @@ export interface FamilyStatement {
   /** the ground set (Lean text) */
   domain: string;
   /** how the domain condition is written: `∀ A ∈ F, A ⊆ D` (item index) or `F ⊆ D.powerset` */
-  domainItem: { index: number; kind: "subset" | "powerset"; /** `.1` / `.2.1` … when `A ⊆ D` is one part of a conjunction */ proj?: string };
+  domainItem: { index: number; kind: "subset" | "powerset" | "univ"; /** `.1` / `.2.1` … when `A ⊆ D` is one part of a conjunction */ proj?: string };
   /** `∀ A ∈ F, P A` (binder name, body) and `∀ A ∈ F, ∀ B ∈ F, Q A B` */
   unary: { index: number; v: string; body: string }[];
   pairwise: { index: number; a: string; b: string; body: string }[];
@@ -99,7 +99,13 @@ export function parseFamily(theoremType: string): FamilyStatement | undefined {
     }
     st.domainItem.index = -2; // a condition of another kind: not taken
   });
-  if (st.domainItem.index < 0 || !st.pairwise.length || !Number.isInteger(st.M) || st.M < 1) return undefined;
+  // no ground-set condition: the members' type is the ground set (`Finset (Finset (Fin 6))`)
+  const fin = /^Finset \(?Fin (\d+)\)?$/.exec(st.memberType);
+  if (st.domainItem.index === -1 && fin) {
+    st.domain = `(Finset.univ : Finset (Fin ${fin[1]}))`;
+    st.domainItem = { index: -1, kind: "univ" };
+  }
+  if ((st.domainItem.index < 0 && st.domainItem.kind !== "univ") || !st.pairwise.length || !Number.isInteger(st.M) || st.M < 1) return undefined;
   return st;
 }
 
@@ -227,7 +233,7 @@ export function familyScript(st: FamilyStatement, g: FamilyGraph, witness: numbe
     const h = hyp(p.index);
     args.push(`(${h} A hA A hA)`, `(${h} B hB B hB)`, `(${h} A hA B hB)`, `(${h} B hB A hA)`);
   }
-  const dom = st.domainItem.kind === "subset" ? `fun A hA => Finset.mem_powerset.mpr (${hyp(st.domainItem.index)} A hA)${st.domainItem.proj ?? ""}` : `fun A hA => ${hyp(st.domainItem.index)} hA`;
+  const dom = st.domainItem.kind === "univ" ? `fun A _ => Finset.mem_powerset.mpr (Finset.subset_univ A)` : st.domainItem.kind === "subset" ? `fun A hA => Finset.mem_powerset.mpr (${hyp(st.domainItem.index)} A hA)${st.domainItem.proj ?? ""}` : `fun A hA => ${hyp(st.domainItem.index)} hA`;
   return [
     ...(st.lets.length ? [`intro ${st.lets.map((l) => l.name).join(" ")}`] : []),
     `let code : ${T} → ℕ := fun A => A.sum (fun i => 2 ^ (i : ℕ))`,
