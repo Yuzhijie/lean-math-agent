@@ -23,9 +23,9 @@
  *     sign), so `Real.arccos (dot / …) = β` by Real.arccos_cos.
  */
 import { parseTerm, slice, unwrap, type Node } from "./expr";
-import type { GoalState } from "./goal";
+import { isInaccessible as isInaccessibleName, type GoalState } from "./goal";
 import { Frac, NotPolynomial, Poly, toPoly, VarTable } from "./poly";
-import { findCertificate } from "./certificate";
+import { findCertificate, findFieldRoot } from "./certificate";
 import { Fail, haveFirst, heavy, proveNonzero, readFacts, state, tryParse, type Facts } from "./prove";
 import type { TacticRunner } from "../tactic-runner";
 
@@ -247,8 +247,10 @@ interface Ctx {
   sq: Map<string, string>;
   /** sin α ^ 2 + cos α ^ 2 = 1 per angle text */
   pyth: Map<string, string>;
-  /** the relations R1, R2 (names) */
-  rel?: { r1: string; r2: string };
+  /** the relations R1, R2 (names), and R3 (sin θ as a polynomial in cos θ) when N is even */
+  rel?: { r1: string; r2: string; r3?: string };
+  /** unknowns fixed as numbers of the field (fieldRoots): variable → its value's text */
+  roots?: Map<string, { value: string; name: string }>;
 }
 
 const lin = (parts: [Poly, string][], names: string[]): string => {
@@ -261,7 +263,7 @@ async function apply(run: TacticRunner, tactic: string, what: string): Promise<v
 }
 
 /** The trigonometric facts: chain, relations, every cos/sin of the angles as a polynomial in cos θ, sin θ. */
-async function trigSetup(run: TacticRunner, N: number, angles: string[]): Promise<{ r1: string; r2: string }> {
+async function trigSetup(run: TacticRunner, N: number, angles: string[]): Promise<{ r1: string; r2: string; r3?: string }> {
   const k0 = N / 3;
   const theta = `Real.pi / ${N}`;
   const names = [`Real.cos (${theta})`, `Real.sin (${theta})`];
@@ -269,7 +271,9 @@ async function trigSetup(run: TacticRunner, N: number, angles: string[]): Promis
     const q = piMultiple(a)!;
     return Number((q.n * BigInt(N)) / q.d);
   });
-  const K = Math.max(k0, ...ks, 1);
+  // N even: sin θ = cos ((N/2 − 1)θ), a polynomial in cos θ (R3 below)
+  const m3 = N % 2 === 0 && N > 2 ? N / 2 - 1 : 0;
+  const K = Math.max(k0, ...ks, m3, 1);
   const chain = trigChain(K, k0);
   const hR1 = run.fresh("hR");
   await apply(run, `have ${hR1} : Real.sin (${theta}) ^ 2 + Real.cos (${theta}) ^ 2 = 1 := Real.sin_sq_add_cos_sq _`, "sin² + cos²");
@@ -294,6 +298,13 @@ async function trigSetup(run: TacticRunner, N: number, angles: string[]): Promis
       await apply(run, `have ${hR2} : ${chebyshev(k0).toLean(names)} = 1 / 2 := by rw [← Real.cos_pi_div_three, show (Real.pi / 3 : ℝ) = ${k0} * (${theta}) by ring, ${hc[k0]}]`, `cos (${k0}θ) = 1/2`);
     }
   }
+  // R3: sin θ as a polynomial in cos θ — without it the relations also allow s ↦ −s on half of the
+  // conjugates, where the figure's identities fail (∠CBD = 70° in the 20-80-80 triangle had no certificate)
+  let hR3: string | undefined;
+  if (m3 >= 1 && hc[m3] && !chain[m3].cos.vars().has(1)) {
+    const name = run.fresh("hR");
+    if (await run.apply(`have ${name} : Real.sin (${theta}) = ${chain[m3].cos.toLean(names)} := by rw [← Real.cos_pi_div_two_sub, show Real.pi / 2 - ${theta} = ${m3} * (${theta}) by ring]; exact ${hc[m3]}`)) hR3 = name;
+  }
   // the angles themselves
   const seen = new Set<string>();
   for (const [i, a] of angles.entries()) {
@@ -304,7 +315,7 @@ async function trigSetup(run: TacticRunner, N: number, angles: string[]): Promis
       await apply(run, `have ${run.fresh("hang")} : Real.${fn} (${a}) = ${(fn === "cos" ? chain[k].cos : chain[k].sin).toLean(names)} := by rw [show (${a} : ℝ) = ${k} * (${theta}) by ring]; exact ${h}`, `${fn} (${a})`);
     }
   }
-  return { r1: hR1, r2: hR2 };
+  return { r1: hR1, r2: hR2, ...(hR3 ? { r3: hR3 } : {}) };
 }
 
 /** 0 < sin α for an angle in (0, π). */
@@ -325,22 +336,52 @@ function positives(f: Facts): string[] {
   });
 }
 
+/** `expr` with the unknowns fixed by fieldRoots replaced by their values (text), or undefined when none occurs. */
+function substituteRoots(expr: string, roots: Map<string, { value: string; name: string }> | undefined): { text: string; names: string[] } | undefined {
+  if (!roots?.size) return undefined;
+  let text = expr;
+  const names: string[] = [];
+  for (const [v, r] of roots) {
+    const re = new RegExp(`(?<![\\w'.₀-₉])${v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w'₀-₉])`, "g");
+    if (!re.test(text)) continue;
+    text = text.replace(re, `(${r.value})`);
+    names.push(r.name);
+  }
+  return names.length ? { text, names } : undefined;
+}
+
 /** The sign of an expression from the hypotheses: 1, -1 or 0 (unknown); adds the fact. */
-async function proveSign(run: TacticRunner, expr: string): Promise<{ sign: 1 | -1; name: string } | undefined> {
+async function proveSign(run: TacticRunner, expr: string, roots?: Map<string, { value: string; name: string }>): Promise<{ sign: 1 | -1; name: string } | undefined> {
+  // an unknown fixed as a number of the field: the sign of the expression with that number in it
+  const sub = substituteRoots(expr, roots);
+  if (sub) {
+    const s = await proveSign(run, sub.text);
+    if (s) {
+      const name = run.fresh("hside");
+      const stmt = s.sign === 1 ? `0 < ${expr}` : `${expr} < 0`;
+      if (await run.apply(`have ${name} : ${stmt} := by rw [${sub.names.join(", ")}]; exact ${s.name}`)) return { sign: s.sign, name };
+    }
+  }
   const f = readFacts(state(run));
-  // the case facts first, then the statement's own; lengths and sines carry no side information
-  const rank = (name: string) => (/^hside\d+$/.test(name) ? 0 : /^h(dpos|sinpos|den|fac|pos)\d+$/.test(name) ? 2 : 1);
-  const pos = positives({ ...f, lts: [...f.lts].sort((a, b) => rank(a.name) - rank(b.name)).filter((l) => rank(l.name) < 2) }).slice(0, 8);
-  const prods: string[] = [];
-  for (let i = 0; i < pos.length; i++) for (let j = i; j < pos.length; j++) prods.push(`mul_pos ${pos[i]} ${pos[j]}`);
-  const hints = [...pos, ...prods].join(", ");
   const name = run.fresh("hside");
-  for (const [sign, stmt] of [
-    [1, `0 < ${expr}`],
-    [-1, `${expr} < 0`],
-  ] as const) {
-    const proofs = [`by nlinarith only [${hints}]`, `by positivity`];
-    if (await haveFirst(run, name, stmt, proofs)) return { sign, name };
+  // the case facts first, then the statement's own; lengths and sines carry no side information;
+  // the bounds on sin θ / cos θ (hbnd…) only in a second try, with the case facts (as before they
+  // existed, the statement's facts must not lose their places)
+  for (const withBounds of [false, true]) {
+    const rank = (n: string) =>
+      /^hside\d+$/.test(n) ? 0 : /^hbnd\d+$/.test(n) ? (withBounds ? 0 : 3) : /^h(dpos|sinpos|den|fac|pos)\d+$/.test(n) ? 2 : 1;
+    if (withBounds && !f.lts.some((l) => /^hbnd\d+$/.test(l.name))) break;
+    const pos = positives({ ...f, lts: [...f.lts].sort((a, b) => rank(a.name) - rank(b.name)).filter((l) => rank(l.name) < 2) }).slice(0, 8);
+    const prods: string[] = [];
+    for (let i = 0; i < pos.length; i++) for (let j = i; j < pos.length; j++) prods.push(`mul_pos ${pos[i]} ${pos[j]}`);
+    const hints = [...pos, ...prods].join(", ");
+    for (const [sign, stmt] of [
+      [1, `0 < ${expr}`],
+      [-1, `${expr} < 0`],
+    ] as const) {
+      const proofs = withBounds ? [`by nlinarith only [${hints}]`] : [`by nlinarith only [${hints}]`, `by positivity`];
+      if (await haveFirst(run, name, stmt, proofs)) return { sign, name };
+    }
   }
   return undefined;
 }
@@ -381,7 +422,7 @@ async function haveByCertificate(run: TacticRunner, name: string, L: string, R: 
     const s = polyOf(`Real.sin (${theta})`, vars);
     const ci = c ? [...c.vars()][0] : undefined;
     const si = s ? [...s.vars()][0] : undefined;
-    if (ci !== undefined && si !== undefined) field = { c: ci, s: si, r1: ctx.rel.r1, r2: ctx.rel.r2 };
+    if (ci !== undefined && si !== undefined) field = { c: ci, s: si, r1: ctx.rel.r3 ?? ctx.rel.r1, r2: ctx.rel.r2 };
   }
   const cert = await findCertificate({ vars: vars.names.map((_, i) => `v${i}`), hyps, goal, multipliers: [], timeoutSec: 90, ...(field ? { field } : {}) });
   if (!cert.ok) throw new Fail(`${what}: ${cert.reason}`);
@@ -539,7 +580,7 @@ async function sides(ctx: Ctx, angles: Ready[], i: number, goal: Ready, finish: 
 async function closeGoal(ctx: Ctx, g: Angle): Promise<void> {
   const run = ctx.run;
   if (!g.cross) throw new Fail("the asked angle's vectors could not be read");
-  const s = await proveSign(run, g.cross);
+  const s = await proveSign(run, g.cross, ctx.roots);
   if (!s) throw new Fail("could not decide the side of the asked angle");
   const hsin = await sinPos(ctx, g.alpha);
   const X = s.sign === 1 ? `(${g.cross})` : `(-(${g.cross}))`;
@@ -596,7 +637,150 @@ async function closeGoal(ctx: Ctx, g: Angle): Promise<void> {
  * The goal `Real.arccos (…) = q * π` with angle hypotheses of the same kind: steps 1–4. Throws Fail
  * (the caller restores the state and goes on with the general route).
  */
+/** The `√(…)` terms of a text, outermost first (balanced parentheses). */
+function sqrtTexts(text: string): { text: string; arg: string }[] {
+  const out: { text: string; arg: string }[] = [];
+  for (let i = text.indexOf("√("); i >= 0; i = text.indexOf("√(", i + 1)) {
+    let depth = 0;
+    for (let j = i + 1; j < text.length; j++) {
+      if (text[j] === "(") depth++;
+      else if (text[j] === ")" && --depth === 0) {
+        const arg = text.slice(i + 2, j);
+        if (!out.some((o) => o.arg === arg)) out.push({ text: `√(${arg})`, arg });
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Bounds on sin θ (θ = π / N) for sign proofs: θ − θ³/6 < sin θ < θ with 3.14 < π < 3.15, and
+ * 0 < cos θ. Named hbnd… so proveSign uses them first.
+ */
+async function trigBounds(run: TacticRunner, N: number): Promise<void> {
+  const theta = `Real.pi / ${N}`;
+  const hi = `(3.15 / ${N} : ℝ)`;
+  const lo = `(3.14 / ${N} - (3.15 / ${N}) ^ 3 / 6 : ℝ)`;
+  await run.apply(`have ${run.fresh("hbnd")} : Real.sin (${theta}) < ${hi} := by have := Real.sin_lt (show 0 < ${theta} by positivity); linarith only [this, Real.pi_lt_d2]`);
+  await run.apply(
+    `have ${run.fresh("hbnd")} : ${lo} < Real.sin (${theta}) := by\n` +
+      `  have h0 := Real.sin_gt_sub_cube (show 0 < ${theta} by positivity)\n` +
+      `  have h3 : (${theta}) ^ 3 < (3.15 / ${N} : ℝ) ^ 3 := pow_lt_pow_left₀ (by linarith only [Real.pi_lt_d2]) (by positivity) (by norm_num)\n` +
+      `  linarith only [h0, h3, Real.pi_gt_d2]`,
+  );
+  await run.apply(`have ${run.fresh("hbnd")} : 0 < Real.cos (${theta}) := Real.cos_pos_of_mem_Ioo ⟨by linarith only [Real.pi_pos], by linarith only [Real.pi_pos]⟩`);
+}
+
+/**
+ * Nonnegative unknowns whose square is a number of the field (a length t given only through
+ * √(t² · |AC|²) = |BC|): the value F from the certificate script (Gröbner normal form of t², its
+ * square root found numerically and checked exactly), then in Lean (t − F)(t + F) = 0 by a
+ * certificate, F > 0 from the bounds on sin θ, cos θ, and t = F. Later certificates and sign
+ * proofs use it.
+ */
+async function fieldRoots(ctx: Ctx): Promise<boolean> {
+  const run = ctx.run;
+  if (!ctx.rel) return false;
+  // the square of every length in the hypotheses (√(t² x² + t² y²) = |BC| gives t only through it)
+  const known = new Set(state(run).hyps.map((h) => h.type.replace(/\s+/g, "")));
+  for (const h of state(run).hyps)
+    for (const r of sqrtTexts(h.type)) {
+      const fact = `(${r.text}) ^ 2 = ${r.arg}`;
+      if (known.has(fact.replace(/\s+/g, "")) || known.has(`${r.text}^2=${r.arg}`.replace(/\s+/g, ""))) continue;
+      known.add(fact.replace(/\s+/g, ""));
+      await run.apply(heavy(`have ${run.fresh("hsqd")} : ${fact} := Real.sq_sqrt (by positivity)`));
+    }
+  const st = state(run);
+  const f = readFacts(st);
+  const vars = new VarTable(f.realVars);
+  const theta = `Real.pi / ${ctx.N}`;
+  const cp = polyOf(`Real.cos (${theta})`, vars);
+  const sp = polyOf(`Real.sin (${theta})`, vars);
+  const ci = cp ? [...cp.vars()][0] : undefined;
+  const si = sp ? [...sp.vars()][0] : undefined;
+  if (ci === undefined || si === undefined) return false;
+  // the candidates: real variables with a hypothesis 0 ≤ v / 0 < v
+  const nonneg = new Map<string, string>();
+  for (const h of st.hyps) {
+    const m = /^0 (≤|<) ([^\s()]+)$/.exec(h.type.trim()) ?? /^([^\s()]+) (≥|>) 0$/.exec(h.type.trim());
+    if (!m) continue;
+    const v = m[1] === "≤" || m[1] === "<" ? m[2] : m[1];
+    if (f.realVars.has(v) && !isInaccessibleName(h.names[0])) nonneg.set(v, h.names[0]);
+  }
+  // per case of a split: the facts of another case are not in this context
+  ctx.roots = new Map();
+  if (process.env.GEOMETRY_DEBUG) console.error(`[geometry] field roots: candidates ${[...nonneg.keys()].join(", ") || "none"}`);
+  for (const [v, hv0] of nonneg) {
+    if (ctx.roots.has(v)) continue;
+    const vp = polyOf(v, vars);
+    const vi = vp ? [...vp.vars()][0] : undefined;
+    if (vi === undefined) continue;
+    const hyps = contextHyps(state(run), vars);
+    const F = await findFieldRoot({ vars: vars.names.map((_, i) => `v${i}`), hyps, field: { c: ci, s: si }, root: vi, n: ctx.N, timeoutSec: 20 });
+    if (process.env.GEOMETRY_DEBUG) console.error(`[geometry] field root of ${v}: ${F ? F.toLean(vars.names) : "none"}`);
+    if (!F || F.vars().has(vi)) continue;
+    const Ft = F.toLean(vars.names);
+    const key = run.fresh("hroot");
+    try {
+      await haveByCertificate(run, key, `(${v} - (${Ft})) * (${v} + (${Ft}))`, "0", `the value of ${v}`, ctx);
+    } catch (e) {
+      if (e instanceof Fail) continue;
+      throw e;
+    }
+    const pos = run.fresh("hrootpos");
+    const bounds = st.hyps.flatMap((h) => h.names).filter((n) => /^hbnd\d+$/.test(n));
+    const hints = [...bounds, ...bounds.flatMap((a, i) => bounds.slice(i).map((b) => `mul_pos (sub_pos.mpr ${a}) (sub_pos.mpr ${b})`)), ctx.rel.r1, ctx.rel.r2];
+    const ok = await haveFirst(run, pos, `0 < ${Ft}`, [`by positivity`, `by nlinarith [${bounds.join(", ")}]`, `by nlinarith [${hints.join(", ")}]`]);
+    if (!ok) continue;
+    const name = run.fresh("hrooteq");
+    if (!(await run.apply(`have ${name} : ${v} = ${Ft} := by\n  rcases mul_eq_zero.mp ${key} with h | h\n  · linarith only [h]\n  · linarith only [h, ${hv0}, ${pos}]`))) continue;
+    ctx.roots.set(v, { value: Ft, name });
+  }
+  return ctx.roots.size > 0;
+}
+
+/**
+ * A given angle against an axis, written with one length: `Real.arccos (a / √(a ^ 2 + b ^ 2)) = α`
+ * (the other side is a unit vector along an axis). Restated as a dot product of two vectors,
+ * `(a * 1 + b * 0) / (√(a ^ 2 + b ^ 2) * √(1 ^ 2 + 0 ^ 2))`, so it reads like every other angle
+ * (with a cross product for its orientation).
+ */
+async function axisAngles(run: TacticRunner): Promise<void> {
+  const st = state(run);
+  for (const h of st.hyps) {
+    const n = tryParse(h.type);
+    if (!n || n.k !== "bin" || n.op !== "=") continue;
+    const arg = isArccos(n.a);
+    if (!arg) continue;
+    const frac = unwrap(arg);
+    if (frac.k !== "bin" || frac.op !== "/") continue;
+    const root = sqrtOf(h.type, frac.b);
+    if (!root) continue;
+    const sum = tryParse(root.arg);
+    const parts = sum && unwrap(sum);
+    if (!parts || parts.k !== "bin" || parts.op !== "+") continue;
+    const sq = (x: Node) => {
+      const u = unwrap(x);
+      return u.k === "bin" && u.op === "^" && slice(root.arg, u.b).trim() === "2" ? slice(root.arg, u.a) : undefined;
+    };
+    const [a, b] = [sq(parts.a), sq(parts.b)];
+    if (!a || !b) continue;
+    const num = slice(h.type, frac.a).trim();
+    const strip = (x: string) => x.trim().replace(/^\((.*)\)$/, "$1").trim();
+    const dot = strip(num) === strip(a) ? `(${a}) * 1 + (${b}) * 0` : strip(num) === strip(b) ? `(${a}) * 0 + (${b}) * 1` : undefined;
+    if (!dot) continue;
+    const alpha = slice(h.type, n.b);
+    const name = run.fresh("haxis");
+    const x = `(${dot}) / (${root.text} * Real.sqrt (1 ^ 2 + 0 ^ 2))`;
+    await run.apply(
+      `have ${name} : Real.arccos (${x}) = ${alpha} := by rw [show ${x} = ${num} / ${root.text} by rw [show ((1 : ℝ) ^ 2 + 0 ^ 2) = 1 by norm_num, Real.sqrt_one]; ring]; exact ${h.names[0]}`,
+    );
+  }
+}
+
 export async function angleProof(run: TacticRunner): Promise<void> {
+  await axisAngles(run);
   const st0 = state(run);
   const t = tryParse(st0.target);
   if (!t || t.k !== "bin" || t.op !== "=") throw new Fail("not an angle goal");
@@ -659,6 +843,7 @@ export async function angleProof(run: TacticRunner): Promise<void> {
   }
   // 2. trigonometry
   ctx.rel = await trigSetup(run, N, [...ready.map((a) => a.alpha), goal.alpha]);
+  await trigBounds(run, N);
   for (const a of new Set([...ready.map((x) => x.alpha), goal.alpha])) {
     const name = run.fresh("hpyth");
     await apply(run, `have ${name} : Real.sin (${a}) ^ 2 + Real.cos (${a}) ^ 2 = 1 := Real.sin_sq_add_cos_sq _`, "sin² + cos²");
@@ -666,7 +851,19 @@ export async function angleProof(run: TacticRunner): Promise<void> {
     await sinPos(ctx, a); // before any case split, so every case has it
   }
   // 3–4
-  await sides(ctx, ready, 0, { ...goal, dot: "", dpos: "" }, async () => closeGoal(ctx, goal));
+  await sides(ctx, ready, 0, { ...goal, dot: "", dpos: "" }, async () => {
+    // the unknowns given only through their squares are fixed when the plain route needs them (the
+    // Gröbner bases behind fieldRoots cost time on a figure that does not need them)
+    const mark = run.save();
+    try {
+      await closeGoal(ctx, goal);
+    } catch (e) {
+      if (!(e instanceof Fail)) throw e;
+      run.restore(mark);
+      if (!(await fieldRoots(ctx))) throw e;
+      await closeGoal(ctx, goal);
+    }
+  });
 }
 
 export { isArccos as isArccosTerm };

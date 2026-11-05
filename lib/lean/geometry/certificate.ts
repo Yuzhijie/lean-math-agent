@@ -301,3 +301,40 @@ export async function findPoints(req: PointsRequest): Promise<Map<number, number
   if (!r?.ok || !Array.isArray(r.points)) return [];
   return r.points.map((pt) => new Map(Object.entries(pt).map(([k, v]) => [order[Number(k.slice(1))], Number(v)])));
 }
+
+/**
+ * A nonnegative unknown's value in the angle mode's field (mode "root" of the script): F with
+ * F² ≡ v² modulo the hypotheses and R1, R2, or undefined. Lean then proves (v − F)(v + F) = 0 and F > 0.
+ */
+export async function findFieldRoot(req: {
+  vars: string[];
+  hyps: { name: string; poly: Poly }[];
+  field: { c: number; s: number };
+  root: number;
+  n: number;
+  timeoutSec?: number;
+}): Promise<Poly | undefined> {
+  const hyps = req.hyps.filter((h) => fits(h.poly));
+  const used = new Set<number>([req.field.c, req.field.s, req.root]);
+  for (const h of hyps) for (const v of h.poly.vars()) used.add(v);
+  const order = [...used].sort((a, b) => a - b);
+  const to = new Map(order.map((v, i) => [v, i]));
+  const back = new Map(order.map((v, i) => [i, v]));
+  const body = JSON.stringify({
+    mode: "root",
+    vars: order.map((_, i) => `v${i}`),
+    hyps: hyps.map((h, i) => ({ name: `h${i}`, poly: h.poly.rename(to).toSparse() })),
+    field: { c: `v${to.get(req.field.c)}`, s: `v${to.get(req.field.s)}` },
+    root: `v${to.get(req.root)}`,
+    n: req.n,
+    timeout: req.timeoutSec ?? 30,
+  });
+  if (process.env.GEOMETRY_CERT_DUMP) {
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(path.join(process.env.GEOMETRY_CERT_DUMP, `root-${Date.now()}.json`), body);
+  }
+  const raw = (await transport(body, ((req.timeoutSec ?? 30) + 10) * 1000)) as { ok?: boolean; root?: Sparse; reason?: string } | null;
+  if (process.env.GEOMETRY_DEBUG && !raw?.ok) console.error(`[geometry] field root: ${raw?.reason ?? "no answer"}`);
+  if (!raw?.ok || !raw.root) return undefined;
+  return Poly.fromSparse(raw.root).rename(back);
+}

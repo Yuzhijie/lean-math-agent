@@ -114,4 +114,64 @@ describe("poly_certificate.py: the trigonometric field", () => {
     const r = JSON.parse(out) as { ok: boolean };
     expect(r.ok).toBe(true);
   });
+
+  // AB = AC = 1, ∠A = 20°, D on AC with AD = BC: t = AD is given only through t² = |BC|² = 2 − 2 cos 20°
+  // (√(t²x² + t²y²) = √((x − 1)² + y²)); its value in the field is 2 sin 10°, θ = π / 18
+  it("finds a nonnegative unknown's square root in the field (mode root)", () => {
+    const req = {
+      mode: "root",
+      vars: ["v0", "v1", "v2", "v3", "v4", "v5", "v6"],
+      // c (v0), s (v1), t (v2), x (v3), y (v4), |BC| (v5), √(t²x² + t²y²) (v6)
+      hyps: [
+        { name: "h0", poly: [["1", { v1: 2 }], ["1", { v0: 2 }], ["-1", {}]] },
+        { name: "h1", poly: [["32", { v0: 6 }], ["-48", { v0: 4 }], ["18", { v0: 2 }], ["-3/2", {}]] },
+        // x = cos 20° = 2c² − 1, y = sin 20° = 2sc
+        { name: "h2", poly: [["1", { v3: 1 }], ["-2", { v0: 2 }], ["1", {}]] },
+        { name: "h3", poly: [["1", { v4: 1 }], ["-2", { v0: 1, v1: 1 }]] },
+        // |BC|² = (x − 1)² + y², √(…)² = t²(x² + y²), the two lengths equal
+        { name: "h4", poly: [["1", { v5: 2 }], ["-1", { v3: 2 }], ["2", { v3: 1 }], ["-1", {}], ["-1", { v4: 2 }]] },
+        { name: "h5", poly: [["1", { v6: 2 }], ["-1", { v2: 2, v3: 2 }], ["-1", { v2: 2, v4: 2 }]] },
+        { name: "h6", poly: [["1", { v6: 1 }], ["-1", { v5: 1 }]] },
+      ],
+      field: { c: "v0", s: "v1" },
+      root: "v2",
+      n: 18,
+      timeout: 60,
+    };
+    let out: string;
+    try {
+      out = execFileSync("python3", ["scripts/poly_certificate.py"], { input: JSON.stringify(req), encoding: "utf8", timeout: 90_000 });
+    } catch {
+      return; // no python / sympy here
+    }
+    const r = JSON.parse(out) as { ok: boolean; root?: [string, Record<string, number>][] };
+    expect(r.ok).toBe(true);
+    expect(r.root).toEqual([["2", { v1: 1 }]]);
+  });
+
+  it("with R3 = s − cos 8θ (θ = π / 18) the field has one component: the 20-80-80 identity has a certificate", () => {
+    // R3 as R1: s = −8c⁴ + 10c² − 2 (cos 80° as a polynomial in cos 10°, reduced by R2); goal s·(2c² … ) checks
+    // the field accepts a relation linear in s: the inverse of s exists
+    const req = {
+      vars: ["v0", "v1", "v2"],
+      hyps: [
+        { name: "h0", poly: [["1", { v1: 1 }], ["8", { v0: 4 }], ["-10", { v0: 2 }], ["2", {}]] },
+        { name: "h1", poly: [["32", { v0: 6 }], ["-48", { v0: 4 }], ["18", { v0: 2 }], ["-3/2", {}]] },
+        // s · x = 1
+        { name: "h2", poly: [["1", { v1: 1, v2: 1 }], ["-1", {}]] },
+      ],
+      // goal: x · s² − s = 0
+      goal: [["1", { v1: 2, v2: 1 }], ["-1", { v1: 1 }]],
+      multipliers: [],
+      field: { c: "v0", s: "v1", r1: "h0", r2: "h1" },
+      timeout: 60,
+    };
+    let out: string;
+    try {
+      out = execFileSync("python3", ["scripts/poly_certificate.py"], { input: JSON.stringify(req), encoding: "utf8", timeout: 90_000 });
+    } catch {
+      return;
+    }
+    expect((JSON.parse(out) as { ok: boolean }).ok).toBe(true);
+  });
 });

@@ -271,8 +271,12 @@ class Field:
         self.c, self.s = gens[ci], gens[si]
         self.r1, self.r2 = r1, r2
         self.k = r2.poly.degree(self.c)
-        if r1.poly.degree(self.s) != 2 or self.k < 1 or r2.poly.degree(self.s) > 0:
-            raise CertError("field: R1 must be quadratic in s, R2 a polynomial in c")
+        # R1 is s² + c² − 1, or (θ = π / N with N even) s − cos((N/2 − 1)θ) as a polynomial in c: then
+        # sin θ lies in Q(cos θ), and without it the ideal has a second component (s ↦ −s on half of
+        # the conjugates) on which an identity of the figure need not hold
+        self.sdeg = r1.poly.degree(self.s)
+        if self.sdeg not in (1, 2) or self.k < 1 or r2.poly.degree(self.s) > 0:
+            raise CertError("field: R1 must be quadratic (or linear) in s, R2 a polynomial in c")
         others = [g for i, g in enumerate(gens) if i not in (ci, si)]
         self.order = [self.s, self.c, *others]
 
@@ -302,14 +306,14 @@ class Field:
         a, _, _ = self.reduce(a)
         if a.is_zero:
             return None
-        basis = [self.s**i * self.c**j for i in range(2) for j in range(self.k)]
+        basis = [self.s**i * self.c**j for i in range(self.sdeg) for j in range(self.k)]
         ys = sympy.symbols(f"y0:{len(basis)}")
         w_expr = sum(y * b for y, b in zip(ys, basis))
         prod = sympy.expand(a.as_expr() * w_expr)
         _, rem = sympy.reduced(prod, [self.r1.poly.as_expr(), self.r2.poly.as_expr()], self.s, self.c, *ys, order="lex")
         rp = Poly(rem, self.s, self.c)
         eqs = []
-        for i in range(2):
+        for i in range(self.sdeg):
             for j in range(self.k):
                 coeff = rp.coeff_monomial(self.s**i * self.c**j)
                 eqs.append(coeff - (1 if (i, j) == (0, 0) else 0))
@@ -1074,8 +1078,68 @@ def numeric_points(req: dict) -> dict:
     return {"ok": True, "points": [{names[i]: mpmath.nstr(v, 25) for i, v in enumerate(p)} for p in points]}
 
 
+def field_root(req: dict) -> dict:
+    """A nonnegative unknown whose square is a number of the angle mode's field: the normal form of
+    v² modulo the hypotheses (Gröbner basis, lex with v first and c = cos θ, s = sin θ last) must be
+    an element E of Q[c, s]; its square root is found numerically (θ = π / n, PSLQ over the basis
+    s^i c^j) and checked exactly: F² ≡ E modulo R1, R2. The caller proves (v − F)(v + F) = 0 from the
+    hypotheses and F > 0 in Lean."""
+    import mpmath
+
+    names = req.get("vars")
+    if not isinstance(names, list) or not names or len(names) > MAX_VARS or not all(isinstance(n, str) and NAME.match(n) for n in names):
+        raise CertError("vars: a list of plain identifiers")
+    gens = [Symbol(n) for n in names]
+    index = {n: i for i, n in enumerate(names)}
+    fspec = req.get("field") or {}
+    root = req.get("root")
+    if fspec.get("c") not in index or fspec.get("s") not in index or root not in index:
+        raise CertError("root: field c, s and the root variable are needed")
+    n = int(req.get("n", 0))
+    if n < 3 or n > 360:
+        raise CertError("root: n (θ = π / n) out of range")
+    ci, si, vi = index[fspec["c"]], index[fspec["s"]], index[root]
+    hyps = [to_poly(h.get("poly"), gens, index) for h in (req.get("hyps") or []) if isinstance(h, dict)]
+    hyps = [h for h in hyps if not h.is_zero]
+    c, s, v = gens[ci], gens[si], gens[vi]
+    others = [g for i, g in enumerate(gens) if i not in (ci, si, vi)]
+    G = groebner([h.as_expr() for h in hyps], v, *others, s, c, order="lex")
+    if list(G.exprs) == [1]:
+        return {"ok": False, "reason": "the hypotheses are inconsistent"}
+    _, nf = G.reduce(v**2)
+    nf = sympy.expand(nf)
+    if nf.free_symbols - {s, c}:
+        return {"ok": False, "reason": "the square is not a number of the field"}
+    k = sympy.degree(sympy.expand(sympy.chebyshevt(n // 3, c)), c) if n % 3 == 0 else 0
+    if k < 1:
+        return {"ok": False, "reason": "n must be a multiple of 3"}
+    mpmath.mp.dps = 60
+    th = mpmath.pi / n
+    c0, s0 = mpmath.cos(th), mpmath.sin(th)
+    ev = lambda e: sympy.lambdify((s, c), e, "mpmath")(s0, c0)
+    E = ev(nf)
+    if E < -mpmath.mpf(10) ** -40:
+        return {"ok": False, "reason": "the square is negative"}
+    r = mpmath.sqrt(max(E, 0))
+    basis = [s**i * c**j for i in range(2) for j in range(k)]
+    rel = mpmath.pslq([r] + [ev(b) for b in basis], maxcoeff=10**9, maxsteps=10**6)
+    if not rel or rel[0] == 0:
+        return {"ok": False, "reason": "no square root in the field"}
+    F = -sum(Rational(rel[j + 1], rel[0]) * basis[j] for j in range(len(basis)))
+    R1 = s**2 + c**2 - 1
+    R2 = sympy.expand(sympy.chebyshevt(n // 3, c) - Rational(1, 2))
+    _, rem = sympy.reduced(sympy.expand(F**2 - nf), [R1, R2], s, c, order="lex")
+    if sympy.expand(rem) != 0:
+        return {"ok": False, "reason": "the numeric square root is not exact"}
+    return {"ok": True, "root": from_poly(Poly(F, *gens, domain=QQ), names), "square": from_poly(Poly(nf, *gens, domain=QQ), names)}
+
+
 def dispatch(req: dict) -> dict:
-    return numeric_points(req) if req.get("mode") == "points" else certificate(req)
+    if req.get("mode") == "points":
+        return numeric_points(req)
+    if req.get("mode") == "root":
+        return field_root(req)
+    return certificate(req)
 
 
 def request_timeout(req: Any, default: float = 30.0) -> float:
