@@ -73,6 +73,22 @@ export interface TheoremPipelineOptions {
   sketch?: boolean;
   /** Search budget preset: low | normal | high (default PROOF_BUDGET, normal). */
   budget?: string;
+  /**
+   * Run the formal proof as part of this solve. A geometry proof problem otherwise stops after the
+   * natural-language proof: its Lean proof (minutes) is started by hand from the Lean tab.
+   */
+  lean_attempt?: boolean;
+}
+
+/** Strong signs of a plane-geometry problem; a weaker word needs a second one. */
+const GEOMETRY_STRONG = /[∠△⊙▱]|三角形|圆|四边形|平行四边形|梯形|菱形|矩形|正方形|垂足|外心|内心|垂心|重心|triangle|circle|quadrilateral|parallelogram|trapezoid|rhombus|rectangle|circumcent|incent|orthocent|centroid/i;
+const GEOMETRY_WEAK = /垂直|平行|中点|角平分线|切线|弦|线段|直线|延长|交于|共线|共圆|perpendicular|parallel|midpoint|bisector|tangent|chord|segment|collinear|concyclic|extended|intersect/gi;
+
+/** A plane-geometry problem (by its wording): its formal proof is a separate step started by hand. */
+export function looksGeometryProblem(text: string): boolean {
+  if (GEOMETRY_STRONG.test(text)) return true;
+  const weak = new Set((text.match(GEOMETRY_WEAK) ?? []).map((w) => w.toLowerCase()));
+  return weak.size >= 2;
 }
 
 export interface TheoremPipelineArgs {
@@ -105,6 +121,18 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
     } catch (e) {
       emit("nl_solving", lt(`⚠️ 自然语言解答失败: ${e instanceof Error ? e.message : "未知错误"}`, `⚠️ Natural-language solution failed: ${e instanceof Error ? e.message : "unknown error"}`));
     }
+  }
+
+  // ── Geometry proofs: the natural-language proof is the solve; the Lean proof (formalization,
+  //    the coordinate prover — often minutes) is started by hand from the Lean tab (/api/lean-attempt).
+  if (!opts.skip_autoformalize && opts.lean_attempt !== true && looksGeometryProblem(session.problem_text)) {
+    const manual: LeanProofAttempt = { attempted: false, success: false };
+    updateSession(session.id, { proof_problem: true, lean_proof_attempt: manual, pipeline_stage: "complete" });
+    emit("complete", lt("几何证明题：自然语言证明已给出；Lean 形式化证明请在 Lean 标签页手动开始", "Geometry proof: the natural-language proof is ready; start the Lean formal proof by hand from the Lean tab"));
+    return {
+      status: 200,
+      body: { session_id: session.id, problem_type: "theorem", nl_solution: nlSolution, lean_proof_attempt: manual },
+    };
   }
 
   // ── 2. Autoformalize + statement lock ────────────────────────────────

@@ -8,8 +8,9 @@ import { modelRoute } from "@/lib/model-route";
 
 /**
  * The last solving step, started by hand: Lean 4 formalization of a solved
- * computational / optimization / find-all-values problem. Theorem problems
- * are formalized as part of solving and have their own proof steps.
+ * computational / optimization / find-all-values problem, or of a geometry proof problem
+ * (proof_problem: the claim itself is formalized, no answer). Other theorem problems are
+ * formalized as part of solving and have their own proof steps.
  */
 async function handlePOST(req: Request) {
   const body = (await req.json().catch(() => ({}))) as { session_id?: string };
@@ -30,7 +31,7 @@ async function handlePOST(req: Request) {
     let attempt;
     try {
       attempt = await attemptLeanFormalization(session.problem_text, {
-        answers: answerCandidates(session),
+        answers: session.proof_problem ? [] : answerCandidates(session),
         solution: session.nl_solution,
         sessionId: session.id,
         // "Try again" after a failure searches harder than the first attempt.
