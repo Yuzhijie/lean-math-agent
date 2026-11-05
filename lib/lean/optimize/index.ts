@@ -12,12 +12,26 @@ import { openRunner, scriptSource } from "../tactic-runner";
 import { proveOptimization } from "./prove";
 import { colourFamily, familyEvalCommand, familyScript, maxFamily, parseFamily, readFamilyGraph } from "./family";
 import type { ProofSession } from "../proof-state";
+import { ekrScript, ekrShape, groundEvalCommand, readGround } from "./ekr";
+import { vennOptimize } from "./venn";
 
 /** IsGreatest / IsLeast / bounds, or a conjunction of an ∃ and a ∀ (attained + bound). */
 export function looksOptimization(theoremType: string): boolean {
   if (looksGeometric(theoremType) || /ℝ|ℚ|ℂ/.test(theoremType)) return false;
   if (/\b(IsGreatest|IsLeast|upperBounds|lowerBounds)\b/.test(theoremType)) return true;
   return /∃[\s\S]*∧[\s\S]*∀|∀[\s\S]*∧[\s\S]*∃/.test(theoremType) && /[≤≥<>]/.test(theoremType);
+}
+
+/** k-sets of D, any two meet: Erdős–Ko–Rado from Mathlib (ekr.ts), with D listed by Lean. */
+async function ekrProof(session: ProofSession, fam: NonNullable<ReturnType<typeof parseFamily>>): Promise<{ tactics?: string; reason: string; counterexample?: string } | undefined> {
+  const shape = ekrShape(fam);
+  if (!shape) return undefined;
+  const msgs = await session.evaluate(groundEvalCommand(fam), Number(process.env.OPTIMIZE_EVAL_TIMEOUT_MS ?? 60_000));
+  const err = msgs.find((m) => m.severity === "error");
+  if (err) return { reason: `the ground set could not be listed: ${err.data.split("\n")[0]}` };
+  const ground = msgs.map((m) => readGround(m.data)).find((x) => x);
+  if (!ground || ground.length > 200) return { reason: "no ground set from Lean" };
+  return ekrScript(fam, shape, ground);
 }
 
 /** The family route: the compatibility graph from Lean, a largest family, a colouring with M colours. */
@@ -73,6 +87,16 @@ export async function optimizationProof(args: {
     // "largest family of subsets": a colouring the kernel checks (family.ts), before the generic search
     const fam = parseFamily(theoremType);
     if (fam) {
+      const ekr = await ekrProof(session, fam);
+      if (ekr?.tactics) {
+        const source = scriptSource({ theoremName, theoremType, tactics: ekr.tactics, useMathlib, heartbeats });
+        const verification = await session.verify(sessionId, source, { theoremName, expectedSignature, timeoutMs: Number(process.env.OPTIMIZE_VERIFY_TIMEOUT_MS ?? 300_000) });
+        if (verification.ok) return { proof: { verification, source, tactics: ekr.tactics }, reason: "" };
+        if (process.env.OPTIMIZE_DEBUG) console.error(`[optimize] Erdős–Ko–Rado proof did not verify:\n${source}\n${verification.log}`);
+      } else if (ekr?.counterexample) return { reason: ekr.reason, counterexample: ekr.counterexample };
+      else if (ekr && process.env.OPTIMIZE_DEBUG) console.error(`[optimize] Erdős–Ko–Rado: ${ekr.reason}`);
+    }
+    if (fam) {
       const f = await familyProof(session, fam);
       if (f.tactics) {
         const source = scriptSource({ theoremName, theoremType, tactics: f.tactics, useMathlib, heartbeats });
@@ -81,6 +105,20 @@ export async function optimizationProof(args: {
         if (process.env.OPTIMIZE_DEBUG) console.error(`[optimize] family proof did not verify:\n${source}\n${verification.log}`);
       } else if (f.counterexample) return { reason: f.reason, counterexample: f.counterexample };
       else if (process.env.OPTIMIZE_DEBUG) console.error(`[optimize] family: ${f.reason}`);
+    }
+    // card conditions on a few sets (Venn regions): region sizes as witness, regions + omega as bound
+    if (!fam && /∃ (?:[^\s(),:]+ )+: Finset /.test(theoremType) && /\.card\b/.test(theoremType)) {
+      const mark = run.save();
+      const v = await vennOptimize(run, theoremType);
+      if (v.ok) {
+        const tactics = script.join("\n");
+        const source = scriptSource({ theoremName, theoremType, tactics, useMathlib, heartbeats });
+        const verification = await session.verify(sessionId, source, { theoremName, expectedSignature, timeoutMs: Number(process.env.OPTIMIZE_VERIFY_TIMEOUT_MS ?? 300_000) });
+        if (verification.ok) return { proof: { verification, source, tactics }, reason: "" };
+        if (process.env.OPTIMIZE_DEBUG) console.error(`[optimize] Venn proof did not verify:\n${source}\n${verification.log}`);
+      } else if (v.counterexample) return { reason: v.reason, counterexample: v.counterexample };
+      else if (process.env.OPTIMIZE_DEBUG) console.error(`[optimize] Venn: ${v.reason}`);
+      run.restore(mark);
     }
     const r = await proveOptimization(run, session);
     if (!r.ok) return { reason: r.reason ?? "not proved" };

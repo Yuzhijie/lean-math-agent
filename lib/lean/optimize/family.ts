@@ -23,7 +23,7 @@ export interface FamilyStatement {
   /** the ground set (Lean text) */
   domain: string;
   /** how the domain condition is written: `∀ A ∈ F, A ⊆ D` (item index) or `F ⊆ D.powerset` */
-  domainItem: { index: number; kind: "subset" | "powerset" };
+  domainItem: { index: number; kind: "subset" | "powerset"; /** `.1` / `.2.1` … when `A ⊆ D` is one part of a conjunction */ proj?: string };
   /** `∀ A ∈ F, P A` (binder name, body) and `∀ A ∈ F, ∀ B ∈ F, Q A B` */
   unary: { index: number; v: string; body: string }[];
   pairwise: { index: number; a: string; b: string; body: string }[];
@@ -79,10 +79,15 @@ export function parseFamily(theoremType: string): FamilyStatement | undefined {
     }
     const one = new RegExp(`^∀ (${NAME}) ∈ ${F}, ([\\s\\S]+)$`).exec(it);
     if (one) {
-      const sub = new RegExp(`^${one[1]} ⊆ ([\\s\\S]+)$`).exec(one[2]);
-      if (sub && st.domainItem.index < 0) {
-        st.domain = stripParens(sub[1]);
-        st.domainItem = { index, kind: "subset" };
+      // `A ⊆ D`, alone or as one part of a conjunction (`A ⊆ D ∧ A.card = 4`)
+      const parts = conjuncts(one[2]);
+      const at = parts.findIndex((q) => new RegExp(`^${one[1]} ⊆ `).test(q));
+      if (at >= 0 && st.domainItem.index < 0) {
+        st.domain = stripParens(parts[at].slice(parts[at].indexOf("⊆") + 1).trim());
+        const proj = parts.length === 1 ? "" : at < parts.length - 1 ? ".2".repeat(at) + ".1" : ".2".repeat(at);
+        st.domainItem = { index, kind: "subset", proj };
+        // the other parts are conditions on each member (the whole body: the domain part is harmless)
+        if (parts.length > 1) st.unary.push({ index, v: one[1], body: one[2] });
       } else st.unary.push({ index, v: one[1], body: one[2] });
       return;
     }
@@ -222,7 +227,7 @@ export function familyScript(st: FamilyStatement, g: FamilyGraph, witness: numbe
     const h = hyp(p.index);
     args.push(`(${h} A hA A hA)`, `(${h} B hB B hB)`, `(${h} A hA B hB)`, `(${h} B hB A hA)`);
   }
-  const dom = st.domainItem.kind === "subset" ? `fun A hA => Finset.mem_powerset.mpr (${hyp(st.domainItem.index)} A hA)` : `fun A hA => ${hyp(st.domainItem.index)} hA`;
+  const dom = st.domainItem.kind === "subset" ? `fun A hA => Finset.mem_powerset.mpr (${hyp(st.domainItem.index)} A hA)${st.domainItem.proj ?? ""}` : `fun A hA => ${hyp(st.domainItem.index)} hA`;
   return [
     ...(st.lets.length ? [`intro ${st.lets.map((l) => l.name).join(" ")}`] : []),
     `let code : ${T} → ℕ := fun A => A.sum (fun i => 2 ^ (i : ℕ))`,

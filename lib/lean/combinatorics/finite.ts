@@ -25,7 +25,12 @@ export async function introAll(run: TacticRunner): Promise<string[]> {
       lets.push(l[1]);
       continue;
     }
-    const all = /^∀ \(?([A-Za-z_][\w'₀-₉]*)/.exec(t);
+    // an instance binder `∀ [inst : Fintype α]` / `[Fintype α] →`: intro without a name
+    if (/^∀ \[/.test(t) || /^\[[^\]]*\] →/.test(t)) {
+      if (!(await run.apply("intro"))) break;
+      continue;
+    }
+    const all = /^∀ \(?([^\s(),:\[\]{}]+)/.exec(t);
     if (all) {
       if (!(await run.apply(`intro ${all[1]}`)) && !(await run.apply("intro"))) break;
       continue;
