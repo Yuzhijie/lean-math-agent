@@ -6,6 +6,7 @@ import { isInaccessible, type GoalState } from "../geometry/goal";
 import { goalShape, nlinarithHints } from "../hammer";
 import { relation } from "../induction/prove";
 import { topIndex } from "../combinatorics/lets";
+import { divisibilityFinishers } from "./divbound";
 
 export interface Splitter {
   tactic: string;
@@ -89,9 +90,32 @@ export function finishers(st: GoalState): string[] {
     const [a, b] = bounded;
     for (const fin of ["omega", "simp_all", "norm_num at *"]) add(`(interval_cases ${a} <;> interval_cases ${b} <;> ${fin})`);
   }
+  // a ∣ hypothesis a·n + b ∣ P(n): n is bounded, then every value is checked
+  if (st.hyps.some((h) => / ∣ /.test(h.type))) add(...divisibilityFinishers(st));
   // anything closed and finite: the kernel computes it
   if (!st.hyps.some((h) => isNumType(h.type))) add("decide +kernel");
   add("aesop");
+  return out;
+}
+
+/** The denominators of a text that are not plain numbers: `/ (x + 1)`, `/ x` (distinct, as written). */
+export function denominators(s: string): string[] {
+  const out: string[] = [];
+  for (let i = s.indexOf("/ "); i >= 0; i = s.indexOf("/ ", i + 1)) {
+    let j = i + 2;
+    let d: string | undefined;
+    if (s[j] === "(") {
+      let depth = 0;
+      for (let k = j; k < s.length; k++) {
+        if (s[k] === "(") depth++;
+        else if (s[k] === ")" && --depth === 0) {
+          d = s.slice(j, k + 1);
+          break;
+        }
+      }
+    } else d = /^[A-Za-z_][\w'₀-₉]*/.exec(s.slice(j))?.[0];
+    if (d && !/^\(?[\d.\s]+\)?$/.test(d) && !out.includes(d)) out.push(d);
+  }
   return out;
 }
 
@@ -123,7 +147,13 @@ export function splitters(st: GoalState, fresh: (base: string) => string): Split
     const n = h.names[0];
     if (h.names.length !== 1 || isInaccessible(n)) continue;
     const ty = h.type.trim();
-    if (/^∃/.test(ty) || (topIndex(ty, " ∧ ") >= 0 && !/^∀/.test(ty))) out.push({ tactic: `obtain ⟨${fresh("x")}, ${fresh("h")}⟩ := ${n}`, kind: "destruct" });
+    if (/^∃/.test(ty)) out.push({ tactic: `obtain ⟨${fresh("x")}, ${fresh("h")}⟩ := ${n}`, kind: "destruct" });
+    else if (topIndex(ty, " ∧ ") >= 0 && !/^∀/.test(ty)) {
+      // every conjunct at once (one level of the search, not one per ∧)
+      let k = 1;
+      for (let rest = ty; topIndex(rest, " ∧ ") >= 0; k++) rest = rest.slice(topIndex(rest, " ∧ ") + 3);
+      out.push({ tactic: `obtain ⟨${Array.from({ length: Math.min(k, 8) }, () => fresh("h")).join(", ")}⟩ := ${n}`, kind: "destruct" });
+    }
     else if (topIndex(ty, " ↔ ") >= 0 && !/^∀/.test(ty)) out.push({ tactic: `obtain ⟨${fresh("h")}, ${fresh("h")}⟩ := ${n}`, kind: "destruct" });
   }
   // the target's structure
@@ -152,6 +182,13 @@ export function splitters(st: GoalState, fresh: (base: string) => string): Split
   }
   const abs = firstAbs(t) ?? st.hyps.map((h) => firstAbs(h.type)).find(Boolean);
   if (abs) out.push({ tactic: `rcases abs_cases (${abs}) with ⟨${fresh("h")}, ${fresh("h")}⟩ | ⟨${fresh("h")}, ${fresh("h")}⟩`, kind: "abs" });
+  // fractions with variable denominators: each shown nonzero from the hypotheses, then cleared
+  // (the certificate finisher closes the polynomial equation left: 1/(x+1) + 1/(y+1) + 1/(z+1) = 5/4)
+  const dens = denominators(t);
+  if (dens.length && dens.length <= 4) {
+    const haves = dens.map((d) => `have ${fresh("hden")} : ${d} ≠ 0 := (by first | positivity | exact ne_of_gt (by nlinarith) | exact ne_of_lt (by nlinarith))`);
+    out.push({ tactic: `(${haves.join("; ")}; field_simp)`, kind: "rewrite" });
+  }
   // rewriting steps (each must change the goal)
   const defs = st.hyps.filter((h) => /^∀/.test(h.type.trim()) && / = /.test(h.type)).flatMap((h) => h.names).filter((n) => !isInaccessible(n)).slice(0, 4);
   if (defs.length) out.push({ tactic: `simp only [${defs.join(", ")}] at *`, kind: "rewrite" });

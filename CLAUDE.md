@@ -19,7 +19,7 @@ AI-powered Lean 4 math theorem prover + problem solver. Single-page Next.js app.
 | Lean | Lean 4 + Mathlib v4.33.1 + Batteries + Aesop; verification via persistent `leanprover-community/repl` workers (env reuse, sorry goals, tactic mode, axiom + statement checks), `lake env lean` fallback |
 | Compute | Python SymPy HTTP microservice (9 endpoints) |
 | State | Sessions in SQLite (`.data/sessions.db`, each owned by a user; JSON files with SESSION_BACKEND=json), in-memory cache |
-| Tests | Vitest 5 (136 test files) |
+| Tests | Vitest 5 (137 test files) |
 
 ## Project Structure
 
@@ -257,7 +257,8 @@ lib/
       index.ts                      # autoProof (AUTO_TIME_LIMIT_MS default 60000 — the search starts no new work after it —, AUTO_TACTIC_TIMEOUT_MS 10000, AUTO_MAX_DEPTH 3, AUTO_MAX_HEARTBEATS, AUTO_DEBUG; `opens` for miniF2F-style statements): opens the statement, searches, verifies the linear script as a whole
       search.ts                     # AND/OR search over tactic states: close the main goal with a finisher (`· tac`, must close it), else a splitter and then each goal it made in order (recursively, depth ≤ 3), undone when one resists; goals known to resist (and the goals on the current path) are not tried again; the applied tactics are a linear script (each new goal is the main goal in turn)
       certificate.ts                # an equation that follows from the equation hypotheses over ℝ/ℚ/ℤ/ℂ: coefficients from scripts/poly_certificate.py (the geometry certificate search, no multipliers) → `linear_combination Σ cᵢ * hᵢ`; tried after the finishers
-      tactics.ts                    # finishers by the goal's relation (= : rfl/norm_num/simp/ring/omega/linarith/field_simp/linear_combination h/nlinarith with hammer's hints and squares around the statement's small numbers (a - 1)²; ≤ < : linarith/positivity/nlinarith; definitions given as `∀ x, f x = …` hypotheses: norm_num [f-defs] / simp only [defs] at * then linarith/nlinarith; a cast integer unknown `x = 575` with real hypotheses: exact_mod_cast (show ((x : ℝ)) = 575 by norm_num at *; linarith); ∣ ; ≠ ; False : simp_all/omega/contradiction; closed goals: decide +kernel; aesop last) and splitters (intro, obtain on ∧/∃/↔ hypotheses, constructor on ∧/↔, rcases on ∨ hypotheses, interval_cases for an ℕ/ℤ variable bounded by ≤ 40, left/right, `use c` with the statement's numbers and 0/1/2, rcases abs_cases for the first |…|, subst_vars / norm_num at * / push_cast at *, by_contra + push_neg)
+      divbound.ts                   # "find every n" with a hypothesis a·n + b ∣ P(n) over ℕ: a^d·P = (a·n + b)·Q + r computed by the program (r a nonzero integer, Q with integer coefficients), in ℤ the divisor divides r, so n ≤ (|r| − b)/a (Int.le_of_dvd, omega), then `interval_cases n` (bounds ≤ 150) — one finisher; n + 5 ∣ n² + 14 ∧ 2n + 1 ∣ n² + 4 ↔ n = 8 had defeated every route, now 24 s
+      tactics.ts                    # finishers by the goal's relation (= : rfl/norm_num/simp/ring/omega/linarith/field_simp/linear_combination h/nlinarith with hammer's hints and squares around the statement's small numbers (a - 1)²; ≤ < : linarith/positivity/nlinarith; definitions given as `∀ x, f x = …` hypotheses: norm_num [f-defs] / simp only [defs] at * then linarith/nlinarith; a cast integer unknown `x = 575` with real hypotheses: exact_mod_cast (show ((x : ℝ)) = 575 by norm_num at *; linarith); ∣ ; ≠ ; False : simp_all/omega/contradiction; closed goals: decide +kernel; aesop last) and splitters (intro, obtain on ∧ (every conjunct at once)/∃/↔ hypotheses, fractions with variable denominators — each shown ≠ 0 by positivity / nlinarith from the hypotheses, then field_simp, the certificate finisher closing the polynomial equation (x + y + z = 5, x² + y² + z² = 11, x³ + y³ + z³ = 29 ⇒ Σ 1/(x + 1) = 5/4) —, constructor on ∧/↔, rcases on ∨ hypotheses, interval_cases for an ℕ/ℤ variable bounded by ≤ 40, left/right, `use c` with the statement's numbers and 0/1/2, rcases abs_cases for the first |…|, subst_vars / norm_num at * / push_cast at *, by_contra + push_neg)
     goal-statement.ts               # A printed goal state → lemma statement (hypotheses as binders with the same names, inaccessible names renamed, instances as [..], universes as Type*), for proving a sketch hole on its own
     statement-prop.ts               # Binder-form theorem type → one proposition (∀ binders, goal); top-level colon split
     modernize.ts                    # Rewrites removed/Lean 3 syntax in model output (∑ x in s → ∑ x ∈ s, cases … with x → cases', λ x, e) and renamed lemma names (renamed.ts: RENAMED_LEMMAS, renameOldLemmas — e.g. Real.sqrt_eq_iff_sq_eq → Real.sqrt_eq_iff_eq_sq, also bare under `open Real`) before verification
@@ -340,7 +341,7 @@ nginx.conf                          # 80 → https redirect (+ ACME), 443 TLS (c
 docs/BETA-DEPLOY.md                 # Invite-only beta deployment guide (Chinese)
 .dockerignore                       # Docker build exclusions
 
-tests/                              # 136 Vitest test files (unit + fake REPL + real-Lean integration)
+tests/                              # 137 Vitest test files (unit + fake REPL + real-Lean integration)
 components/ui/                      # 16 shadcn/ui primitives (+avatar, dropdown-menu, label)
 ```
 
