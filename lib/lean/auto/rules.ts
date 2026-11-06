@@ -20,6 +20,7 @@ import { goalShape, nlinarithHints } from "../hammer";
 import { relation } from "../induction/prove";
 import { topIndex } from "../combinatorics/lets";
 import { divisibilityFinishers } from "./divbound";
+import { doubleCountFinishers } from "./doublecount";
 import { boundedVars, defInstances, denominators, firstAbs, gcdLcm, goalText, hypNames, isNumType, MAX_INTERVAL, NUMBERS, sqrtArgs } from "./helpers";
 import { learnedScore } from "./stats";
 
@@ -153,6 +154,7 @@ export const BUILTIN_RULES: Rule[] = [
     return ["omega", "simp_all", "norm_num at *"].map((f) => `(interval_cases ${b[0]} <;> interval_cases ${b[1]} <;> ${f})`);
   }),
   fin("divisibility-bound", "a·n + b ∣ P(n): n bounded through the remainder, then every value (divbound.ts)", (g) => (g.st.hyps.some((h) => / ∣ /.test(h.type)) ? divisibilityFinishers(g.st) : [])),
+  fin("double-counting", "sets over U, each element in r of them, pairwise intersections k: C(m,2)·k = |U|·C(r,2) (doublecount.ts)", (g) => (g.st.hyps.some((h) => /→ Finset /.test(h.type)) ? doubleCountFinishers(g.st) : [])),
   fin("kernel", "closed and finite: the kernel computes it", (g) => (!g.st.hyps.some((h) => isNumType(h.type)) ? ["decide +kernel"] : [])),
   fin("aesop", "aesop, last", () => ["aesop"]),
 
