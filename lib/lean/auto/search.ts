@@ -11,6 +11,7 @@ import { parseGoal } from "../geometry/goal";
 import type { TacticRunner } from "../tactic-runner";
 import { finisherEntries, splitterEntries, type Splitter } from "./rules";
 import { RuleTally } from "./stats";
+import { noteLearnedUse } from "./learned";
 import { certificateTactic } from "./certificate";
 import { linearValuesTactic } from "./linear";
 import { isInaccessible } from "../geometry/goal";
@@ -20,6 +21,8 @@ export interface AutoOptions {
   maxDepth?: number;
   /** Stop starting new work after this time (ms since epoch). */
   deadline: number;
+  /** namespaces the statement was opened with (learned proofs need the same) */
+  opens?: string[];
 }
 
 export interface AutoStats {
@@ -59,7 +62,8 @@ export async function autoSearch(run: TacticRunner, opts: AutoOptions): Promise<
     const st = parseGoal(g);
     if (!st) return false;
     const n0 = run.goals().length;
-    for (const f of finisherEntries(st)) {
+    for (const f of finisherEntries(st, { opens: opts.opens })) {
+      if (triedAtRoot.has(`${key}\u0000${f.tactic}`)) continue;
       if ((await apply(bullet(f.tactic), f.rule)) && run.goals().length === n0 - 1) {
         tally.worked(f.rule);
         used.push(f.rule);
@@ -124,7 +128,25 @@ export async function autoSearch(run: TacticRunner, opts: AutoOptions): Promise<
   }
 
   let proved = false;
+  /** learned proofs already tried on the statement as opened (not again on the same goal) */
+  const triedAtRoot = new Set<string>();
   try {
+    // a learned proof starts from the statement as opened, before any intro
+    const first = run.goals()[0] && parseGoal(run.goals()[0]);
+    if (first) {
+      for (const f of finisherEntries(first, { opens: opts.opens }).filter((e) => e.rule.startsWith("learned:"))) {
+        const mark = run.save();
+        triedAtRoot.add(`${norm(run.goals()[0])}\u0000${f.tactic}`);
+        if ((await apply(bullet(f.tactic), f.rule)) && run.goals().length === 0) {
+          tally.worked(f.rule);
+          stats.rules = [f.rule];
+          tally.proof(stats.rules);
+          proved = true;
+          return { ok: true, stats };
+        }
+        run.restore(mark);
+      }
+    }
     await normalize();
     proved = (await solveMain(0, new Set())) && run.goals().length === 0;
     if (proved) {
@@ -137,5 +159,8 @@ export async function autoSearch(run: TacticRunner, opts: AutoOptions): Promise<
     throw e;
   } finally {
     tally.flush(proved);
+    const learned = new Map<string, { tried: number; hits: number }>();
+    for (const [id, c] of tally.rules) if (id.startsWith("learned:")) learned.set(id.slice(8), { tried: c.tried, hits: c.worked });
+    noteLearnedUse(learned);
   }
 }

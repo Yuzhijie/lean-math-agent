@@ -72,7 +72,11 @@ export async function rememberVerifiedProof(args: {
   opens?: string[];
 }): Promise<boolean> {
   try {
-    return (await rememberProof({ ...args, source: args.source ?? "solve" })) !== undefined;
+    const kept = (await rememberProof({ ...args, source: args.source ?? "solve" })) !== undefined;
+    // a proof the program did not find by itself becomes a rule of the tactic search (in the background)
+    const { learnFromProof, worthLearning } = await import("../lean/auto/learned");
+    if (kept && worthLearning(args.strategy, args.source ?? "solve")) void learnFromProof({ theoremName: args.theoremName, theoremType: args.theoremType, tactics: args.tactics, strategy: args.strategy, source: args.source ?? "solve", opens: args.opens });
+    return kept;
   } catch {
     return false;
   }

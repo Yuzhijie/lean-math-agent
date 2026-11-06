@@ -39,7 +39,7 @@ export async function autoProof(args: {
   if (typeof opened === "string") return { reason: opened };
   const { run, script, session } = opened;
   try {
-    const { ok, stats } = await autoSearch(run, { deadline: Date.now() + limit, maxDepth: Number(process.env.AUTO_MAX_DEPTH ?? 3) });
+    const { ok, stats } = await autoSearch(run, { deadline: Date.now() + limit, maxDepth: Number(process.env.AUTO_MAX_DEPTH ?? 3), opens });
     if (!ok) return { reason: `no combination closed every goal (${stats.tactics} tactics tried)`, stats };
     const tactics = script.join("\n");
     const source = scriptSource({ theoremName, theoremType, tactics, useMathlib, opens, heartbeats: Number(process.env.AUTO_MAX_HEARTBEATS ?? 1_000_000) });

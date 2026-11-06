@@ -133,7 +133,11 @@ rw [hpf_form, hpf_a, hpf_n]
 simp`;
 }
 
+/** Names the script binds itself: a statement using one of them for P / its hypotheses is left alone. */
+const SCRIPT_NAMES = new Set("x hne S hS m hm hmc hmn hmn' hgap j hj hjn hne' hjS hsq i h1 h2' hs hi hh hi1 hi2 hexp hd t ht h3 h' h0 hl h4 h5".split(" "));
+
 export function polySquareFinishers(st: GoalState): string[] {
   const s = polySquareEq(st);
-  return s ? [polySquareScript(s)] : [];
+  if (!s || [s.poly, s.eqHyp, s.valueHyp].some((n) => SCRIPT_NAMES.has(n) || n.startsWith("hpf_"))) return [];
+  return [polySquareScript(s)];
 }

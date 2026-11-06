@@ -24,6 +24,7 @@ import { doubleCountFinishers } from "./doublecount";
 import { polySquareFinishers } from "./polyfunc";
 import { boundedVars, defInstances, denominators, firstAbs, gcdLcm, goalText, hypNames, isNumType, MAX_INTERVAL, NUMBERS, sqrtArgs } from "./helpers";
 import { learnedScore } from "./stats";
+import { learnedTactics } from "./learned";
 
 export type SplitKind = "intro" | "destruct" | "split" | "cases" | "interval" | "witness" | "contra" | "rewrite" | "abs";
 
@@ -316,8 +317,12 @@ export interface FinisherEntry {
   rule: string;
 }
 
-/** The finishers for a goal, each with its rule; the first rule offering a tactic keeps it. */
-export function finisherEntries(st: GoalState): FinisherEntry[] {
+/**
+ * The finishers for a goal, each with its rule; the first rule offering a tactic keeps it.
+ * Learned proofs (learned.ts) whose goal is this one up to renaming come first, as
+ * `learned:<id>`; `opens` are the namespaces the statement was opened with.
+ */
+export function finisherEntries(st: GoalState, ctx: { opens?: string[] } = {}): FinisherEntry[] {
   const g = goalFacts(st);
   let rules = allRules().filter((r): r is FinisherRule => r.kind === "finisher");
   if (process.env.AUTO_RULE_ORDER === "learned") {
@@ -327,6 +332,15 @@ export function finisherEntries(st: GoalState): FinisherEntry[] {
   }
   const out: FinisherEntry[] = [];
   const seen = new Set<string>();
+  try {
+    for (const l of learnedTactics(st, ctx.opens)) {
+      if (seen.has(l.tactic)) continue;
+      seen.add(l.tactic);
+      out.push({ tactic: l.tactic, rule: `learned:${l.id}` });
+    }
+  } catch {
+    // a broken learned file must not stop the search
+  }
   for (const r of rules) {
     let ts: string[];
     try {

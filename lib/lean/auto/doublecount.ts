@@ -66,17 +66,17 @@ export function setSystem(st: GoalState): SetSystem | undefined {
 /** `have hdc : P * k = N * Q` (one tactic), or undefined. */
 export function doubleCountHave(s: SetSystem): string {
   const { sets: A, ground: U, m, r, rel } = s;
-  const P = `((Finset.univ : Finset (Fin ${m} × Fin ${m})).filter (fun p => p.1 ${rel} p.2))`;
+  const P = `((Finset.univ : Finset (Fin ${m} × Fin ${m})).filter (fun dcp => dcp.1 ${rel} dcp.2))`;
   const pairs = rel === "<" ? choose2(m) : m * (m - 1);
   const per = rel === "<" ? choose2(r) : r * (r - 1);
   return (
     `have hdc : ${pairs} * ${s.k} = ${s.n} * ${per} := (by ` +
-    `have hdcP : ∀ S : Finset (Fin ${m}), S.card = ${r} → (${P}.filter (fun p => p.1 ∈ S ∧ p.2 ∈ S)).card = ${per} := (by decide +kernel); ` +
+    `have hdcP : ∀ dcS : Finset (Fin ${m}), dcS.card = ${r} → (${P}.filter (fun dcp => dcp.1 ∈ dcS ∧ dcp.2 ∈ dcS)).card = ${per} := (by decide +kernel); ` +
     `have hdcN : ${P}.card = ${pairs} := (by decide +kernel); ` +
-    `have hdcC : ∀ p : Fin ${m} × Fin ${m}, (${A} p.1 ∩ ${A} p.2).card = ∑ x : ${U}, if x ∈ ${A} p.1 ∧ x ∈ ${A} p.2 then 1 else 0 := (by intro p; rw [← Finset.card_filter]; congr 1; ext x; simp); ` +
-    `have hdcX : ∀ x : ${U}, (${P}.filter (fun p => x ∈ ${A} p.1 ∧ x ∈ ${A} p.2)).card = ${per} := (by intro x; have h := hdcP (Finset.univ.filter (fun i : Fin ${m} => x ∈ ${A} i)) (${s.memHyp} x); simpa using h); ` +
-    `have e : ∑ p ∈ ${P}, (${A} p.1 ∩ ${A} p.2).card = ∑ x : ${U}, (${P}.filter (fun p => x ∈ ${A} p.1 ∧ x ∈ ${A} p.2)).card := (by simp only [hdcC, Finset.card_filter]; exact Finset.sum_comm); ` +
-    `rw [Finset.sum_congr rfl (fun p hp => ${s.pairHyp} p.1 p.2 (Finset.mem_filter.mp hp).2), Finset.sum_const, hdcN, smul_eq_mul, Finset.sum_congr rfl (fun x _ => hdcX x), Finset.sum_const, ${s.cardRw}, smul_eq_mul] at e; omega)`
+    `have hdcC : ∀ dcp : Fin ${m} × Fin ${m}, (${A} dcp.1 ∩ ${A} dcp.2).card = ∑ dcx : ${U}, if dcx ∈ ${A} dcp.1 ∧ dcx ∈ ${A} dcp.2 then 1 else 0 := (by intro dcp; rw [← Finset.card_filter]; congr 1; ext dcx; simp); ` +
+    `have hdcX : ∀ dcx : ${U}, (${P}.filter (fun dcp => dcx ∈ ${A} dcp.1 ∧ dcx ∈ ${A} dcp.2)).card = ${per} := (by intro dcx; have dcH := hdcP (Finset.univ.filter (fun dci : Fin ${m} => dcx ∈ ${A} dci)) (${s.memHyp} dcx); simpa using dcH); ` +
+    `have dcE : ∑ dcp ∈ ${P}, (${A} dcp.1 ∩ ${A} dcp.2).card = ∑ dcx : ${U}, (${P}.filter (fun dcp => dcx ∈ ${A} dcp.1 ∧ dcx ∈ ${A} dcp.2)).card := (by simp only [hdcC, Finset.card_filter]; exact Finset.sum_comm); ` +
+    `rw [Finset.sum_congr rfl (fun dcp dch => ${s.pairHyp} dcp.1 dcp.2 (Finset.mem_filter.mp dch).2), Finset.sum_const, hdcN, smul_eq_mul, Finset.sum_congr rfl (fun dcx _ => hdcX dcx), Finset.sum_const, ${s.cardRw}, smul_eq_mul] at dcE; omega)`
   );
 }
 
