@@ -11,7 +11,7 @@
  */
 import { isInaccessible, type GoalState } from "../geometry/goal";
 
-const ID = "[A-Za-z_][\\w'₀-₉]*";
+const ID = "[^\\s(),:\\[\\]{}|∀∃→]+";
 
 export interface SetSystem {
   sets: string;

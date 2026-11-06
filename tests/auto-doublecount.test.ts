@@ -33,6 +33,12 @@ describe("double counting in a set system", () => {
     expect(doubleCountFinishers(g)[0]).toContain("have hdc : 20 * 1 = 10 * 2");
   });
 
+  it("Greek type names (α) and the binder order of another formalization", () => {
+    const g = parseGoal("α : Type u_1\ninst✝¹ : Fintype α\ninst✝ : DecidableEq α\nhU : Fintype.card α = 20\nA : Fin 6 → Finset α\nk : ℕ\nhmem : ∀ (x : α), {i | x ∈ A i}.card = 3\nhpairs : ∀ (i j : Fin 6), i ≠ j → (A i ∩ A j).card = k\n⊢ k = 4")!;
+    expect(setSystem(g)).toMatchObject({ ground: "α", rel: "≠", n: 20, cardRw: "Finset.card_univ, hU" });
+    expect(doubleCountFinishers(g)[0]).toContain("have hdc : 30 * k = 20 * 6");
+  });
+
   it("nothing without every ingredient", () => {
     expect(setSystem(parseGoal("A : Fin 6 → Finset U\nhU : Fintype.card U = 20\n⊢ True")!)).toBeUndefined();
   });
