@@ -19,6 +19,8 @@ process.env.SQLITE_DB_PATH = path.join(root, "sessions.db");
 process.env.QUOTA_DB_PATH = path.join(root, "usage.db");
 process.env.LLM_CACHE_PATH = path.join(root, "llm-cache.json");
 process.env.PROOF_MEMORY_PATH = path.join(root, "proof-memory.json");
+process.env.AUTO_RULE_STATS_PATH = path.join(root, "auto-rule-stats.json");
+process.env.AUTO_RULES_PATH = path.join(root, "auto-rules.json");
 process.env.PREMISE_INDEX_PATH = path.join(root, "premise-index.json"); // absent → curated seed only
 // Never talk to a real compute server, LLM or Loogle from unit tests by accident.
 delete process.env.COMPUTE_ENGINE_URL;
