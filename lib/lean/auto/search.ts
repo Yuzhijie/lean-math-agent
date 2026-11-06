@@ -31,6 +31,9 @@ export interface AutoStats {
 
 class OutOfTime extends Error {}
 
+/** `· tac`; a tactic of several lines stays inside the bullet. */
+const bullet = (t: string) => `· ${t.replace(/\n/g, "\n  ")}`;
+
 const norm = (g: string) => g.replace(/\s+/g, " ").replace(/^case \S+ /, "").trim();
 
 export async function autoSearch(run: TacticRunner, opts: AutoOptions): Promise<{ ok: boolean; stats: AutoStats }> {
@@ -57,7 +60,7 @@ export async function autoSearch(run: TacticRunner, opts: AutoOptions): Promise<
     if (!st) return false;
     const n0 = run.goals().length;
     for (const f of finisherEntries(st)) {
-      if ((await apply(`· ${f.tactic}`, f.rule)) && run.goals().length === n0 - 1) {
+      if ((await apply(bullet(f.tactic), f.rule)) && run.goals().length === n0 - 1) {
         tally.worked(f.rule);
         used.push(f.rule);
         return true;
@@ -65,7 +68,7 @@ export async function autoSearch(run: TacticRunner, opts: AutoOptions): Promise<
     }
     // an equation that follows from the equation hypotheses: the coefficients computed exactly
     const cert = Date.now() < opts.deadline ? await certificateTactic(st, 8).catch(() => undefined) : undefined;
-    if (cert && (await apply(`· ${cert}`, "certificate")) && run.goals().length === n0 - 1) {
+    if (cert && (await apply(bullet(cert), "certificate")) && run.goals().length === n0 - 1) {
       tally.worked("certificate");
       used.push("certificate");
       return true;
