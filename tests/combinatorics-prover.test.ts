@@ -81,6 +81,15 @@ describe("Venn regions", () => {
     expect(lines.join("\n")).not.toContain("Finset.univ.filter"); // no universe without complements
     expect(vennScript(parseGoal("n : ℕ\n⊢ n + 0 = n")!)).toBeUndefined();
   });
+
+  it("a set equation such as A ∪ B ∪ C = univ becomes a card fact (the outside region is then empty)", () => {
+    const st = parseGoal(
+      "α : Type u_1\ninst✝ : Fintype α\nA B C : Finset α\nhU : Fintype.card α = 30\nhA : A.card = 18\nhUnion : A ∪ B ∪ C = Finset.univ\n⊢ (A \\ (B ∪ C)).card = 12",
+    )!;
+    const lines = vennScript(st)!;
+    expect(lines[0]).toBe("have hseq0 : (A ∪ B ∪ C).card = Fintype.card α := by rw [hUnion]; exact Finset.card_univ");
+    expect(lines.join("\n")).toContain("Finset.univ.filter");
+  });
 });
 
 function fakeRunner(start: string, step: (goal: string, tactic: string) => string[] | null) {

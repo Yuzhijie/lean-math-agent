@@ -6,6 +6,7 @@
  * (`Finset.card_union_of_disjoint`); the region cards are then the unknowns of a linear system
  * and omega solves it. `Fintype.card α` is the union of all regions, outside ones included.
  */
+import { topIndex } from "./lets";
 import { isInaccessible, type GoalState } from "../geometry/goal";
 import { evalSet, parseSetExpr, setVars, usesUniverse, type SetExpr } from "./sets";
 
@@ -61,7 +62,32 @@ export function vennScript(st: GoalState): string[] | undefined {
   const sets = st.hyps.filter((h) => /^Finset\s+\S+$|^Finset\s*\(.*\)$/.test(h.type.trim())).flatMap((h) => h.names).filter((n) => !isInaccessible(n));
   if (!sets.length || sets.length > MAX_SETS) return undefined;
   const setNames = new Set(sets);
-  const texts = [st.target, ...st.hyps.map((h) => h.type)];
+  // set equations (A ∪ B ∪ C = Finset.univ): their cards are equal too
+  const pre: string[] = [];
+  const extra: string[] = [];
+  for (const h of st.hyps) {
+    const n = h.names[0];
+    const ty = h.type.replace(/\s+/g, " ").trim();
+    if (h.names.length !== 1 || isInaccessible(n) || /card|[∀∃→]/.test(ty)) continue;
+    const at = topIndex(ty, " = ");
+    if (at < 0) continue;
+    const [l, r] = [ty.slice(0, at).trim(), ty.slice(at + 3).trim()];
+    const side = (x: string) => {
+      const e = parseSetExpr(x);
+      return e && [...setVars(e)].every((v) => setNames.has(v)) && (setVars(e).size > 0 || e.k === "univ") ? e : undefined;
+    };
+    if (!side(l) || !side(r)) continue;
+    // the universe as Fintype.card α (`Finset.univ.card` alone leaves the type to infer: "typeclass instance problem is stuck")
+    const elem = /^Finset\s+(.+)$/.exec(st.hyps.find((x) => x.names.includes(sets[0]))!.type.trim())?.[1];
+    const isU = (x: string) => /^Finset\.univ$/.test(x);
+    if ((isU(l) || isU(r)) && !elem) continue;
+    const cardOf = (x: string) => (isU(x) ? `Fintype.card ${elem}` : `(${x}).card`);
+    const fact = `${cardOf(l)} = ${cardOf(r)}`;
+    const proof = isU(r) ? `by rw [${n}]; exact Finset.card_univ` : isU(l) ? `by rw [← Finset.card_univ, ${n}]` : `congrArg Finset.card ${n}`;
+    pre.push(`have hseq${pre.length} : ${fact} := ${proof}`);
+    extra.push(fact);
+  }
+  const texts = [st.target, ...st.hyps.map((h) => h.type), ...extra];
   const terms: CardTerm[] = [];
   for (const t of texts) {
     if (!/card/.test(t)) continue;
@@ -104,5 +130,5 @@ export function vennScript(st: GoalState): string[] | undefined {
     lines.push(`have c${i} : ${t.text} = ${sum(regs)} := by ${pre}rw [congrArg Finset.card e${i}]${disj.length ? `; rw [${disj.join(", ")}]` : ""}`);
   });
   lines.push("omega");
-  return lines;
+  return [...pre, ...lines];
 }
