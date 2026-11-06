@@ -12,7 +12,6 @@ import { evalSet, parseSetExpr, setVars, usesUniverse, type SetExpr } from "./se
 
 const MAX_SETS = 4;
 const SIMPS = "Finset.mem_union, Finset.mem_inter, Finset.mem_sdiff, Finset.mem_filter, Finset.mem_compl, Finset.mem_univ, true_and, Finset.notMem_empty";
-const DISJOINT = `(by rw [Finset.disjoint_left]; intro x; (try simp only [${SIMPS}]) <;> tauto)`;
 
 interface CardTerm {
   /** Exactly as printed: `(A ∩ B).card`, `A.card`, `Fintype.card α`. */
@@ -57,11 +56,37 @@ export function cardTerms(text: string, sets: Set<string>): CardTerm[] | undefin
   return out;
 }
 
+/** The expression with the let-defined sets replaced by their definitions. */
+function substDefs(e: SetExpr, defs: Map<string, SetExpr>): SetExpr {
+  switch (e.k) {
+    case "var":
+      return defs.has(e.name) ? substDefs(defs.get(e.name)!, defs) : e;
+    case "compl":
+      return { k: "compl", a: substDefs(e.a, defs) };
+    case "bin":
+      return { k: "bin", op: e.op, a: substDefs(e.a, defs), b: substDefs(e.b, defs) };
+    default:
+      return e;
+  }
+}
+
 /** The script, or undefined when the goal is not about cards of these sets. */
 export function vennScript(st: GoalState): string[] | undefined {
-  const sets = st.hyps.filter((h) => /^Finset\s+\S+$|^Finset\s*\(.*\)$/.test(h.type.trim())).flatMap((h) => h.names).filter((n) => !isInaccessible(n));
+  const finsets = st.hyps.filter((h) => /^Finset\s+\S+$|^Finset\s*\(.*\)$/.test(h.type.trim()));
+  // sets defined by a let (X := (A \ (B ∪ C)) ∪ …): their definitions, not new sets — a fourth
+  // "set" X made 16 regions whose proofs ran out of heartbeats, and omega knew nothing of X
+  const defs = new Map<string, SetExpr>();
+  for (const h of finsets) {
+    if (h.value === undefined || h.names.length !== 1) continue;
+    const e = parseSetExpr(h.value.trim());
+    if (e) defs.set(h.names[0], e);
+  }
+  const sets = finsets.flatMap((h) => h.names).filter((n) => !isInaccessible(n) && !defs.has(n));
+  for (const [n, e] of [...defs]) if ([...setVars(substDefs(e, defs))].some((v) => !sets.includes(v))) defs.delete(n);
   if (!sets.length || sets.length > MAX_SETS) return undefined;
-  const setNames = new Set(sets);
+  const setNames = new Set([...sets, ...defs.keys()]);
+  const simps = [...defs.keys(), SIMPS].join(", ");
+  const disjoint = `(by rw [Finset.disjoint_left]; intro x; (try simp only [${simps}]) <;> tauto)`;
   // set equations (A ∪ B ∪ C = Finset.univ): their cards are equal too
   const pre: string[] = [];
   const extra: string[] = [];
@@ -93,7 +118,7 @@ export function vennScript(st: GoalState): string[] | undefined {
     if (!/card/.test(t)) continue;
     const found = cardTerms(t, setNames);
     if (!found) return undefined;
-    for (const c of found) if (!terms.some((x) => x.text === c.text)) terms.push(c);
+    for (const c of found) if (!terms.some((x) => x.text === c.text)) terms.push({ ...c, expr: substDefs(c.expr, defs) });
   }
   const targetTerms = cardTerms(st.target, setNames) ?? [];
   if (!targetTerms.length || !/^[^∀∃]*(=|≤|<|≥|>)/.test(st.target)) return undefined;
@@ -121,11 +146,11 @@ export function vennScript(st: GoalState): string[] | undefined {
     const isUniv = t.expr.k === "univ";
     const lhsSet = isUniv ? "(Finset.univ : Finset _)" : t.text.replace(/\.card$/, "");
     if (!regs.length) {
-      lines.push(`have c${i} : ${t.text} = 0 := by rw [Finset.card_eq_zero]; ext x; (try simp only [${SIMPS}]) <;> tauto`);
+      lines.push(`have c${i} : ${t.text} = 0 := by rw [Finset.card_eq_zero]; ext x; (try simp only [${simps}]) <;> tauto`);
       return;
     }
-    lines.push(`have e${i} : ${lhsSet} = ${union(regs)} := by ext x; (try simp only [${SIMPS}]) <;> tauto`);
-    const disj = Array(regs.length - 1).fill(`Finset.card_union_of_disjoint ${DISJOINT}`);
+    lines.push(`have e${i} : ${lhsSet} = ${union(regs)} := by ext x; (try simp only [${simps}]) <;> tauto`);
+    const disj = Array(regs.length - 1).fill(`Finset.card_union_of_disjoint ${disjoint}`);
     const pre = isUniv && t.text.startsWith("Fintype.card") ? "rw [← Finset.card_univ]; " : "";
     lines.push(`have c${i} : ${t.text} = ${sum(regs)} := by ${pre}rw [congrArg Finset.card e${i}]${disj.length ? `; rw [${disj.join(", ")}]` : ""}`);
   });

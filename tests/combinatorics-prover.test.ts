@@ -90,6 +90,16 @@ describe("Venn regions", () => {
     expect(lines[0]).toBe("have hseq0 : (A ∪ B ∪ C).card = Fintype.card α := by rw [hUnion]; exact Finset.card_univ");
     expect(lines.join("\n")).toContain("Finset.univ.filter");
   });
+
+  it("a set defined by a let is its definition, not a fourth set", () => {
+    const st = parseGoal(
+      "α : Type u_1\ninst✝ : Fintype α\nA B C : Finset α\nhU : Fintype.card α = 30\nhA : A.card = 18\nhUnion : A ∪ B ∪ C = Finset.univ\nX : Finset α := A \\ (B ∪ C) ∪ B \\ (A ∪ C) ∪ C \\ (A ∪ B)\n⊢ X.card = 12",
+    )!;
+    const text = vennScript(st)!.join("\n");
+    expect(text).not.toMatch(/x [∈∉] X/);
+    expect(text).toContain("simp only [X, Finset.mem_union");
+    expect(text).toContain("have e0 : X = (A.filter (fun x => x ∉ B ∧ x ∉ C)) ∪ ((B.filter (fun x => x ∉ A ∧ x ∉ C)) ∪ ((C.filter (fun x => x ∉ A ∧ x ∉ B))))");
+  });
 });
 
 function fakeRunner(start: string, step: (goal: string, tactic: string) => string[] | null) {
