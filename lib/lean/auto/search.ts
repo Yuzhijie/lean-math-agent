@@ -9,7 +9,7 @@
  */
 import { parseGoal } from "../geometry/goal";
 import type { TacticRunner } from "../tactic-runner";
-import { finisherEntries, splitterEntries, type Splitter } from "./rules";
+import { allRules, finisherEntries, goalFacts, splitterEntries, type FinisherRule, type Splitter } from "./rules";
 import { RuleTally } from "./stats";
 import { noteLearnedUse } from "./learned";
 import { certificateTactic } from "./certificate";
@@ -68,6 +68,18 @@ export async function autoSearch(run: TacticRunner, opts: AutoOptions): Promise<
         tally.worked(f.rule);
         used.push(f.rule);
         return true;
+      }
+    }
+    // finishers that need a computation first (realopt.ts: the extremum helper)
+    for (const r of allRules().filter((x): x is FinisherRule => x.kind === "finisher" && !!x.asyncTactics)) {
+      if (Date.now() > opts.deadline) break;
+      const ts = await r.asyncTactics!(goalFacts(st)).catch(() => [] as string[]);
+      for (const t of ts) {
+        if ((await apply(bullet(t), r.id)) && run.goals().length === n0 - 1) {
+          tally.worked(r.id);
+          used.push(r.id);
+          return true;
+        }
       }
     }
     // an equation that follows from the equation hypotheses: the coefficients computed exactly
