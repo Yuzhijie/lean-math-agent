@@ -282,9 +282,20 @@ export const COMPETITION_DOMAINS = [
   "inequality",
   "logic",
   "computation",
+  "word_problem",
 ] as const;
 
 export type CompetitionDomain = (typeof COMPETITION_DOMAINS)[number];
+
+/** Domains offered only for some grade levels (应用题: primary and middle school). */
+export const DOMAIN_GRADES: Partial<Record<CompetitionDomain, readonly GradeLevel[]>> = {
+  word_problem: ["elementary", "middle"],
+};
+
+export function domainAllowed(domain: CompetitionDomain, grade: GradeLevel): boolean {
+  const grades = DOMAIN_GRADES[domain];
+  return !grades || grades.includes(grade);
+}
 
 // ── Computation Result (for computational problems) ──────────────────
 export interface ComputationResult {

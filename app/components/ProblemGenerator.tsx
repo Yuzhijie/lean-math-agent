@@ -7,7 +7,7 @@ import type {
   CompetitionDomain,
   GeneratedProblem,
 } from "@/lib/types";
-import { GRADE_LEVELS, DIFFICULTY_LEVELS, COMPETITION_DOMAINS } from "@/lib/types";
+import { GRADE_LEVELS, DIFFICULTY_LEVELS, COMPETITION_DOMAINS, domainAllowed } from "@/lib/types";
 import { MathText } from "./MathText";
 import { QuestionFigure } from "./QuestionFigure";
 import { FigurePanel } from "./FigurePanel";
@@ -117,6 +117,7 @@ function getLabels(tr: Tr) {
     inequality: tr("不等式", "Inequalities"),
     logic: tr("逻辑", "Logic"),
     computation: tr("计算", "Computation"),
+    word_problem: tr("应用题", "Word problems"),
   };
 
   return { GRADE_LABELS, DIFFICULTY_LABELS, DOMAIN_LABELS };
@@ -353,7 +354,12 @@ export function ProblemGenerator({ mode: modeProp, onUseProblem, onFormalize, on
             </label>
             <Select
               value={gradeLevel}
-              onValueChange={(v) => setGradeLevel(v as GradeLevel)}
+              onValueChange={(v) => {
+                const g = v as GradeLevel;
+                setGradeLevel(g);
+                // 应用题 is offered for primary and middle school only
+                if (!domainAllowed(domain, g)) setDomain("computation");
+              }}
               disabled={busy}
             >
               <SelectTrigger className="w-full">
@@ -406,7 +412,7 @@ export function ProblemGenerator({ mode: modeProp, onUseProblem, onFormalize, on
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {COMPETITION_DOMAINS.map((d) => (
+                {COMPETITION_DOMAINS.filter((d) => domainAllowed(d, gradeLevel)).map((d) => (
                   <SelectItem key={d} value={d}>
                     {DOMAIN_LABELS[d]}
                   </SelectItem>

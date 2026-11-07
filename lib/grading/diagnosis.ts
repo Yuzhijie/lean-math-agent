@@ -13,7 +13,7 @@
 import { z } from "zod";
 import { chatJson } from "../llm/client";
 import { listBanks, listItems } from "../bank/store";
-import { COMPETITION_DOMAINS, DIFFICULTY_LEVELS, GRADE_LEVELS } from "../types";
+import { COMPETITION_DOMAINS, DIFFICULTY_LEVELS, GRADE_LEVELS, domainAllowed } from "../types";
 import { effectiveVerdict, type Diagnosis, type MasteryLevel, type Submission, type Verdict } from "./types";
 
 const CREDIT: Record<Verdict, number> = { correct: 1, correct_answer_flawed: 0.5, partially_correct: 0.5, incorrect: 0, no_answer: 0, unreadable: 0 };
@@ -166,11 +166,12 @@ export async function diagnose(input: DiagnosisInput): Promise<Diagnosis> {
         count: Math.min(6, Math.max(2, Math.round(n.count))),
         reason: n.reason.trim(),
         ...(bank ? { bank } : {}),
-        builtin: {
-          grade_level: pick(n.grade_level, GRADE_LEVELS, "middle"),
-          difficulty: pick(n.builtin_difficulty, DIFFICULTY_LEVELS, "standard"),
-          domain: pick(n.domain, COMPETITION_DOMAINS, "algebra"),
-        },
+        builtin: (() => {
+          const grade_level = pick(n.grade_level, GRADE_LEVELS, "middle");
+          const domain = pick(n.domain, COMPETITION_DOMAINS, "algebra");
+          // 应用题 only for primary / middle school
+          return { grade_level, difficulty: pick(n.builtin_difficulty, DIFFICULTY_LEVELS, "standard"), domain: domainAllowed(domain, grade_level) ? domain : "algebra" };
+        })(),
       };
     }),
     summary: r.summary.trim(),

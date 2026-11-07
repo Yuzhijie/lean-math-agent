@@ -19,7 +19,7 @@ AI-powered Lean 4 math theorem prover + problem solver. Single-page Next.js app.
 | Lean | Lean 4 + Mathlib v4.33.1 + Batteries + Aesop; verification via persistent `leanprover-community/repl` workers (env reuse, sorry goals, tactic mode, axiom + statement checks), `lake env lean` fallback |
 | Compute | Python SymPy HTTP microservice (9 endpoints) |
 | State | Sessions in SQLite (`.data/sessions.db`, each owned by a user; JSON files with SESSION_BACKEND=json), in-memory cache |
-| Tests | Vitest 5 (142 test files) |
+| Tests | Vitest 5 (143 test files) |
 
 ## Project Structure
 
@@ -46,7 +46,7 @@ app/
     MethodDetail.tsx                # Method inspiration + pros/cons
     MethodList.tsx                  # Scrollable method list with confidence
     PricingCards.tsx                # Subscription plan cards
-    ProblemGenerator.tsx            # Problem generator: method 1 (default when a bank has questions) = local bank as template — Level/Difficulty/Topic pick bank questions sent to the model as the template (2–10 matching questions: each is a template of its own, generated from in turn, the count is per template and the field says "每个模板"; more than 10: one generation from the whole set), results with checks + "Add to bank"; method 2 = built-in by grade/difficulty/domain, every problem checked (lib/llm/verify-generated.ts: independent solve, Lean counterexample search, "Lean 已证" when the program proves it; the failed ones behind the same "查看" toggle, status badge and check chips as bank candidates — CheckedMeta in generation-view.ts). Both modes stream progress (`stream: true` → NDJSON progress/result/error lines; round, stage chips, elapsed time); the result summary says "N requested, M passed, K failed (show)"; each card shows a status (可用 / 需人工看 / 未通过) and its failed or to-review checks inline (lib/bank/generation-view.ts); actions: one main button ("加入题库" for bank questions, else "使用此题"), hints/answer as icon toggles, formalize under "⋯"; figures are thumbnails (QuestionFigure `compact`, max 14rem) that open full size in a dialog (also on the bank page); "导出 PDF" under the result summary opens the printable worksheet (bank results by generation id, built-in results handed over in localStorage)
+    ProblemGenerator.tsx            # Problem generator: method 1 (default when a bank has questions) = local bank as template — Level/Difficulty/Topic pick bank questions sent to the model as the template (2–10 matching questions: each is a template of its own, generated from in turn, the count is per template and the field says "每个模板"; more than 10: one generation from the whole set), results with checks + "Add to bank"; method 2 = built-in by grade/difficulty/domain (domain 应用题 `word_problem` only for 小学 / 初中 — DOMAIN_GRADES / domainAllowed in lib/types.ts; the list hides it for other grades, the route refuses it, a diagnosis recommendation falls back to algebra; the writer's guideline lists the classic primary types — 和差倍, 归一归总, 植树, 鸡兔同笼, 行程, 工程, 分数百分数, 比例 — and the middle-school equation / inequality / function applications), every problem checked (lib/llm/verify-generated.ts: independent solve, Lean counterexample search, "Lean 已证" when the program proves it; the failed ones behind the same "查看" toggle, status badge and check chips as bank candidates — CheckedMeta in generation-view.ts). Both modes stream progress (`stream: true` → NDJSON progress/result/error lines; round, stage chips, elapsed time); the result summary says "N requested, M passed, K failed (show)"; each card shows a status (可用 / 需人工看 / 未通过) and its failed or to-review checks inline (lib/bank/generation-view.ts); actions: one main button ("加入题库" for bank questions, else "使用此题"), hints/answer as icon toggles, formalize under "⋯"; figures are thumbnails (QuestionFigure `compact`, max 14rem) that open full size in a dialog (also on the bank page); "导出 PDF" under the result summary opens the printable worksheet (bank results by generation id, built-in results handed over in localStorage)
     BankTemplateControls.tsx        # Level / Difficulty / Topic pickers from the bank (template-options), live count of matching template questions
     StepPane.tsx                    # Proof step list with status badges
     PipelineProgress.tsx            # Live stage timeline of a solve (labels incl. queued/budget/retrieval/whole_proof/sketch/cancelled), queue place and a Cancel button while it runs
@@ -351,7 +351,7 @@ nginx.conf                          # 80 → https redirect (+ ACME), 443 TLS (c
 docs/BETA-DEPLOY.md                 # Invite-only beta deployment guide (Chinese)
 .dockerignore                       # Docker build exclusions
 
-tests/                              # 142 Vitest test files (unit + fake REPL + real-Lean integration)
+tests/                              # 143 Vitest test files (unit + fake REPL + real-Lean integration)
 components/ui/                      # 16 shadcn/ui primitives (+avatar, dropdown-menu, label)
 ```
 

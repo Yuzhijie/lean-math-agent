@@ -10,6 +10,8 @@ import {
   GRADE_LEVELS,
   DIFFICULTY_LEVELS,
   COMPETITION_DOMAINS,
+  DOMAIN_GRADES,
+  domainAllowed,
 } from "@/lib/types";
 import { modelRoute } from "@/lib/model-route";
 
@@ -126,6 +128,10 @@ async function handlePOST(req: Request) {
       { error: `domain required, one of: ${COMPETITION_DOMAINS.join(", ")}` },
       { status: 400 },
     );
+  }
+
+  if (!domainAllowed(body.domain, body.grade_level)) {
+    return NextResponse.json({ error: `domain ${body.domain} is offered for: ${(DOMAIN_GRADES[body.domain] ?? []).join(", ")}` }, { status: 400 });
   }
 
   const count = typeof body.count === "number" ? body.count : 3;

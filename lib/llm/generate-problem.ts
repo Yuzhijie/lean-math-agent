@@ -173,6 +173,7 @@ function getDomainLabel(domain: CompetitionDomain): string {
     inequality: "不等式",
     logic: "逻辑",
     computation: "计算",
+    word_problem: "应用题",
   };
   return labels[domain];
 }
