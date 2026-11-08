@@ -12,7 +12,10 @@
  *
  * Also the other reading, s seat ↦ person with Rot k f i = f (i + k) and every condition `∀ i : Fin n, …`
  * over seats (Adj i = i + 1): there a rotation shifts i, and the representative turns person 0 to
- * seat 0 (seatHead).
+ * seat 0 (seatHead). Or the arrangement is used only as the first argument of helpers
+ * (`Adjacent p x y := ∃ i : Fin n, …`): each gets `H (Rot k p) … ↔ H p …` (reindex i ± k, abel_nf —
+ * ring_nf does nothing on Fin n, its ring instance is scoped), and is decided as a Bool test
+ * `(List.finRange n).any …` (Light), since `∃ i : Fin 8` decided through Fintype ran out of memory.
  *
  * 8 students, A, B, C pairwise apart and D, E apart, up to rotation = 1152: enumerating the
  * functions Fin 8 → Fin 8 (8⁸) or the permutations (Equiv.Perm, out of memory) is beyond the kernel;
@@ -26,14 +29,27 @@ const ID = "[^\\s(),:\\[\\]{}|∀∃→]+";
 const squash = (s: string) => s.replace(/\s+/g, " ").trim();
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\']/g, "\\$&");
 
+/** A keyed helper `fun p x y => ∃ i : Fin n, B` as a Bool test over List.finRange n (the kernel
+ * decides `∃ i : Fin 8` through Fintype instances and ran out of memory on 5040 lists). */
+export interface Light {
+  type: string;
+  binders: string;
+  quant: "any" | "all";
+  index: string;
+  body: string;
+}
+
 export interface CircularShape {
   n: number;
   /** "value": s person ↦ seat, Rot k f i = f i + k; "seat": s seat ↦ person, Rot k f i = f (i + k) */
   mode: "value" | "seat";
   /** helper lets (relations, seat maps such as Adj i = i + 1) */
   helpers: string[];
-  /** seat mode: the number of conditions, each `∀ i : Fin n, …` */
+  /** seat mode: the number of conditions, each `∀ i : Fin n, …` (0 with keyed helpers) */
   conds: number;
+  /** seat mode: helpers taking the arrangement first (`Adjacent p x y := ∃ i, …`) with their other
+   * argument count; each gets `H (Rot k p) … ↔ H p …` and the conditions use p only through them */
+  keyed: { name: string; arity: number; light?: Light }[];
   total: number;
   valid: string;
   rot: string;
@@ -79,15 +95,31 @@ export function circularShape(theoremType: string): CircularShape | undefined {
   const names = sp.lets.map((l) => l.name);
   const base = { n, total: Number(total), mode, valid, rot, orbit, names, hasRest: !!v[2], binder: v[1], rest } as const;
   if (mode === "seat") {
-    // the person at each seat: every condition is `∀ i : Fin n, …` (rotations shift i), helpers are
-    // relations of two people or seat maps `fun i => i + c`
+    // the person at each seat: every condition is `∀ i : Fin n, …` (rotations shift i), or the
+    // arrangement is used only through keyed helpers; other helpers are relations or seat maps
+    // `fun i => i + c`
     for (const l of helpers) {
       const val = squash(l.value);
-      if (!new RegExp(`^fun (${ID}) (${ID}) =>`).test(val) && !new RegExp(`^fun (${ID}) => \\1 \\+ \\d+$`).test(val)) return undefined;
+      if (!new RegExp(`^fun (${ID}) (?:${ID} )+=>`).test(val) && !new RegExp(`^fun (${ID}) => \\1 \\+ \\d+$`).test(val)) return undefined;
     }
     const conds = rest ? splitTop(rest) : [];
-    if (!conds.every((c) => new RegExp(`^∀ ${ID}(?: : Fin ${n})?,`).test(stripOuter(c)))) return undefined;
-    return { ...base, helpers: helpers.map((l) => l.name), conds: conds.length, relations: [] };
+    const hn = helpers.map((l) => l.name);
+    if (conds.every((c) => new RegExp(`^∀ ${ID}(?: : Fin ${n})?,`).test(stripOuter(c)))) return { ...base, helpers: hn, conds: conds.length, relations: [], keyed: [] };
+    // helpers of the arrangement: the conditions may use it only as their first argument
+    const keyed = helpers
+      .filter((l) => l.type && squash(l.type).startsWith(`(Fin ${n} → Fin ${n}) →`))
+      .map((l) => {
+        const val = squash(l.value);
+        const bs = new RegExp(`^fun ((?:${ID} )+)=> (.*)$`).exec(val);
+        const q = bs && new RegExp(`^(∃|∀) (${ID})(?: : Fin ${n})?, (.+)$`).exec(stripOuter(bs[2]));
+        const light: Light | undefined = q && l.type ? { type: squash(l.type), binders: bs[1].trim(), quant: q[1] === "∃" ? "any" : "all", index: q[2], body: q[3] } : undefined;
+        return { name: l.name, arity: (bs?.[1].trim().split(" ").length ?? 1) - 1, light };
+      });
+    if (!keyed.length) return undefined;
+    const b = esc(v[1]);
+    const left = keyed.reduce((t, h) => t.replace(new RegExp(`(^|[\\s(¬])${esc(h.name)} ${b}(?=\\s)`, "g"), "$1"), rest);
+    if (new RegExp(`(^|[\\s(¬])${b}(?=[\\s)]|$)`).test(left)) return undefined;
+    return { ...base, helpers: hn, conds: 0, relations: [], keyed };
   }
   // the other lets: relations of two seats, used by the conditions
   const relations: string[] = [];
@@ -99,7 +131,7 @@ export function circularShape(theoremType: string): CircularShape | undefined {
   // the conditions may only compare seats through these relations or by (in)equality
   const stripped = relations.reduce((s, rel) => s.replace(new RegExp(`(^|[\\s(¬])${esc(rel)}(?=\\s)`, "g"), "$1"), rest);
   if (/[+\-*/<>≤≥%]/.test(stripped)) return undefined;
-  return { ...base, helpers: relations, conds: 0, relations };
+  return { ...base, helpers: relations, conds: 0, relations, keyed: [] };
 }
 
 /** `(X)` → X when the parentheses enclose the whole text. */
@@ -137,13 +169,26 @@ export function circularScript(c: CircularShape): string {
   const F = `Fin ${n} → Fin ${n}`;
   const tailList = Array.from({ length: n - 1 }, (_, i) => i + 1).join(", ");
   const head = c.mode === "value" ? valueHead(c) : seatHead(c);
+  // keyed helpers of the form ∃ / ∀ i : Fin n, … are decided as Bool tests (Light)
+  const lights = c.keyed.flatMap((k, i) => (k.light && c.hasRest ? [{ name: `cH${i}`, of: k.name, ...k.light }] : []));
+  let rest = c.rest;
+  for (const l of lights) rest = rest.replace(new RegExp(`(^|[\\s(¬])${esc(l.of)}(?=\\s)`, "g"), `$1${l.name}`);
+  const lightLines = [
+    ...lights.flatMap((l) => [
+      `let ${l.name} : ${l.type} := fun ${l.binders} => (List.finRange ${n}).${l.quant} (fun ${l.index} => decide (${l.body})) = true`,
+      `have ${l.name}iff : ∀ ${l.binders}, ${l.name} ${l.binders} ↔ ${l.of} ${l.binders} := by`,
+      `  intro ${l.binders}; simp only [${l.name}, ${l.of}, List.any_eq_true, List.all_eq_true, List.mem_finRange, true_and, decide_eq_true_eq, forall_const, true_implies]`,
+    ]),
+    `let cR : (${F}) → Prop := fun ${c.hasRest ? c.binder : "_"} => ${c.hasRest ? rest : "True"}`,
+    ...(lights.length ? [`have cRiff : ∀ ${c.binder}, cR ${c.binder} ↔ (${c.rest}) := by`, `  intro ${c.binder}; simp only [cR, ${lights.map((l) => `${l.name}iff`).join(", ")}]`] : []),
+  ];
   return [
     `intro ${c.names.join(" ")}`,
     ...head,
     `rw [cset, cinj.ncard_image]`,
     `let cF : List (Fin ${n}) → Fin ${n} → Fin ${n} := fun p i => ((0 : Fin ${n}) :: p).getD i 0`,
     // only the conditions are decided per list; bijectivity of cF p follows from p being a permutation
-    `let cR : (${F}) → Prop := fun ${c.hasRest ? c.binder : "_"} => ${c.hasRest ? c.rest : "True"}`,
+    ...lightLines,
     `let cL := (([${tailList}] : List (Fin ${n})).permutations').filter (fun p => decide (cR (cF p)))`,
     `have cofFn : ∀ s : ${F}, s 0 = 0 → List.ofFn s = 0 :: (List.ofFn s).tail := by`,
     `  intro s hs0; rw [List.ofFn_succ, hs0]; rfl`,
@@ -161,7 +206,7 @@ export function circularScript(c: CircularShape): string {
     `  · rintro ⟨s, ⟨hs, hs0⟩, rfl⟩`,
     `    have hF : cF (List.ofFn s).tail = s := by`,
     `      funext i; simp only [cF]; rw [← cofFn s hs0, List.getD_eq_getElem _ _ (by simp), List.getElem_ofFn]`,
-    `    refine List.mem_filter.mpr ⟨List.mem_permutations'.mpr ?_, by rw [hF]; exact decide_eq_true ${c.hasRest ? "hs.2" : "trivial"}⟩`,
+    `    refine List.mem_filter.mpr ⟨List.mem_permutations'.mpr ?_, by rw [hF]; exact decide_eq_true ${!c.hasRest ? "trivial" : lights.length ? "((cRiff _).mpr hs.2)" : "hs.2"}⟩`,
     `    have hp : (List.ofFn s).Perm (List.ofFn id) := Equiv.Perm.ofFn_comp_perm (Equiv.ofBijective s ${c.hasRest ? "hs.1" : "hs"}) id`,
     `    rw [cofFn s hs0, hid] at hp`,
     `    exact hp.cons_inv`,
@@ -175,7 +220,7 @@ export function circularScript(c: CircularShape): string {
     `      rw [List.getD_eq_getElem _ _ (by simp [hlen]), List.getD_eq_getElem _ _ (by simp [hlen])] at hij`,
     `      exact Fin.ext (hnd0.getElem_inj_iff.mp hij)`,
     `    have hbij : Function.Bijective (cF p) := Finite.injective_iff_bijective.mp hinjF`,
-    `    refine ⟨cF p, ⟨${c.hasRest ? "⟨hbij, of_decide_eq_true hval⟩" : "hbij"}, rfl⟩, ?_⟩`,
+    `    refine ⟨cF p, ⟨${!c.hasRest ? "hbij" : lights.length ? "⟨hbij, (cRiff _).mp (of_decide_eq_true hval)⟩" : "⟨hbij, of_decide_eq_true hval⟩"}, rfl⟩, ?_⟩`,
     `    have hl : List.ofFn (cF p) = 0 :: p := by`,
     `      apply List.ext_getElem (by simp [hlen])`,
     `      intro i h1 h2`,
@@ -183,7 +228,7 @@ export function circularScript(c: CircularShape): string {
     `      rw [List.getD_eq_getElem _ _ h2]`,
     `    simp only [hl, List.tail_cons]`,
     `rw [← cG.ncard_image, himg, show {p | p ∈ cL} = (cL.toFinset : Set (List (Fin ${n}))) by ext; simp, Set.ncard_coe_finset, List.toFinset_card_of_nodup hnd]`,
-    `simp only [${["cL", "cF", "cR", ...c.helpers].join(", ")}]`,
+    `simp only [${["cL", "cF", "cR", ...lights.map((l) => l.name), ...c.helpers.filter((h) => !lights.some((l) => l.of === h))].join(", ")}]`,
     `decide +kernel`,
   ].join("\n");
 }
@@ -240,7 +285,28 @@ function seatHead(c: CircularShape): string[] {
   const F = `Fin ${n} → Fin ${n}`;
   const hc = Array.from({ length: c.conds }, (_, i) => `hc${i}`);
   const norm = [...c.helpers, "add_assoc", "add_comm", "add_left_comm"].join(", ");
-  const inv = c.conds
+  const args = (k: { arity: number }) => Array.from({ length: k.arity }, (_, j) => `ca${j}`);
+  const keys = c.keyed.flatMap((h, i) => [
+    `have ckey${i} : ∀ (k : Fin ${n}) (p : ${F}) ${args(h).join(" ")}, ${h.name} (${R} k p) ${args(h).join(" ")} ↔ ${h.name} p ${args(h).join(" ")} := by`,
+    `  intro k p ${args(h).join(" ")}`,
+    `  simp only [${h.name}, ${R}]`,
+    `  first`,
+    `    | (constructor`,
+    `       · rintro ⟨i, h⟩; exact ⟨i + k, by (try abel_nf at h); (try abel_nf); exact h⟩`,
+    `       · rintro ⟨i, h⟩; exact ⟨i - k, by (try abel_nf at h); (try abel_nf); exact h⟩)`,
+    `    | (constructor`,
+    `       · intro h i; have h' := h (i - k); (try abel_nf at h'); (try abel_nf); exact h'`,
+    `       · intro h i; have h' := h (i + k); (try abel_nf at h'); (try abel_nf); exact h')`,
+  ]);
+  const inv = c.keyed.length
+    ? [
+        ...keys,
+        `have cinv : ∀ k s, ${V} s → ${V} (${R} k s) := by`,
+        `  intro k s hs`,
+        `  simp only [${V}] at hs ⊢`,
+        `  exact ⟨hs.1.comp (Equiv.addRight k).bijective, by simpa only [${c.keyed.map((_, i) => `ckey${i}`).join(", ")}] using hs.2⟩`,
+      ]
+    : c.conds
     ? [
         `have cinv : ∀ k s, ${V} s → ${V} (${R} k s) := by`,
         `  intro k s hs`,
