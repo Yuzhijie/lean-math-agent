@@ -18,9 +18,10 @@ import type { LeanVerifyResult } from "../sandbox";
 import { openRunner, scriptSource } from "../tactic-runner";
 import { closeFinite, introAll } from "./finite";
 import { orbitEvalCommand, orbitScript, orbitShape, parseReps } from "./orbit";
+import { circularScript, circularShape } from "./circular";
 import { vennScript } from "./venn";
 
-export type CombinatoricsMethod = "orbits" | "venn" | "finite";
+export type CombinatoricsMethod = "orbits" | "circular" | "venn" | "finite";
 
 export function looksCombinatorial(theoremType: string): boolean {
   if (looksGeometric(theoremType)) return false;
@@ -95,6 +96,12 @@ export async function combinatoricsProof(args: {
     return undefined;
   };
   try {
+    // 0. seatings round a table up to rotation (circular.ts)
+    const circ = circularShape(theoremType);
+    if (circ) {
+      const p = await verify(circularScript(circ), "circular");
+      if (p) return { proof: p, reason: "" };
+    }
     // 1. orbits
     const shape = orbitShape(theoremType);
     if (shape) {
