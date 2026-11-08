@@ -6,7 +6,7 @@ import { Frac, Poly, toPoly, VarTable } from "@/lib/lean/geometry/poly";
 import { findCertificate } from "@/lib/lean/geometry/certificate";
 import { looksGeometric } from "@/lib/lean/geometry";
 import { evalProp, evalTerm } from "@/lib/lean/geometry/refute";
-import { findPoints } from "@/lib/lean/geometry/certificate";
+import { findFieldRoot, findPoints } from "@/lib/lean/geometry/certificate";
 
 function show(src: string, vars = new VarTable(new Set(["x", "t", "a", "b"]))) {
   const n = parseTerm(src);
@@ -177,6 +177,44 @@ describe.skipIf(!sympy)("polynomial certificates (SymPy)", () => {
     expect(ds.length).toBe(2);
     expect(ds[0]).toBeCloseTo(2 * Math.cos(Math.PI / 9) - 1, 9);
     expect(ds[1]).toBeCloseTo(1, 9);
+  });
+
+  it("cancels a factor whose inverse is known (b · w = 1): b · (p − c · r) = 0 gives p = c · r", async () => {
+    const vars = new VarTable(new Set(["b", "p", "c", "r", "w"]));
+    const P = (s: string) => toPoly(s, parseTerm(s), vars);
+    const hyps = [
+      { name: "h", poly: P("b * p - b * c * r") },
+      { name: "hw", poly: P("b * w - 1") },
+    ];
+    const goal = P("p ^ 2 - c ^ 2 * r ^ 2");
+    const r = await findCertificate({ vars: [], hyps, goal, multipliers: [] });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // an exact combination, no multiplier: w is what divides by b
+    expect(r.multiplier).toEqual([]);
+    let rest = goal;
+    for (const hh of hyps) if (r.coefficients.has(hh.name)) rest = rest.sub(r.coefficients.get(hh.name)!.mul(hh.poly));
+    expect(rest.isZero()).toBe(true);
+  });
+
+  it("finds a root with a length scale: q² = b² − p², p = cos 20° · b ⇒ q = sin 20° · b", async () => {
+    const vars = new VarTable(new Set(["b", "p", "q"]));
+    const P = (s: string) => toPoly(s, parseTerm(s), vars);
+    const c = "Real.cos (Real.pi / 9)", sn = "Real.sin (Real.pi / 9)";
+    const hyps = [
+      { name: "hp", poly: P(`p - ${c} * b`) },
+      { name: "hq", poly: P("q ^ 2 - b ^ 2 + p ^ 2") },
+      { name: "r1", poly: P(`${sn} ^ 2 + ${c} ^ 2 - 1`) },
+      { name: "r2", poly: P(`4 * ${c} ^ 3 - 3 * ${c} - 1 / 2`) },
+    ];
+    const idx = (s: string) => [...P(s).vars()][0];
+    const base = { vars: [], hyps, field: { c: idx(c), s: idx(sn) }, root: idx("q"), n: 9 };
+    // without the scale the square b² sin² θ is no number of the field
+    expect(await findFieldRoot(base)).toBeUndefined();
+    const r = await findFieldRoot({ ...base, scale: [idx("b")] });
+    expect(r?.root.sub(P(`${sn} * b`)).isZero()).toBe(true);
+    expect(r?.factor?.sub(P(sn)).isZero()).toBe(true);
+    expect([...(r?.scaleExps ?? new Map())]).toEqual([[idx("b"), 1]]);
   });
 
   it("names the factor a multiplier needs when no candidate works (u² = v² ⇒ u = v needs u + v ≠ 0)", async () => {

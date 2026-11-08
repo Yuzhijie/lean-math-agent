@@ -265,7 +265,10 @@ export async function findCertificate(req: CertificateRequest): Promise<Certific
       // 404: an older server without /certificate; 413: too large for it — run the script
     }
   }
-  return runScript(prep, timeoutMs);
+  const t0 = Date.now();
+  const out = await runScript(prep, timeoutMs);
+  if (process.env.GEOMETRY_DEBUG) console.error(`[geometry] certificate search ${((Date.now() - t0) / 1000).toFixed(1)}s: ${out.ok ? "found" : out.reason}`);
+  return out;
 }
 
 // ── Numeric points (refutation) ───────────────────────────────────────────
@@ -312,10 +315,12 @@ export async function findFieldRoot(req: {
   field: { c: number; s: number };
   root: number;
   n: number;
+  /** positive length scales: the value may be b^k · F with F in the field */
+  scale?: number[];
   timeoutSec?: number;
-}): Promise<Poly | undefined> {
+}): Promise<{ root: Poly; factor?: Poly; scaleExps?: Map<number, number> } | undefined> {
   const hyps = req.hyps.filter((h) => fits(h.poly));
-  const used = new Set<number>([req.field.c, req.field.s, req.root]);
+  const used = new Set<number>([req.field.c, req.field.s, req.root, ...(req.scale ?? [])]);
   for (const h of hyps) for (const v of h.poly.vars()) used.add(v);
   const order = [...used].sort((a, b) => a - b);
   const to = new Map(order.map((v, i) => [v, i]));
@@ -327,14 +332,16 @@ export async function findFieldRoot(req: {
     field: { c: `v${to.get(req.field.c)}`, s: `v${to.get(req.field.s)}` },
     root: `v${to.get(req.root)}`,
     n: req.n,
+    ...(req.scale?.length ? { scale: req.scale.map((v) => `v${to.get(v)}`) } : {}),
     timeout: req.timeoutSec ?? 30,
   });
   if (process.env.GEOMETRY_CERT_DUMP) {
     const { writeFileSync } = await import("node:fs");
     writeFileSync(path.join(process.env.GEOMETRY_CERT_DUMP, `root-${Date.now()}.json`), body);
   }
-  const raw = (await transport(body, ((req.timeoutSec ?? 30) + 10) * 1000)) as { ok?: boolean; root?: Sparse; reason?: string } | null;
+  const raw = (await transport(body, ((req.timeoutSec ?? 30) + 10) * 1000)) as { ok?: boolean; root?: Sparse; factor?: Sparse; scale_exps?: Record<string, number>; reason?: string } | null;
   if (process.env.GEOMETRY_DEBUG && !raw?.ok) console.error(`[geometry] field root: ${raw?.reason ?? "no answer"}`);
   if (!raw?.ok || !raw.root) return undefined;
-  return Poly.fromSparse(raw.root).rename(back);
+  const scaleExps = raw.scale_exps ? new Map(Object.entries(raw.scale_exps).map(([k, e]) => [back.get(Number(k.slice(1)))!, e])) : undefined;
+  return { root: Poly.fromSparse(raw.root).rename(back), ...(raw.factor ? { factor: Poly.fromSparse(raw.factor).rename(back) } : {}), ...(scaleExps ? { scaleExps } : {}) };
 }

@@ -27,7 +27,7 @@ import { ParseError, parseTerm, slice, unwrap, type Node } from "./expr";
 import { isInaccessible, parseGoal, type GoalState } from "./goal";
 import { Frac, NotPolynomial, Poly, toPoly, VarTable, hasNonConstDivision, isNumeric, type Atom } from "./poly";
 import { findCertificate } from "./certificate";
-import { angleProof } from "./angles";
+import { angleProof, chooseStep, piMultiple, scaledFieldRoots, sqrtTexts, trigSetup } from "./angles";
 
 export type { TacticRunner } from "../tactic-runner";
 import type { TacticRunner } from "../tactic-runner";
@@ -496,6 +496,28 @@ async function atomFacts(run: TacticRunner, done: Set<string>): Promise<void> {
       await run.apply(`have ${run.fresh("htrig")} : Real.sin ${a.arg} ^ 2 + Real.cos ${a.arg} ^ 2 = 1 := Real.sin_sq_add_cos_sq _`);
     }
   }
+  // the same length written two ways (√((p - 0)² + …) from an angle, √((0 - p)² + …) from a
+  // distance): one fact, else the certificate also allows the second to be minus the first (and a
+  // 20° angle's p = −cos · b branch kept "BD = DE" from following)
+  const roots = vars.atoms.filter((a) => a.kind === "sqrt" && a.arg);
+  const argOf = new Map<string, Poly | undefined>();
+  for (const a of roots) {
+    try {
+      argOf.set(a.text, toPoly(a.arg!, parseTerm(a.arg!), vars));
+    } catch {
+      argOf.set(a.text, undefined);
+    }
+  }
+  for (let i = 0; i < roots.length; i++)
+    for (let j = i + 1; j < roots.length; j++) {
+      const [a, b] = [roots[i], roots[j]];
+      const key = `same:${a.text}|${b.text}`;
+      const pa = argOf.get(a.text);
+      const pb = argOf.get(b.text);
+      if (done.has(key) || !pa || !pb || !pa.sub(pb).isZero()) continue;
+      done.add(key);
+      await run.apply(`have ${run.fresh("hsame")} : ${a.text} = ${b.text} := congrArg Real.sqrt (by ring)`);
+    }
   await productFacts(run, vars, argPolys, sqNames, done);
 }
 
@@ -732,11 +754,101 @@ async function productFacts(run: TacticRunner, vars: VarTable, args: Map<number,
  * Steps 4–5; when no certificate exists and both sides are nonnegative (`√X = √Y / 2`), square
  * both sides (`pow_left_inj₀`) and try once more — over the reals that is what the algebra misses.
  */
-async function closeEquation(run: TacticRunner, atomsDone: Set<string>): Promise<void> {
+/**
+ * The trigonometric field for an equation whose context still has cos / sin of π/N with N ∈ {9, 12,
+ * 18, 36, …} (values the simp lemmas do not give): the angle mode's relations (angles.ts trigSetup —
+ * sin² + cos² = 1, T_{N/3}(cos θ) = 1/2, sin θ as a polynomial in cos θ for even N, each angle as a
+ * polynomial in cos θ, sin θ) are added once per context, and the certificate search works modulo
+ * them. A distance goal with a 20° angle (AB = AC, ∠A = 20°, BD = BE = BC ⇒ BDE equilateral) had no
+ * certificate: cos (π/9) was a free atom.
+ */
+async function trigField(run: TacticRunner, done: Set<string>): Promise<Field | undefined> {
+  const st = state(run);
+  const angles = new Set<string>();
+  for (const m of (st.target + "\n" + st.hyps.map((h) => h.type).join("\n")).matchAll(/Real\.(?:sin|cos) \(([^()]*Real\.pi[^()]*)\)/g)) angles.add(m[1].trim());
+  const qs = [...angles].map((a) => piMultiple(a));
+  if (!qs.length || qs.some((q) => !q)) return undefined;
+  const N = chooseStep(qs as Frac[]);
+  // π/3 and π/6 have known values (simp); the field is for the others
+  if (!N || N <= 6) return undefined;
+  // once per context: the relations' names, kept while they are still in this goal's hypotheses
+  const names = new Set(st.hyps.flatMap((h) => h.names));
+  for (const k of done) {
+    const m = /^field:(\d+)=(\S+)\|(\S+)$/.exec(k);
+    if (m && Number(m[1]) === N && names.has(m[2]) && names.has(m[3])) return { N, r1: m[2], r2: m[3] };
+  }
+  try {
+    const rel = await trigSetup(run, N, [...angles]);
+    const r1 = rel.r3 ?? rel.r1;
+    done.add(`field:${N}=${r1}|${rel.r2}`);
+    return { N, r1, r2: rel.r2 };
+  } catch (e) {
+    if (e instanceof Fail) return undefined;
+    throw e;
+  }
+}
+
+/**
+ * `∃ w, v * w = 1` for each positive real variable (`0 < v`), once per context: the certificate
+ * script cancels such a v from a hypothesis (b · (p − c · r) = 0 → p = c · r; a free scale b had kept
+ * the linear substitutions from p). Returns the scales with their positivity facts.
+ */
+async function addInverses(run: TacticRunner, done: Set<string>): Promise<{ v: string; pos: string }[]> {
+  const st = state(run);
+  const f = readFacts(st);
+  const names = new Set(st.hyps.flatMap((h) => h.names));
+  const out: { v: string; pos: string }[] = [];
+  for (const h of st.hyps) {
+    const m = /^0 < ([^\s()]+)$/.exec(h.type.trim()) ?? /^([^\s()]+) > 0$/.exec(h.type.trim());
+    const pos = h.names[0];
+    if (!m || !pos || isInaccessible(pos) || !f.realVars.has(m[1])) continue;
+    const v = m[1];
+    const key = [...done].find((k) => k.startsWith(`inv:${v}=`) && names.has(k.slice(`inv:${v}=`.length)));
+    if (!key) {
+      const w = run.fresh("cw");
+      const hw = run.fresh("hcw");
+      if (!(await run.apply(`obtain ⟨${w}, ${hw}⟩ : ∃ w : ℝ, ${v} * w = 1 := ⟨${v}⁻¹, mul_inv_cancel₀ (ne_of_gt ${pos})⟩`))) continue;
+      done.add(`inv:${v}=${hw}`);
+    }
+    out.push({ v, pos });
+  }
+  return out;
+}
+
+interface Field {
+  N: number;
+  r1: string;
+  r2: string;
+}
+
+async function closeEquation(run: TacticRunner, atomsDone: Set<string>, trigDone: Set<string> = new Set()): Promise<void> {
   try {
     await closeEquationOnce(run);
   } catch (e) {
     if (!(e instanceof NoCertificate)) throw e;
+    const field = await trigField(run, trigDone);
+    if (field) {
+      try {
+        await closeEquationOnce(run, field);
+        return;
+      } catch (e2) {
+        if (!(e2 instanceof NoCertificate)) throw e2;
+      }
+      // the figure is fixed up to its size: lengths and coordinates are b^k times numbers of the
+      // field; with 1 / b in context those values are found and proved one by one (fieldRoots)
+      const scales = await addInverses(run, trigDone);
+      const roots = scales.length ? await scaledFieldRoots(run, field.N, { r1: field.r1, r2: field.r2 }, scales) : undefined;
+      // a length of the goal still unknown (its sign is not algebra): straight to squaring both sides
+      const open = roots && sqrtTexts(state(run).target).some((r) => !roots.has(r.text));
+      if (roots && !open) {
+        try {
+          await closeEquationOnce(run, field);
+          return;
+        } catch (e3) {
+          if (!(e3 instanceof NoCertificate)) throw e3;
+        }
+      }
+    }
     const st = state(run);
     const t = tryParse(st.target);
     if (!t || t.k !== "bin" || t.op !== "=") throw e;
@@ -748,13 +860,13 @@ async function closeEquation(run: TacticRunner, atomsDone: Set<string>): Promise
     if (!(await haveFirst(run, hL, `(0:ℝ) ≤ ${L}`, positivityProofs(L, f, false))) || !(await haveFirst(run, hR, `(0:ℝ) ≤ ${R}`, positivityProofs(R, f, false)))) throw e;
     if (!(await run.apply(`rw [← pow_left_inj₀ ${hL} ${hR} two_ne_zero]`))) throw e;
     await atomFacts(run, atomsDone);
-    await closeEquationOnce(run);
+    await closeEquationOnce(run, field);
   }
 }
 
 class NoCertificate extends Fail {}
 
-async function closeEquationOnce(run: TacticRunner): Promise<void> {
+async function closeEquationOnce(run: TacticRunner, field?: Field): Promise<void> {
   const st = state(run);
   const f = readFacts(st);
   const t = tryParse(st.target);
@@ -770,6 +882,9 @@ async function closeEquationOnce(run: TacticRunner): Promise<void> {
   }
   const hyps: { name: string; poly: Poly }[] = [];
   for (const e of f.eqs) {
+    // the trigonometric chain is only a means to the per-angle facts (as in the angle mode)
+    // and the roots' own steps ((v − F)(v + F) = 0, the chain facts) are implied by `v = F`
+    if (field && /^h(cos|sin|root|step)\d+$/.test(e.name)) continue;
     try {
       hyps.push({ name: e.name, poly: toPoly(e.text, e.node.a, vars).sub(toPoly(e.text, e.node.b, vars)) });
     } catch (err) {
@@ -834,7 +949,20 @@ async function closeEquationOnce(run: TacticRunner): Promise<void> {
   }
   if (!vars.names.length) throw new Fail("the goal is a false numeric identity");
   const sqrtVars = vars.atoms.filter((a) => a.kind === "sqrt").map((a) => a.index);
-  let cert = await findCertificate({ vars: vars.names.map((_, i) => `v${i}`), hyps, goal, multipliers: mults, needed: true, sqrtVars });
+  const atomVar = (text: string) => {
+    try {
+      const p = toPoly(text, parseTerm(text), vars);
+      const vs = [...p.vars()];
+      return vs.length === 1 ? vs[0] : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const fc = field && atomVar(`Real.cos (Real.pi / ${field.N})`);
+  const fs = field && atomVar(`Real.sin (Real.pi / ${field.N})`);
+  // the field's system is bigger (the trigonometric relations, the roots): more time
+  const fieldReq = field && fc !== undefined && fs !== undefined ? { field: { c: fc, s: fs, r1: field.r1, r2: field.r2 }, timeoutSec: 60 } : {};
+  let cert = await findCertificate({ vars: vars.names.map((_, i) => `v${i}`), hyps, goal, multipliers: mults, needed: true, sqrtVars, ...fieldReq });
   if (!cert.ok && cert.needed?.length) {
     // The goal follows once some other factor is known nonzero (the ideal quotient names it, e.g. the
     // positive b²(1 − t) + c²t an equal-angle condition leaves): prove each in Lean, then ask again.
@@ -849,7 +977,7 @@ async function closeEquationOnce(run: TacticRunner): Promise<void> {
       }
       extra.push({ name, poly: p, text: `(${text})` });
     }
-    if (extra.length) cert = await findCertificate({ vars: vars.names.map((_, i) => `v${i}`), hyps, goal, multipliers: [...mults, ...extra], sqrtVars });
+    if (extra.length) cert = await findCertificate({ vars: vars.names.map((_, i) => `v${i}`), hyps, goal, multipliers: [...mults, ...extra], sqrtVars, ...fieldReq });
     if (cert.ok) mults.push(...extra);
   }
   if (!cert.ok) throw new NoCertificate(`no polynomial certificate: ${cert.reason}`);
@@ -1086,7 +1214,7 @@ export async function proveGeometryGoals(run: TacticRunner): Promise<GeometryOut
         if (run.goals().length < open) continue; // the rewrite closed it
         await clearFractions(run);
         await atomFacts(run, atomsDone);
-        await closeEquation(run, atomsDone);
+        await closeEquation(run, atomsDone, trigDone);
         continue;
       }
       throw new Fail(`goal shape not handled: ${st.target.replace(/\s+/g, " ").slice(0, 100)}`);

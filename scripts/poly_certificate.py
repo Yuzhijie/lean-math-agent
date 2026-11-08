@@ -443,6 +443,54 @@ def conjugates(work: list[Item], gens) -> list[Item]:
     return out
 
 
+GB_CACHE: dict = {}
+
+
+def inverse_pairs(items: list[Item]) -> list[tuple[int, int, Item]]:
+    """Hypotheses u * w - 1 (w = 1 / u, the caller's `b * w = 1` for a positive b): (u, w, item)."""
+    out = []
+    for it in items:
+        p = it.poly
+        terms = p.terms()
+        if len(terms) != 2:
+            continue
+        mono = {m: c for m, c in terms}
+        zero = tuple(0 for _ in p.gens)
+        if mono.get(zero) != -1:
+            continue
+        (m, c), = [(m, c) for m, c in terms if m != zero]
+        idx = [i for i, e in enumerate(m) if e]
+        if c != 1 or len(idx) != 2 or any(m[i] != 1 for i in idx):
+            continue
+        out.append((idx[0], idx[1], it))
+        out.append((idx[1], idx[0], it))
+    return out
+
+
+def cancel_inverses(work: list[Item], inverses: list[tuple[int, int, Item]]) -> bool:
+    """A factor u of a hypothesis h with u · w = 1 known is cancelled: h / u = w · h − (u w − 1) · (h / u),
+    so the item stays a combination of the hypotheses (no multiplier). b · (p − c · r) = 0 becomes
+    p − c · r = 0, which the linear substitutions then use (a free scale b had kept p from them)."""
+    changed = False
+    for k, it in enumerate(work):
+        if any(it is inv for _u, _w, inv in inverses):
+            continue
+        for u, w, inv in inverses:
+            gens = it.poly.gens
+            x = Poly(gens[u], *gens, domain=QQ)
+            wp = Poly(gens[w], *gens, domain=QQ)
+            while not it.poly.is_zero and it.poly.degree(gens[u]) >= 1:
+                q, r = it.poly.div(x)
+                if not r.is_zero:
+                    break
+                comb = {name: c * wp for name, c in it.comb.items()}
+                comb = add_comb(comb, inv.comb, -q)
+                it = Item(q, comb)
+                changed = True
+        work[k] = it
+    return changed
+
+
 def attempt(goal: Poly, items: list[Item], max_extra: int, max_unknowns: int, member_only: bool = False, field: Field | None = None):
     """Coefficients (by hypothesis name) with goal = sum coef * h, or None. With member_only: True
     when the goal is in the ideal (Gröbner basis test), else False — no cofactors."""
@@ -485,8 +533,11 @@ def attempt(goal: Poly, items: list[Item], max_extra: int, max_unknowns: int, me
         work += [field.r1, field.r2]
         field_reduce_all()
 
+    inverses = inverse_pairs(work)
     for _ in range(200):
         changed = False
+        if inverses:
+            cancel_inverses(work, inverses)
         # the substitution of lowest degree first (in the variables other than the field's): a
         # coordinate from an angle equation, not from a length relation d² = …, which would make
         # everything quartic
@@ -585,7 +636,12 @@ def attempt(goal: Poly, items: list[Item], max_extra: int, max_unknowns: int, me
     if not hyps:
         return False if member_only else None
     try:
-        G = groebner([h.as_expr() for h in hyps], *gens, order="grevlex", domain=QQ)
+        # the reduced hypotheses do not depend on the target: one basis serves every multiplier tried
+        key = (tuple(gens), tuple(sorted(str(h.as_expr()) for h in hyps)))
+        G = GB_CACHE.get(key)
+        if G is None:
+            G = groebner([h.as_expr() for h in hyps], *gens, order="grevlex", domain=QQ)
+            GB_CACHE[key] = G
         member = G.contains(target.poly.as_expr())
     except ComputationTimeout:
         raise
@@ -805,6 +861,7 @@ def certificate(req: dict) -> dict:
     gens = [Symbol(n) for n in names]
     index = {n: i for i, n in enumerate(names)}
     ROOTS.clear()
+    GB_CACHE.clear()
     ROOTS.update(index[v] for v in (req.get("sqrt_vars") or []) if isinstance(v, str) and v in index)
     hyps_in = req.get("hyps") or []
     mults_in = req.get("multipliers") or []
@@ -1102,14 +1159,27 @@ def field_root(req: dict) -> dict:
     hyps = [to_poly(h.get("poly"), gens, index) for h in (req.get("hyps") or []) if isinstance(h, dict)]
     hyps = [h for h in hyps if not h.is_zero]
     c, s, v = gens[ci], gens[si], gens[vi]
-    others = [g for i, g in enumerate(gens) if i not in (ci, si, vi)]
-    G = groebner([h.as_expr() for h in hyps], v, *others, s, c, order="lex")
+    # a free length scale (b in B = (b, 0)): v² may be b^2k · E with E in the field, v = b^k · √E
+    scale = [index[x] for x in (req.get("scale") or []) if isinstance(x, str) and x in index and index[x] not in (ci, si, vi)]
+    others = [g for i, g in enumerate(gens) if i not in (ci, si, vi) and i not in scale]
+    sg = [gens[i] for i in scale]
+    G = groebner([h.as_expr() for h in hyps], v, *others, *sg, s, c, order="lex")
     if list(G.exprs) == [1]:
         return {"ok": False, "reason": "the hypotheses are inconsistent"}
     _, nf = G.reduce(v**2)
     nf = sympy.expand(nf)
-    if nf.free_symbols - {s, c}:
+    if nf.free_symbols - {s, c} - set(sg):
         return {"ok": False, "reason": "the square is not a number of the field"}
+    mono = sympy.Integer(1)
+    if sg:
+        # one power product of the scales, every exponent even
+        P = Poly(nf, *sg)
+        if len(P.monoms()) != 1 or any(e % 2 for e in P.monoms()[0]):
+            return {"ok": False, "reason": "the square is not a scale squared times a number of the field"}
+        exps = P.monoms()[0]
+        nf = sympy.expand(P.coeffs()[0])
+        for g, e in zip(sg, exps):
+            mono *= g ** (e // 2)
     k = sympy.degree(sympy.expand(sympy.chebyshevt(n // 3, c)), c) if n % 3 == 0 else 0
     if k < 1:
         return {"ok": False, "reason": "n must be a multiple of 3"}
@@ -1131,7 +1201,12 @@ def field_root(req: dict) -> dict:
     _, rem = sympy.reduced(sympy.expand(F**2 - nf), [R1, R2], s, c, order="lex")
     if sympy.expand(rem) != 0:
         return {"ok": False, "reason": "the numeric square root is not exact"}
-    return {"ok": True, "root": from_poly(Poly(F, *gens, domain=QQ), names), "square": from_poly(Poly(nf, *gens, domain=QQ), names)}
+    out = {"ok": True, "root": from_poly(Poly(sympy.expand(mono * F), *gens, domain=QQ), names), "square": from_poly(Poly(sympy.expand(mono**2 * nf), *gens, domain=QQ), names)}
+    if sg:
+        # the field part and the scale powers apart, for the sign proof (F > 0, then b^k · F > 0)
+        out["factor"] = from_poly(Poly(F, *gens, domain=QQ), names)
+        out["scale_exps"] = {names[i]: int(e // 2) for i, e in zip(scale, exps) if e}
+    return out
 
 
 def dispatch(req: dict) -> dict:

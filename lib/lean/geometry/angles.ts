@@ -251,6 +251,10 @@ interface Ctx {
   rel?: { r1: string; r2: string; r3?: string };
   /** unknowns fixed as numbers of the field (fieldRoots): variable → its value's text */
   roots?: Map<string, { value: string; name: string }>;
+  /** positive length scales (variable, its `0 < v` fact): values b^k · F (scaledFieldRoots) */
+  scales?: { v: string; pos: string }[];
+  /** rational bounds lo < cos θ < hi (names), for the sign of a field number */
+  cosBounds?: [string, string];
 }
 
 const lin = (parts: [Poly, string][], names: string[]): string => {
@@ -263,7 +267,7 @@ async function apply(run: TacticRunner, tactic: string, what: string): Promise<v
 }
 
 /** The trigonometric facts: chain, relations, every cos/sin of the angles as a polynomial in cos θ, sin θ. */
-async function trigSetup(run: TacticRunner, N: number, angles: string[]): Promise<{ r1: string; r2: string; r3?: string }> {
+export async function trigSetup(run: TacticRunner, N: number, angles: string[]): Promise<{ r1: string; r2: string; r3?: string }> {
   const k0 = N / 3;
   const theta = `Real.pi / ${N}`;
   const names = [`Real.cos (${theta})`, `Real.sin (${theta})`];
@@ -638,7 +642,7 @@ async function closeGoal(ctx: Ctx, g: Angle): Promise<void> {
  * (the caller restores the state and goes on with the general route).
  */
 /** The `√(…)` terms of a text, outermost first (balanced parentheses). */
-function sqrtTexts(text: string): { text: string; arg: string }[] {
+export function sqrtTexts(text: string): { text: string; arg: string }[] {
   const out: { text: string; arg: string }[] = [];
   for (let i = text.indexOf("√("); i >= 0; i = text.indexOf("√(", i + 1)) {
     let depth = 0;
@@ -708,6 +712,17 @@ async function fieldRoots(ctx: Ctx): Promise<boolean> {
     const v = m[1] === "≤" || m[1] === "<" ? m[2] : m[1];
     if (f.realVars.has(v) && !isInaccessibleName(h.names[0])) nonneg.set(v, h.names[0]);
   }
+  // a distance goal's mode (scaledFieldRoots): square roots are nonnegative unknowns too
+  if (ctx.scales) {
+    contextHyps(st, vars); // registers the atoms
+    for (const a of vars.atoms) if (a.kind === "sqrt" && a.arg) nonneg.set(a.text, `(Real.sqrt_nonneg (${a.arg}))`);
+  }
+  const scaleIdx = (ctx.scales ?? []).map((sc) => {
+    const p = polyOf(sc.v, vars);
+    return p ? [...p.vars()][0] : undefined;
+  });
+  const scalePos = new Map<number, string>();
+  ctx.scales?.forEach((sc, i) => scaleIdx[i] !== undefined && scalePos.set(scaleIdx[i]!, sc.pos));
   // per case of a split: the facts of another case are not in this context
   ctx.roots = new Map();
   if (process.env.GEOMETRY_DEBUG) console.error(`[geometry] field roots: candidates ${[...nonneg.keys()].join(", ") || "none"}`);
@@ -717,7 +732,16 @@ async function fieldRoots(ctx: Ctx): Promise<boolean> {
     const vi = vp ? [...vp.vars()][0] : undefined;
     if (vi === undefined) continue;
     const hyps = contextHyps(state(run), vars);
-    const F = await findFieldRoot({ vars: vars.names.map((_, i) => `v${i}`), hyps, field: { c: ci, s: si }, root: vi, n: ctx.N, timeoutSec: 20 });
+    // no scale, or one positive length as the figure's size (several at once let the square come out
+    // in another length: q² = b² sin² θ read as b² = q² / sin² θ)
+    const scaleSets = [[], ...[...scalePos.keys()].filter((i) => i !== vi).map((i) => [i])];
+    let found: Awaited<ReturnType<typeof findFieldRoot>>;
+    for (const sc of scaleSets) {
+      found = await findFieldRoot({ vars: vars.names.map((_, i) => `v${i}`), hyps, field: { c: ci, s: si }, root: vi, n: ctx.N, timeoutSec: 20, ...(sc.length ? { scale: sc } : {}) });
+      if (found) break;
+      if (!ctx.scales) break;
+    }
+    const F = found?.root;
     if (process.env.GEOMETRY_DEBUG) console.error(`[geometry] field root of ${v}: ${F ? F.toLean(vars.names) : "none"}`);
     if (!F || F.vars().has(vi)) continue;
     const Ft = F.toLean(vars.names);
@@ -731,13 +755,73 @@ async function fieldRoots(ctx: Ctx): Promise<boolean> {
     const pos = run.fresh("hrootpos");
     const bounds = st.hyps.flatMap((h) => h.names).filter((n) => /^hbnd\d+$/.test(n));
     const hints = [...bounds, ...bounds.flatMap((a, i) => bounds.slice(i).map((b) => `mul_pos (sub_pos.mpr ${a}) (sub_pos.mpr ${b})`)), ctx.rel.r1, ctx.rel.r2];
-    const ok = await haveFirst(run, pos, `0 < ${Ft}`, [`by positivity`, `by nlinarith [${bounds.join(", ")}]`, `by nlinarith [${hints.join(", ")}]`]);
+    let ok: boolean;
+    if (found?.factor && found.scaleExps?.size) {
+      // b^k · E: E > 0 from the bounds, then the product of positive factors
+      const Et = found.factor.toLean(vars.names);
+      const posE = run.fresh("hrootpos");
+      const constant = found.factor.constValue();
+      const facts = [...found.scaleExps].map(([i, e]) => (e === 1 ? scalePos.get(i)! : `(pow_pos ${scalePos.get(i)!} ${e})`));
+      const cb = ctx.cosBounds;
+      const eProofs = [
+        ...(cb ? [`by nlinarith only [${cb[0]}, ${cb[1]}, mul_pos (sub_pos.mpr ${cb[0]}) (sub_pos.mpr ${cb[1]})]`] : []),
+        `by positivity`,
+        `by nlinarith [${bounds.join(", ")}]`,
+      ];
+      if (constant && constant.n <= 0n) continue;
+      if (!constant && !(await haveFirst(run, posE, `(0 : ℝ) < ${Et}`, eProofs))) continue;
+      const prod = [...facts, constant ? `(by norm_num : (0 : ℝ) < ${Et})` : posE].reduce((acc, f) => `(mul_pos ${acc} ${f})`);
+      // the context is large: no nlinarith over it (it ran out of time on 0 < b)
+      ok = await run.apply(`have ${pos} : (0 : ℝ) < ${Ft} := by\n  have h' := ${prod}\n  exact h'.trans_eq (by ring)`);
+    } else ok = await haveFirst(run, pos, `0 < ${Ft}`, [`by positivity`, `by nlinarith [${bounds.join(", ")}]`, `by nlinarith [${hints.join(", ")}]`]);
     if (!ok) continue;
     const name = run.fresh("hrooteq");
     if (!(await run.apply(`have ${name} : ${v} = ${Ft} := by\n  rcases mul_eq_zero.mp ${key} with h | h\n  · linarith only [h]\n  · linarith only [h, ${hv0}, ${pos}]`))) continue;
     ctx.roots.set(v, { value: Ft, name });
   }
   return ctx.roots.size > 0;
+}
+
+/**
+ * fieldRoots for a goal that is no angle (prove.ts, after the trigonometric field): square roots
+ * and nonnegative unknowns fixed as b^k · F (F in the field, b a positive length scale with its
+ * inverse in context — the figure is only fixed up to its size). AB = AC, ∠A = 20°, BD = BE = BC:
+ * q = b · sin 20°, |BC| = b · (2 + 2c − 4c²) with c = cos 20°.
+ */
+export async function scaledFieldRoots(run: TacticRunner, N: number, rel: { r1: string; r2: string }, scales: { v: string; pos: string }[]): Promise<Set<string> | undefined> {
+  const ctx: Ctx = { run, N, sinPos: new Map(), sq: new Map(), pyth: new Map(), rel, scales };
+  await trigBounds(run, N);
+  ctx.cosBounds = await cosBounds(run, N);
+  return (await fieldRoots(ctx)) ? new Set(ctx.roots?.keys()) : undefined;
+}
+
+/**
+ * lo < cos θ < hi with rationals three decimals apart (from sin² + cos² = 1 and the sin bounds of
+ * trigBounds), `nlinarith only` — the field numbers' signs (2 + 2c − 4c² > 0) follow with the
+ * product (c − lo)(hi − c) > 0.
+ */
+async function cosBounds(run: TacticRunner, N: number): Promise<[string, string] | undefined> {
+  const theta = `Real.pi / ${N}`;
+  const st = state(run);
+  const norm = (t: string) => t.replace(/\s+/g, "");
+  // the bounds trigBounds just added are the last ones (0 < sin θ also matches "… < sin θ")
+  const find = (re: RegExp) => st.hyps.filter((h) => re.test(norm(h.type)) && !/^0</.test(norm(h.type).replace(/^\(0:ℝ\)/, "0"))).at(-1)?.names[0];
+  const esc = norm(theta).replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+  const pyth = find(new RegExp(`^Real\\.sin\\(${esc}\\)\\^2\\+Real\\.cos\\(${esc}\\)\\^2=1$`));
+  const sinHi = find(new RegExp(`^Real\\.sin\\(${esc}\\)<`));
+  const sinLo = find(new RegExp(`<Real\\.sin\\(${esc}\\)$`));
+  const cosPos = st.hyps.filter((h) => new RegExp(`^0<Real\\.cos\\(${esc}\\)$`).test(norm(h.type))).at(-1)?.names[0];
+  if (!pyth || !sinHi || !sinLo || !cosPos) return undefined;
+  const shi = 3.15 / N;
+  const slo = 3.14 / N - shi ** 3 / 6;
+  const lo = Math.floor(Math.sqrt(1 - shi * shi) * 1000 - 1) / 1000;
+  const hi = Math.ceil(Math.sqrt(1 - slo * slo) * 1000 + 1) / 1000;
+  const hlo = run.fresh("hbnd");
+  const hhi = run.fresh("hbnd");
+  const facts = `${sinHi}, ${sinLo}, ${cosPos}, ${pyth}`;
+  if (!(await run.apply(`have ${hlo} : (${lo} : ℝ) < Real.cos (${theta}) := by nlinarith only [${facts}]`))) return undefined;
+  if (!(await run.apply(`have ${hhi} : Real.cos (${theta}) < (${Math.min(hi, 1)} : ℝ) := by nlinarith only [${facts}]`))) return undefined;
+  return [hlo, hhi];
 }
 
 /**
