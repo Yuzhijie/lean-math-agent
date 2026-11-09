@@ -3,7 +3,7 @@ import { amgmFinishers, readProductConstraint } from "@/lib/lean/auto/amgm";
 import { parseGoal } from "@/lib/lean/geometry/goal";
 import { renameOldLemmas } from "@/lib/lean/renamed";
 
-const goal = (hyps: string[], target: string) => parseGoal(`${hyps.join("\n")}\n⊢ ${target}`);
+const goal = (hyps: string[], target: string) => parseGoal(`${hyps.join("\n")}\n⊢ ${target}`)!;
 const ABC = ["a b c : ℝ", "ha : 0 < a", "hb : 0 < b", "hc : 0 < c", "habc : a * b * c = 1"];
 
 describe("AM–GM under a product constraint", () => {

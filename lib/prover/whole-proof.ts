@@ -19,6 +19,7 @@ import { compilingPrefix, dropNoGoalTactics, formatVerificationFeedback, summari
 import { loogleHintsForUnknownIdentifiers, unknownIdentifiers } from "../lean/loogle";
 import { modernizeLeanSyntax } from "../lean/modernize";
 import { localHintsForUnknownIdentifiers } from "../lean/premises";
+import { repairUnknownNames } from "../lean/name-repair";
 import { verifyLeanSource, type LeanVerifyResult } from "../lean/sandbox";
 import { mainAssignmentIndex, sanitizeLeanBody } from "../lean/sanitize";
 import { formatSuggestions, librarySearchSuggestions } from "../lean/suggest";
@@ -327,12 +328,32 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
     // ── Verify (strict: no sorry, standard axioms, statement lock) ───
     progress({ round, status: "verifying", detail: lt(`验证 ${tacticBlocks.length} 个候选…`, `Verifying ${tacticBlocks.length} candidate(s)…`) });
     const verified = await Promise.all(
-      tacticBlocks.map(async (tactics) => {
-        const source = assemble(tactics);
-        const verification = await verify(args.sessionId, source, {
+      tacticBlocks.map(async (sampled) => {
+        let tactics = sampled;
+        let source = assemble(tactics);
+        let verification = await verify(args.sessionId, source, {
           theoremName: args.theoremName,
           expectedSignature: args.expectedSignature,
         });
+        // Names Lean does not know: replaced (renames, the index, Mathlib's systematic renames) and
+        // checked once more before the model is asked again.
+        const unknown = verification.ok ? [] : unknownIdentifiers(verification.messages.map((m) => m.message));
+        if (unknown.length) {
+          const fixed = await repairUnknownNames(tactics, unknown);
+          if (fixed) {
+            const source2 = assemble(fixed.tactics);
+            const v2 = await verify(args.sessionId, source2, { theoremName: args.theoremName, expectedSignature: args.expectedSignature });
+            const errs = (v: typeof verification) => v.messages.filter((m) => m.severity === "error").length;
+            const names = fixed.replaced.map(([a, b]) => `${a} → ${b}`).join(", ");
+            if (v2.ok || errs(v2) < errs(verification)) {
+              log.push(`round ${round}: unknown names replaced without the model (${names})${v2.ok ? ", verified" : ", fewer errors"}`);
+              if (v2.ok) return { tactics: fixed.tactics, source: source2, verification: v2 };
+              tactics = fixed.tactics;
+              source = source2;
+              verification = v2;
+            }
+          }
+        }
         // "No goals": the proof was done before its last tactics — drop them and check again.
         const trimmed = verification.ok ? undefined : dropNoGoalTactics(verification, source, tactics);
         if (trimmed) {

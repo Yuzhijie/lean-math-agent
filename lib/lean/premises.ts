@@ -15,7 +15,7 @@
  * count double because Mathlib names spell out the statement
  * (`mul_le_mul`, `sq_nonneg`, `Finset.sum_range_succ` …).
  */
-import { RENAMED_LEMMAS } from "./renamed";
+import { RENAMED_LEMMAS, renamedTo } from "./renamed";
 import { promises as fs } from "node:fs";
 import { Bm25Index, leanTokens, weightedQuery } from "../search/bm25";
 import { PREMISE_SEED } from "./premise-seed";
@@ -244,7 +244,7 @@ export { RENAMED_LEMMAS };
 export async function localHintsForUnknownIdentifiers(identifiers: string[]): Promise<string> {
   const blocks: string[] = [];
   for (const id of identifiers.slice(0, 3)) {
-    const renamed = RENAMED_LEMMAS[id];
+    const renamed = renamedTo(id);
     if (renamed) {
       blocks.push(`\`${id}\` does not exist in this Mathlib; it was renamed: use \`${renamed}\` (check its hypotheses and argument order).`);
       continue;

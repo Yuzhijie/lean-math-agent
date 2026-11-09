@@ -305,3 +305,19 @@ describe("a candidate that was finished early", () => {
     expect(r.tactics).toBe("nlinarith [sq_nonneg (x - y)]");
   });
 });
+
+describe("unknown names repaired without the model", () => {
+  it("replaces a name built the old way (not_mem) and verifies once more before any repair round", async () => {
+    sampleMock.mockResolvedValueOnce(["```lean\ntheorem amgm (x y : ℝ) : x * y ≤ (x ^ 2 + y ^ 2) / 2 := by\n  have h := my_not_mem_lemma x\n  nlinarith [sq_nonneg (x - y)]\n```"]);
+    verifyMock.mockImplementation(async (_id: string, source: string) =>
+      /my_not_mem_lemma/.test(source) ? result({ messages: [{ severity: "error", line: 7, column: 12, message: "Unknown identifier `my_not_mem_lemma`" }] }) : OK,
+    );
+    const r = await proveWholeTheorem({ sessionId: "s", theoremName: NAME, theoremType: TYPE, config: { samples: 1, rounds: 2, suggest: false } });
+    expect(r.ok).toBe(true);
+    expect(r.tactics).toContain("my_notMem_lemma x");
+    expect(sampleMock).toHaveBeenCalledTimes(1);
+    expect(verifyMock).toHaveBeenCalledTimes(2);
+    expect(r.log).toContain("unknown names replaced without the model (my_not_mem_lemma → my_notMem_lemma), verified");
+  });
+});
+

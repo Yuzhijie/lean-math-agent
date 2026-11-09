@@ -28,6 +28,7 @@
     "proofs:export": "tsx scripts/proofs-export.ts",
     "proofs:eval": "tsx scripts/proofs-eval.ts",
     "lean:recheck": "tsx scripts/lean-recheck.ts",
+    "lean:renames": "python3 scripts/mathlib_renames.py",
     "auto:rules": "tsx scripts/auto-rules.ts",
     "auto:learn": "tsx scripts/auto-learn.ts",
     "bench:formalize": "tsx scripts/bench-formalize.ts",
