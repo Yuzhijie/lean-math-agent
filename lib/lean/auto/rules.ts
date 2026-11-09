@@ -23,6 +23,7 @@ import { divisibilityFinishers } from "./divbound";
 import { doubleCountFinishers } from "./doublecount";
 import { polySquareFinishers } from "./polyfunc";
 import { extremumScripts } from "./realopt";
+import { amgmFinishers } from "./amgm";
 import { boundedVars, defInstances, denominators, firstAbs, gcdLcm, goalText, hypNames, isNumType, MAX_INTERVAL, NUMBERS, sqrtArgs } from "./helpers";
 import { learnedScore } from "./stats";
 import { learnedTactics } from "./learned";
@@ -113,6 +114,7 @@ export const BUILTIN_RULES: Rule[] = [
   fin("inequality", "⊢ a ≤ b, a < b: linear and nonlinear arithmetic, positivity", (g) =>
     g.target !== "False" && g.rel && /^[≤<≥>]$/.test(g.rel) ? ["norm_num", "linarith", "positivity", "omega", "simp_all", g.nl, "(norm_num at *; linarith)", "(field_simp; nlinarith)", "nlinarith"] : [],
   ),
+  fin("am-gm", "positive x₁ … xₙ with x₁ ⋯ xₙ = mⁿ: n·m ≤ x₁ + … + xₙ first, then nlinarith (amgm.ts)", (g) => (g.rel !== "∣" && !/^∀|^∃/.test(g.target) ? amgmFinishers(g.st) : [])),
   fin("divides", "⊢ a ∣ b", (g) => (g.target !== "False" && g.rel === "∣" ? ["decide", "norm_num", "omega", "simp_all", "(norm_num [Nat.dvd_iff_mod_eq_zero])", "decide +kernel"] : [])),
   fin("not-equal", "⊢ a ≠ b", (g) => (g.target !== "False" && g.rel === "≠" ? ["norm_num", "simp", "omega", "decide", "positivity", "simp_all", "(intro h; simp_all)", "(intro h; nlinarith)"] : [])),
   fin("other", "any other goal: simplification, propositional logic", (g) => (g.target !== "False" && !["=", "≤", "<", "≥", ">", "∣", "≠"].includes(g.rel ?? "") ? ["simp", "norm_num", "decide", "simp_all", "tauto", "omega"] : [])),
