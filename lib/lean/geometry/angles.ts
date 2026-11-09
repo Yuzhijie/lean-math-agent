@@ -716,6 +716,12 @@ async function fieldRoots(ctx: Ctx): Promise<boolean> {
   if (ctx.scales) {
     contextHyps(st, vars); // registers the atoms
     for (const a of vars.atoms) if (a.kind === "sqrt" && a.arg) nonneg.set(a.text, `(Real.sqrt_nonneg (${a.arg}))`);
+    // an upper bound v ≤ k picks the branch of k − v (E on AB with BE = BC: (1 − s)·|AB| = 1, s ≤ 1)
+    for (const h of st.hyps) {
+      const m = /^([^\s()]+) (≤|<) (\d+(?:\.\d+)?)$/.exec(h.type.trim());
+      if (!m || !f.realVars.has(m[1]) || isInaccessibleName(h.names[0])) continue;
+      nonneg.set(`(${m[3]} - ${m[1]})`, m[2] === "≤" ? `(sub_nonneg.mpr ${h.names[0]})` : `(sub_pos.mpr ${h.names[0]}).le`);
+    }
   }
   const scaleIdx = (ctx.scales ?? []).map((sc) => {
     const p = polyOf(sc.v, vars);
@@ -726,24 +732,31 @@ async function fieldRoots(ctx: Ctx): Promise<boolean> {
   // per case of a split: the facts of another case are not in this context
   ctx.roots = new Map();
   if (process.env.GEOMETRY_DEBUG) console.error(`[geometry] field roots: candidates ${[...nonneg.keys()].join(", ") || "none"}`);
+  // passes while values come: b² is a number of the field only once |AB| is
+  // a value found whose Lean steps failed is not tried again in a later pass
+  const settled = new Set<string>();
+  for (let pass = 0, added = true; added && pass < 3; pass++) {
+  added = false;
   for (const [v, hv0] of nonneg) {
-    if (ctx.roots.has(v)) continue;
+    if (ctx.roots.has(v) || settled.has(v)) continue;
     const vp = polyOf(v, vars);
-    const vi = vp ? [...vp.vars()][0] : undefined;
-    if (vi === undefined) continue;
+    const single = vp && vp.vars().size === 1 && vp.sub(Poly.fromSparse([["1", { [`v${[...vp.vars()][0]}`]: 1 }]])).isZero();
+    const vi = vp ? (single ? [...vp.vars()][0] : -1) : undefined;
+    if (vi === undefined || !vp || vp.vars().size === 0) continue;
     const hyps = contextHyps(state(run), vars);
     // no scale, or one positive length as the figure's size (several at once let the square come out
     // in another length: q² = b² sin² θ read as b² = q² / sin² θ)
     const scaleSets = [[], ...[...scalePos.keys()].filter((i) => i !== vi).map((i) => [i])];
     let found: Awaited<ReturnType<typeof findFieldRoot>>;
     for (const sc of scaleSets) {
-      found = await findFieldRoot({ vars: vars.names.map((_, i) => `v${i}`), hyps, field: { c: ci, s: si }, root: vi, n: ctx.N, timeoutSec: 20, ...(sc.length ? { scale: sc } : {}) });
+      found = await findFieldRoot({ vars: vars.names.map((_, i) => `v${i}`), hyps, field: { c: ci, s: si }, root: vi >= 0 ? vi : vp, n: ctx.N, timeoutSec: 20, ...(sc.length ? { scale: sc } : {}) });
       if (found) break;
       if (!ctx.scales) break;
     }
     const F = found?.root;
     if (process.env.GEOMETRY_DEBUG) console.error(`[geometry] field root of ${v}: ${F ? F.toLean(vars.names) : "none"}`);
-    if (!F || F.vars().has(vi)) continue;
+    if (!F || [...vp.vars()].some((i) => F.vars().has(i))) continue;
+    settled.add(v);
     const Ft = F.toLean(vars.names);
     const key = run.fresh("hroot");
     try {
@@ -773,11 +786,21 @@ async function fieldRoots(ctx: Ctx): Promise<boolean> {
       const prod = [...facts, constant ? `(by norm_num : (0 : ℝ) < ${Et})` : posE].reduce((acc, f) => `(mul_pos ${acc} ${f})`);
       // the context is large: no nlinarith over it (it ran out of time on 0 < b)
       ok = await run.apply(`have ${pos} : (0 : ℝ) < ${Ft} := by\n  have h' := ${prod}\n  exact h'.trans_eq (by ring)`);
-    } else ok = await haveFirst(run, pos, `0 < ${Ft}`, [`by positivity`, `by nlinarith [${bounds.join(", ")}]`, `by nlinarith [${hints.join(", ")}]`]);
+    } else {
+      const cb = ctx.cosBounds;
+      ok = await haveFirst(run, pos, `0 < ${Ft}`, [
+        ...(cb ? [`by nlinarith only [${cb[0]}, ${cb[1]}, mul_pos (sub_pos.mpr ${cb[0]}) (sub_pos.mpr ${cb[1]})]`] : []),
+        `by positivity`,
+        `by nlinarith [${bounds.join(", ")}]`,
+        `by nlinarith [${hints.join(", ")}]`,
+      ]);
+    }
     if (!ok) continue;
     const name = run.fresh("hrooteq");
     if (!(await run.apply(`have ${name} : ${v} = ${Ft} := by\n  rcases mul_eq_zero.mp ${key} with h | h\n  · linarith only [h]\n  · linarith only [h, ${hv0}, ${pos}]`))) continue;
     ctx.roots.set(v, { value: Ft, name });
+    added = true;
+  }
   }
   return ctx.roots.size > 0;
 }

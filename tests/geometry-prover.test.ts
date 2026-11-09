@@ -217,6 +217,21 @@ describe.skipIf(!sympy)("polynomial certificates (SymPy)", () => {
     expect([...(r?.scaleExps ?? new Map())]).toEqual([[idx("b"), 1]]);
   });
 
+  it("finds the value of an expression: (1 − s)² · |AB|² = 1 with |AB| = 2c + 1 ⇒ 1 − s = 2 + 2c − 4c²", async () => {
+    const vars = new VarTable(new Set(["s", "r"]));
+    const P = (t: string) => toPoly(t, parseTerm(t), vars);
+    const c = "Real.cos (Real.pi / 9)", sn = "Real.sin (Real.pi / 9)";
+    const hyps = [
+      { name: "hr", poly: P(`r - 2 * ${c} - 1`) },
+      { name: "he", poly: P("(1 - s) ^ 2 * r ^ 2 - 1") },
+      { name: "r1", poly: P(`${sn} ^ 2 + ${c} ^ 2 - 1`) },
+      { name: "r2", poly: P(`4 * ${c} ^ 3 - 3 * ${c} - 1 / 2`) },
+    ];
+    const idx = (t: string) => [...P(t).vars()][0];
+    const r = await findFieldRoot({ vars: [], hyps, field: { c: idx(c), s: idx(sn) }, root: P("1 - s"), n: 9 });
+    expect(r?.root.sub(P(`2 + 2 * ${c} - 4 * ${c} ^ 2`)).isZero()).toBe(true);
+  });
+
   it("names the factor a multiplier needs when no candidate works (u² = v² ⇒ u = v needs u + v ≠ 0)", async () => {
     const vars = new VarTable(new Set(["u", "v"]));
     const P = (s: string) => toPoly(s, parseTerm(s), vars);

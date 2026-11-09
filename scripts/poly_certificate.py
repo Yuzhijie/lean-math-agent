@@ -37,7 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from safe_parse import ComputationTimeout, time_limit  # noqa: E402
 
 NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-MAX_VARS = 40
+MAX_VARS = 64
 MAX_TERMS = 4000
 # linear algebra size (rows × columns of the cofactor system) and caller-settable bounds
 MAX_CELLS = 100_000_000
@@ -1150,6 +1150,11 @@ def field_root(req: dict) -> dict:
     index = {n: i for i, n in enumerate(names)}
     fspec = req.get("field") or {}
     root = req.get("root")
+    root_poly = to_poly(req["root_poly"], gens, index) if req.get("root_poly") else None
+    if root_poly is not None and root not in index:
+        # an expression (1 − s for s ≤ 1): its first variable stands for it in the order
+        used = [i for i in range(len(gens)) if any(m[i] for m in root_poly.monoms())]
+        root = names[used[0]] if used else None
     if fspec.get("c") not in index or fspec.get("s") not in index or root not in index:
         raise CertError("root: field c, s and the root variable are needed")
     n = int(req.get("n", 0))
@@ -1161,12 +1166,15 @@ def field_root(req: dict) -> dict:
     c, s, v = gens[ci], gens[si], gens[vi]
     # a free length scale (b in B = (b, 0)): v² may be b^2k · E with E in the field, v = b^k · √E
     scale = [index[x] for x in (req.get("scale") or []) if isinstance(x, str) and x in index and index[x] not in (ci, si, vi)]
-    others = [g for i, g in enumerate(gens) if i not in (ci, si, vi) and i not in scale]
+    rvars = {vi} if root_poly is None else {i for i in range(len(gens)) if any(m[i] for m in root_poly.monoms())}
+    first = [gens[i] for i in sorted(rvars) if i not in (ci, si)]
+    others = [g for i, g in enumerate(gens) if i not in (ci, si) and i not in rvars and i not in scale]
     sg = [gens[i] for i in scale]
-    G = groebner([h.as_expr() for h in hyps], v, *others, *sg, s, c, order="lex")
+    G = groebner([h.as_expr() for h in hyps], *first, *others, *sg, s, c, order="lex")
     if list(G.exprs) == [1]:
         return {"ok": False, "reason": "the hypotheses are inconsistent"}
-    _, nf = G.reduce(v**2)
+    target = v if root_poly is None else root_poly.as_expr()
+    _, nf = G.reduce(sympy.expand(target**2))
     nf = sympy.expand(nf)
     if nf.free_symbols - {s, c} - set(sg):
         return {"ok": False, "reason": "the square is not a number of the field"}

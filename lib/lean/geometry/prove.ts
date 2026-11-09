@@ -762,15 +762,9 @@ async function productFacts(run: TacticRunner, vars: VarTable, args: Map<number,
  * them. A distance goal with a 20° angle (AB = AC, ∠A = 20°, BD = BE = BC ⇒ BDE equilateral) had no
  * certificate: cos (π/9) was a free atom.
  */
-async function trigField(run: TacticRunner, done: Set<string>): Promise<Field | undefined> {
+async function trigField(run: TacticRunner, done: Set<string>, N: number): Promise<Field | undefined> {
   const st = state(run);
-  const angles = new Set<string>();
-  for (const m of (st.target + "\n" + st.hyps.map((h) => h.type).join("\n")).matchAll(/Real\.(?:sin|cos) \(([^()]*Real\.pi[^()]*)\)/g)) angles.add(m[1].trim());
-  const qs = [...angles].map((a) => piMultiple(a));
-  if (!qs.length || qs.some((q) => !q)) return undefined;
-  const N = chooseStep(qs as Frac[]);
-  // π/3 and π/6 have known values (simp); the field is for the others
-  if (!N || N <= 6) return undefined;
+  const angles = contextAngles(st);
   // once per context: the relations' names, kept while they are still in this goal's hypotheses
   const names = new Set(st.hyps.flatMap((h) => h.names));
   for (const k of done) {
@@ -824,44 +818,95 @@ interface Field {
 async function closeEquation(run: TacticRunner, atomsDone: Set<string>, trigDone: Set<string> = new Set()): Promise<void> {
   try {
     await closeEquationOnce(run);
+    return;
   } catch (e) {
     if (!(e instanceof NoCertificate)) throw e;
-    const field = await trigField(run, trigDone);
-    if (field) {
+    // the trigonometric field of the angles (π/N), then the next finer one (π/2N): a figure fixed
+    // by ∠A = 20° with C = (1, 0) has height ½ · cot 10°, a number of Q(cos 10°, sin 10°) only
+    let N = fieldStep(run);
+    while (N) {
+      const mark = run.save();
+      const saved = [new Set(atomsDone), new Set(trigDone)];
       try {
-        await closeEquationOnce(run, field);
-        return;
-      } catch (e2) {
-        if (!(e2 instanceof NoCertificate)) throw e2;
+        if (await fieldRoute(run, N, atomsDone, trigDone)) return;
+      } catch (err) {
+        if (!(err instanceof Fail)) throw err;
+        if (process.env.GEOMETRY_DEBUG) console.error(`[geometry] field π/${N}: ${err.message}`);
       }
-      // the figure is fixed up to its size: lengths and coordinates are b^k times numbers of the
-      // field; with 1 / b in context those values are found and proved one by one (fieldRoots)
-      const scales = await addInverses(run, trigDone);
-      const roots = scales.length ? await scaledFieldRoots(run, field.N, { r1: field.r1, r2: field.r2 }, scales) : undefined;
-      // a length of the goal still unknown (its sign is not algebra): straight to squaring both sides
-      const open = roots && sqrtTexts(state(run).target).some((r) => !roots.has(r.text));
-      if (roots && !open) {
-        try {
-          await closeEquationOnce(run, field);
-          return;
-        } catch (e3) {
-          if (!(e3 instanceof NoCertificate)) throw e3;
-        }
-      }
+      run.restore(mark);
+      atomsDone.clear();
+      trigDone.clear();
+      for (const k of saved[0]) atomsDone.add(k);
+      for (const k of saved[1]) trigDone.add(k);
+      N = finerStep(N);
     }
-    const st = state(run);
-    const t = tryParse(st.target);
-    if (!t || t.k !== "bin" || t.op !== "=") throw e;
-    const L = slice(st.target, t.a);
-    const R = slice(st.target, t.b);
-    const f = readFacts(st);
-    const hL = run.fresh("hnn");
-    const hR = run.fresh("hnn");
-    if (!(await haveFirst(run, hL, `(0:ℝ) ≤ ${L}`, positivityProofs(L, f, false))) || !(await haveFirst(run, hR, `(0:ℝ) ≤ ${R}`, positivityProofs(R, f, false)))) throw e;
-    if (!(await run.apply(`rw [← pow_left_inj₀ ${hL} ${hR} two_ne_zero]`))) throw e;
-    await atomFacts(run, atomsDone);
-    await closeEquationOnce(run, field);
+    await squareBoth(run, atomsDone, e);
   }
+}
+
+/** The step π/N of the angles in context that the field needs (N > 6), or undefined. */
+function fieldStep(run: TacticRunner): number | undefined {
+  const angles = contextAngles(state(run));
+  const qs = [...angles].map((a) => piMultiple(a));
+  if (!qs.length || qs.some((q) => !q)) return undefined;
+  const N = chooseStep(qs as Frac[]);
+  // π/3 and π/6 have known values (simp); the field is for the others
+  return N && N > 6 ? N : undefined;
+}
+
+/** The next step after π/N whose field contains Q(cos π/N, sin π/N) and the half angles: 9 → 18 → 36. */
+function finerStep(N: number): number | undefined {
+  return [18, 36].find((n) => n > N && n % N === 0);
+}
+
+function contextAngles(st: GoalState): Set<string> {
+  const angles = new Set<string>();
+  for (const m of (st.target + "\n" + st.hyps.map((h) => h.type).join("\n")).matchAll(/Real\.(?:sin|cos) \(([^()]*Real\.pi[^()]*)\)/g)) angles.add(m[1].trim());
+  return angles;
+}
+
+/** One field: the certificate modulo it, then the values (scaledFieldRoots), then both sides squared. True when the goal closed. */
+async function fieldRoute(run: TacticRunner, N: number, atomsDone: Set<string>, trigDone: Set<string>): Promise<boolean> {
+  const field = await trigField(run, trigDone, N);
+  if (!field) return false;
+  try {
+    await closeEquationOnce(run, field);
+    return true;
+  } catch (e2) {
+    if (!(e2 instanceof NoCertificate)) throw e2;
+  }
+  // the figure is fixed up to its size: lengths and coordinates are b^k times numbers of the
+  // field; with 1 / b in context those values are found and proved one by one (fieldRoots)
+  const scales = await addInverses(run, trigDone);
+  const roots = await scaledFieldRoots(run, field.N, { r1: field.r1, r2: field.r2 }, scales);
+  // a length of the goal still unknown (its sign is not algebra): straight to squaring both sides
+  const open = roots && sqrtTexts(state(run).target).some((r) => !roots.has(r.text));
+  if (roots && !open) {
+    try {
+      await closeEquationOnce(run, field);
+      return true;
+    } catch (e3) {
+      if (!(e3 instanceof NoCertificate)) throw e3;
+    }
+  }
+  await squareBoth(run, atomsDone, new NoCertificate("no polynomial certificate in the field"), field);
+  return true;
+}
+
+/** Both sides nonnegative: the squares are equal instead (pow_left_inj₀), then the certificate. Throws `e` when that does not apply. */
+async function squareBoth(run: TacticRunner, atomsDone: Set<string>, e: Error, field?: Field): Promise<void> {
+  const st = state(run);
+  const t = tryParse(st.target);
+  if (!t || t.k !== "bin" || t.op !== "=") throw e;
+  const L = slice(st.target, t.a);
+  const R = slice(st.target, t.b);
+  const f = readFacts(st);
+  const hL = run.fresh("hnn");
+  const hR = run.fresh("hnn");
+  if (!(await haveFirst(run, hL, `(0:ℝ) ≤ ${L}`, positivityProofs(L, f, false))) || !(await haveFirst(run, hR, `(0:ℝ) ≤ ${R}`, positivityProofs(R, f, false)))) throw e;
+  if (!(await run.apply(`rw [← pow_left_inj₀ ${hL} ${hR} two_ne_zero]`))) throw e;
+  await atomFacts(run, atomsDone);
+  await closeEquationOnce(run, field);
 }
 
 class NoCertificate extends Fail {}

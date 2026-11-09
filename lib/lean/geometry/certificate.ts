@@ -313,14 +313,16 @@ export async function findFieldRoot(req: {
   vars: string[];
   hyps: { name: string; poly: Poly }[];
   field: { c: number; s: number };
-  root: number;
+  /** the unknown (a variable), or an expression such as 1 − s for s ≤ 1 */
+  root: number | Poly;
   n: number;
   /** positive length scales: the value may be b^k · F with F in the field */
   scale?: number[];
   timeoutSec?: number;
 }): Promise<{ root: Poly; factor?: Poly; scaleExps?: Map<number, number> } | undefined> {
   const hyps = req.hyps.filter((h) => fits(h.poly));
-  const used = new Set<number>([req.field.c, req.field.s, req.root, ...(req.scale ?? [])]);
+  const rootVars = typeof req.root === "number" ? [req.root] : [...req.root.vars()];
+  const used = new Set<number>([req.field.c, req.field.s, ...rootVars, ...(req.scale ?? [])]);
   for (const h of hyps) for (const v of h.poly.vars()) used.add(v);
   const order = [...used].sort((a, b) => a - b);
   const to = new Map(order.map((v, i) => [v, i]));
@@ -330,7 +332,7 @@ export async function findFieldRoot(req: {
     vars: order.map((_, i) => `v${i}`),
     hyps: hyps.map((h, i) => ({ name: `h${i}`, poly: h.poly.rename(to).toSparse() })),
     field: { c: `v${to.get(req.field.c)}`, s: `v${to.get(req.field.s)}` },
-    root: `v${to.get(req.root)}`,
+    ...(typeof req.root === "number" ? { root: `v${to.get(req.root)}` } : { root_poly: req.root.rename(to).toSparse() }),
     n: req.n,
     ...(req.scale?.length ? { scale: req.scale.map((v) => `v${to.get(v)}`) } : {}),
     timeout: req.timeoutSec ?? 30,
