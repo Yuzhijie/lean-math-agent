@@ -65,6 +65,8 @@ export async function optimizationProof(args: {
   theoremType: string;
   expectedSignature?: string;
   useMathlib: boolean;
+  /** Bound for this attempt (a sketch hole gets a share of the sketch's time); default from the environment. */
+  timeLimitMs?: number;
 }): Promise<{ proof?: OptimizationProof; reason: string; counterexample?: string }> {
   const { sessionId, theoremName, theoremType, expectedSignature, useMathlib } = args;
   if (!looksOptimization(theoremType)) return { reason: "not an optimization statement" };
@@ -73,7 +75,7 @@ export async function optimizationProof(args: {
     theoremName,
     theoremType,
     useMathlib,
-    timeLimitMs: Number(process.env.OPTIMIZE_TIME_LIMIT_MS ?? 180_000),
+    timeLimitMs: (args.timeLimitMs ?? Number(process.env.OPTIMIZE_TIME_LIMIT_MS ?? 180_000)),
     tacticTimeoutMs: Number(process.env.OPTIMIZE_TACTIC_TIMEOUT_MS ?? 120_000),
     label: "optimize",
     debugEnv: "OPTIMIZE_DEBUG",

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { chatMock, sampleMock, openMock, hammerMock, wholeMock, verifyMock } = vi.hoisted(() => ({
+const { chatMock, sampleMock, openMock, hammerMock, wholeMock, verifyMock, programMock } = vi.hoisted(() => ({
+  programMock: vi.fn(),
   chatMock: vi.fn(),
   sampleMock: vi.fn(),
   openMock: vi.fn(),
@@ -15,6 +16,8 @@ vi.mock("@/lib/lean/sandbox", async (orig) => ({ ...(await orig<typeof import("@
 vi.mock("@/lib/search/goal-search", () => ({ goalSearch: vi.fn().mockResolvedValue({ ok: false, llmCalls: 0 }) }));
 vi.mock("@/lib/prover/whole-proof", async (orig) => ({ ...(await orig<typeof import("@/lib/prover/whole-proof")>()), proveWholeTheorem: wholeMock }));
 
+vi.mock("@/lib/prover/program-holes", () => ({ programHoleProof: programMock }));
+
 import { proveBySketch } from "@/lib/prover/sketch";
 
 const TYPE = "(a b : ℝ) (ha : 0 < a) (hb : 0 < b) : 2 ≤ a / b + b / a";
@@ -23,7 +26,8 @@ const BODY = `theorem t ${TYPE} := by\n  have key : 2 * (a * b) ≤ a ^ 2 + b ^ 
 const KEY_COL = BODY.split("\n")[1].indexOf("sorry");
 
 beforeEach(() => {
-  for (const m of [chatMock, sampleMock, openMock, hammerMock, wholeMock, verifyMock]) m.mockReset();
+  for (const m of [chatMock, sampleMock, openMock, hammerMock, wholeMock, verifyMock, programMock]) m.mockReset();
+  programMock.mockResolvedValue(undefined);
   chatMock.mockResolvedValue("1. 2ab ≤ a² + b² since (a − b)² ≥ 0.\n2. Divide by ab > 0.");
   sampleMock.mockResolvedValue([SKETCH]);
   const session = {
@@ -76,5 +80,41 @@ describe("sketch-and-fill: informal proof first, holes to the prover", () => {
     expect(wholeMock).not.toHaveBeenCalled();
     expect(r.log).toContain("does not elaborate as a lemma");
     expect(verifyMock).not.toHaveBeenCalled(); // never a second lease while the session holds a worker
+  });
+
+  it("hands the open hole to the program's provers first, with the session closed, and verifies without it", async () => {
+    const session = (await openMock()) as { close: ReturnType<typeof vi.fn>; verify: ReturnType<typeof vi.fn> };
+    openMock.mockClear();
+    programMock.mockImplementation(async () => {
+      // no worker held while a program prover runs
+      expect(session.close).toHaveBeenCalled();
+      return { tactics: "nlinarith [sq_nonneg (a - b)]", prover: "auto", tried: [] };
+    });
+    const r = await proveBySketch({ sessionId: "s", theoremName: "t", theoremType: TYPE, config: { samples: 1, repairs: 0, holeProver: true, useMathlib: false, timeBudgetMs: 300_000 } });
+    expect(programMock).toHaveBeenCalledTimes(1);
+    expect(programMock.mock.calls[0][0]).toMatchObject({ theoremName: "t_hole1", statement: "(a b : ℝ) (ha : 0 < a) (hb : 0 < b) : 2 * (a * b) ≤ a ^ 2 + b ^ 2" });
+    expect(wholeMock).not.toHaveBeenCalled();
+    expect(openMock).toHaveBeenCalledTimes(1); // not reopened: nothing left for the model
+    expect(r).toMatchObject({ ok: true, holesSolved: 2, holesByProgram: 1, holesByProver: 0 });
+    expect(r.source).toContain("set_option maxHeartbeats 4000000 in\ntheorem t");
+    expect(r.source).toContain(":= by nlinarith [sq_nonneg (a - b)]");
+    expect(verifyMock).toHaveBeenCalledTimes(1);
+    expect(r.log).toContain("closed by the auto prover");
+  });
+
+  it("reopens the sketch for the model when the program's provers leave the hole open", async () => {
+    const r = await proveBySketch({ sessionId: "s", theoremName: "t", theoremType: TYPE, config: { samples: 1, repairs: 0, holeProver: true, useMathlib: false, timeBudgetMs: 300_000 } });
+    expect(programMock).toHaveBeenCalledTimes(1);
+    expect(openMock).toHaveBeenCalledTimes(2);
+    expect(wholeMock).toHaveBeenCalledTimes(1);
+    expect(r).toMatchObject({ ok: true, holesByProgram: 0, holesByProver: 1 });
+    expect(r.source).not.toContain("maxHeartbeats");
+    expect(verifyMock).not.toHaveBeenCalled(); // the reopened session verifies
+  });
+
+  it("leaves the program's provers out when switched off", async () => {
+    await proveBySketch({ sessionId: "s", theoremName: "t", theoremType: TYPE, config: { samples: 1, repairs: 0, holeProver: true, programHoles: false, useMathlib: false, timeBudgetMs: 300_000 } });
+    expect(programMock).not.toHaveBeenCalled();
+    expect(openMock).toHaveBeenCalledTimes(1);
   });
 });

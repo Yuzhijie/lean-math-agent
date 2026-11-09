@@ -47,10 +47,12 @@ export async function geometryProof(args: {
   theoremType: string;
   expectedSignature?: string;
   useMathlib: boolean;
+  /** Bound for this attempt (a sketch hole gets a share of the sketch's time); default from the environment. */
+  timeLimitMs?: number;
 }): Promise<{ proof?: GeometryProof; reason: string }> {
   const { sessionId, theoremName, theoremType, expectedSignature, useMathlib } = args;
   if (!looksGeometric(theoremType)) return { reason: "not a coordinate statement" };
-  const opened = await open(theoremName, theoremType, useMathlib, Number(process.env.GEOMETRY_TIME_LIMIT_MS ?? 600_000));
+  const opened = await open(theoremName, theoremType, useMathlib, (args.timeLimitMs ?? Number(process.env.GEOMETRY_TIME_LIMIT_MS ?? 600_000)));
   if (typeof opened === "string") return { reason: opened };
   const { run, script, session } = opened;
   try {

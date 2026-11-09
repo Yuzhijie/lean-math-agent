@@ -31,6 +31,8 @@ export async function inductionProof(args: {
   theoremType: string;
   expectedSignature?: string;
   useMathlib: boolean;
+  /** Bound for this attempt (a sketch hole gets a share of the sketch's time); default from the environment. */
+  timeLimitMs?: number;
 }): Promise<{ proof?: InductionProof; reason: string }> {
   const { sessionId, theoremName, theoremType, expectedSignature, useMathlib } = args;
   if (!looksInductive(theoremType)) return { reason: "not a statement over ℕ for induction" };
@@ -38,7 +40,7 @@ export async function inductionProof(args: {
     theoremName,
     theoremType,
     useMathlib,
-    timeLimitMs: Number(process.env.INDUCTION_TIME_LIMIT_MS ?? 120_000),
+    timeLimitMs: (args.timeLimitMs ?? Number(process.env.INDUCTION_TIME_LIMIT_MS ?? 120_000)),
     tacticTimeoutMs: Number(process.env.INDUCTION_TACTIC_TIMEOUT_MS ?? 20_000),
     label: "induction",
     debugEnv: "INDUCTION_DEBUG",

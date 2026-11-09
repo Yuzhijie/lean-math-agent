@@ -17,6 +17,11 @@
  * a numbered informal proof (high effort) and the sketch follows it, one `have` per step; a hole the
  * hammer leaves open goes to the dedicated prover as a lemma of its own (its goal state turned back into
  * a statement, see goal-statement.ts) before the goal-level search.
+ *
+ * 2026-11: before any model is paid for, the holes the hammer leaves open go as lemmas to the provers
+ * the program writes (program-holes.ts: geometry, induction, optimization, combinatorics, the tactic
+ * search). They lease REPL workers of their own, so the sketch's session is closed for that pass and
+ * reopened for whatever remains.
  */
 import { chatProverRole } from "../llm/config";
 import { goalToStatement } from "../lean/goal-statement";
@@ -31,6 +36,7 @@ import { INFORMAL_PROOF_SYSTEM, SKETCH_SYSTEM, informalProofUserMessage, sketchU
 import { costCapReached, expectedLatencyMs } from "../llm/usage-tracker";
 import { lt } from "../llm/output-locale";
 import { goalSearch, type GoalSearchConfig } from "../search/goal-search";
+import { programHoleProof } from "./program-holes";
 import { extractTactics, proveWholeTheorem } from "./whole-proof";
 
 export interface SketchConfig {
@@ -58,6 +64,10 @@ export interface SketchConfig {
    * (SKETCH_HOLE_PROVER: "auto" = when a dedicated prover is configured (LLM_PROVER_MODEL), "on", "off").
    */
   holeProver: boolean;
+  /** Holes the hammer leaves open go to the program's provers first (SKETCH_PROGRAM_HOLES, default true). */
+  programHoles: boolean;
+  /** Per-hole budget for the program's provers (SKETCH_PROGRAM_HOLE_BUDGET_MS, default 120 s). */
+  programHoleBudgetMs: number;
   useMathlib: boolean;
   goalSearch: Partial<GoalSearchConfig>;
 }
@@ -79,6 +89,8 @@ export function loadSketchConfig(overrides: Partial<SketchConfig> = {}): SketchC
     holeProver:
       overrides.holeProver ??
       (process.env.SKETCH_HOLE_PROVER === "on" ? true : process.env.SKETCH_HOLE_PROVER === "off" ? false : !!(process.env.LLM_PROVER_MODEL || process.env.LLM_PROVER_MODELS)),
+    programHoles: overrides.programHoles ?? process.env.SKETCH_PROGRAM_HOLES !== "false",
+    programHoleBudgetMs: overrides.programHoleBudgetMs ?? num("SKETCH_PROGRAM_HOLE_BUDGET_MS", 120_000),
     useMathlib: overrides.useMathlib ?? true,
     goalSearch: overrides.goalSearch ?? {},
   };
@@ -105,6 +117,8 @@ export interface SketchResult {
   holesSolved: number;
   /** Holes closed by the whole-proof prover (the rest by the hammer or goal search). */
   holesByProver: number;
+  /** Holes closed by the program's provers (geometry, induction, …, the tactic search). */
+  holesByProgram: number;
   llmCalls: number;
   /** The informal proof the sketches followed, when one was written. */
   informalProof?: string;
@@ -138,6 +152,7 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
   let holesSolved = 0;
   let llmCalls = 0;
   let holesByProver = 0;
+  let holesByProgram = 0;
   let unavailable = false;
   let informalProof: string | undefined;
 
@@ -148,6 +163,7 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
     holes: holesTotal,
     holesSolved,
     holesByProver,
+    holesByProgram,
     llmCalls,
     ...(informalProof ? { informalProof } : {}),
     log: log.join("\n"),
@@ -255,7 +271,7 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
         continue;
       }
       try {
-        const holes = session.holes;
+        let holes = session.holes;
         if (holes.length > cfg.maxHoles) {
           log.push(`sketch has ${holes.length} holes (> ${cfg.maxHoles}); skipped`);
           continue;
@@ -281,8 +297,75 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
             holesSolved++;
           }
         }
-        const open = holes.map((_, i) => i).filter((i) => !scripts[i]);
+        let open = holes.map((_, i) => i).filter((i) => !scripts[i]);
         log.push(`sketch with ${holes.length} hole(s): hammer closed ${holes.length - open.length}`);
+
+        // Each open hole as a lemma of its own, checked on this session's worker (it holds one, and with
+        // LEAN_REPL_WORKERS=1 another lease would wait for it forever). The printed goal does not always reparse.
+        const lemmaOf = new Map<number, string | null>();
+        const holeLemma = async (i: number): Promise<string | null> => {
+          if (lemmaOf.has(i)) return lemmaOf.get(i)!;
+          const lemma = goalToStatement(holes[i].goal);
+          let statement: string | null = null;
+          if (!lemma) log.push(`  hole ${i + 1}: goal state could not be stated as a lemma`);
+          else {
+            const check = await session.verify(
+              args.sessionId,
+              assembleLeanSource({ theoremName: `${args.theoremName}_hole${i + 1}`, theoremType: lemma.statement, stepCodes: ["sorry"], useMathlib: cfg.useMathlib, opens: args.opens }),
+              { allowSorry: true, checkAxioms: false },
+            );
+            if (check.ok) statement = lemma.statement;
+            else log.push(`  hole ${i + 1}: its goal does not elaborate as a lemma; goal search only`);
+          }
+          lemmaOf.set(i, statement);
+          return statement;
+        };
+
+        // Pass 1.5: the program's provers (no model) on the open holes. They open REPL workers of their
+        // own, so this session is closed first and reopened for what is left.
+        let sessionClosed = false;
+        let byProgram = false;
+        if (cfg.programHoles && open.length && timeLeft() > 15_000) {
+          const todo: [number, string][] = [];
+          for (const i of open) {
+            const st = await holeLemma(i);
+            if (st) todo.push([i, st]);
+          }
+          if (todo.length) {
+            session.close();
+            sessionClosed = true;
+            for (let k = 0; k < todo.length; k++) {
+              const [i, statement] = todo[k];
+              const budget = Math.min(cfg.programHoleBudgetMs, Math.floor(timeLeft() / (todo.length - k)));
+              if (budget < 10_000) break;
+              progress({ stage: "hole", detail: lt(`程序证明器处理子目标 ${i + 1}/${holes.length}: ${lastLine(holes[i].goal)}`, `Program provers on subgoal ${i + 1}/${holes.length}: ${lastLine(holes[i].goal)}`) });
+              const r = await programHoleProof({ sessionId: args.sessionId, theoremName: `${args.theoremName}_hole${i + 1}`, statement, useMathlib: cfg.useMathlib, budgetMs: budget, opens: args.opens });
+              if (r) {
+                scripts[i] = r.tactics.split("\n");
+                holesSolved++;
+                holesByProgram++;
+                byProgram = true;
+                log.push(`  hole ${i + 1} closed by the ${r.prover} prover (no model)`);
+              } else log.push(`  hole ${i + 1}: the program's provers did not close it`);
+            }
+            open = open.filter((i) => !scripts[i]);
+            if (open.length) {
+              // the model's turn on what is left: the same sketch, the same holes in the same order
+              try {
+                session = await ProofSession.open(source);
+              } catch (e) {
+                log.push(`  could not reopen the sketch: ${(e instanceof Error ? e.message : String(e)).split("\n")[0].slice(0, 120)}`);
+                continue;
+              }
+              sessionClosed = false;
+              if (session.holes.length !== holes.length) {
+                log.push("  the reopened sketch has other holes; skipped");
+                continue;
+              }
+              holes = session.holes;
+            }
+          }
+        }
         if (open.length > cfg.maxLlmHoles) {
           log.push(`  skipped: ${open.length} holes need search (limit ${cfg.maxLlmHoles})`);
           continue;
@@ -301,25 +384,14 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
           }
           // The dedicated prover on the hole as a lemma of its own (its tactics see the same names).
           if (cfg.holeProver) {
-            const lemma = goalToStatement(hole.goal);
-            // The printed goal does not always reparse: check the lemma before paying for samples.
-            const elaborates =
-              lemma &&
-              (
-                // on this session's worker: it holds one, and with LEAN_REPL_WORKERS=1 another lease would wait for it forever
-                await session.verify(
-                  args.sessionId,
-                  assembleLeanSource({ theoremName: `${args.theoremName}_hole${i + 1}`, theoremType: lemma.statement, stepCodes: ["sorry"], useMathlib: cfg.useMathlib, opens: args.opens }),
-                  { allowSorry: true, checkAxioms: false },
-                )
-              ).ok;
-            if (lemma && !elaborates) log.push(`  hole ${i + 1}: its goal does not elaborate as a lemma; goal search only`);
-            if (lemma && elaborates) {
+            // checked before paying for samples (once per hole: pass 1.5 may have done it)
+            const statement = await holeLemma(i);
+            if (statement) {
               progress({ stage: "hole", detail: lt(`证明模型处理子目标 ${i + 1}/${holes.length}: ${lastLine(hole.goal)}`, `Prover on subgoal ${i + 1}/${holes.length}: ${lastLine(hole.goal)}`) });
               const pr = await proveWholeTheorem({
                 sessionId: args.sessionId,
                 theoremName: `${args.theoremName}_hole${i + 1}`,
-                theoremType: lemma.statement,
+                theoremType: statement,
                 problemText: args.problemText,
                 opens: args.opens,
                 config: { samples: cfg.samples, rounds: 1, timeBudgetMs: budget, useMathlib: cfg.useMathlib, suggest: false, strictBudget: true },
@@ -334,7 +406,7 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
                 continue;
               }
               log.push(`  hole ${i + 1}: prover did not close it${pr.candidates.length ? ` (${pr.candidates[0].summary.slice(0, 80)})` : ""}`);
-            } else if (!lemma) log.push(`  hole ${i + 1}: goal state could not be stated as a lemma`);
+            }
           }
           const rest = Math.min(cfg.holeBudgetMs, Math.floor(timeLeft() / (open.length - k)));
           if (rest < expectedLatencyMs("prover") * 0.8) {
@@ -377,12 +449,13 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
           log.push("  could not splice scripts into the sketch");
           continue;
         }
-        const finalSource = header ? `${header}\n${body}` : body;
+        // the program's scripts (geometry above all) need the declaration-level heartbeat budget they were verified with
+        const withBudget = byProgram ? `set_option maxHeartbeats ${PROGRAM_HEARTBEATS} in\n${body}` : body;
+        const finalSource = header ? `${header}\n${withBudget}` : withBudget;
         progress({ stage: "verifying", detail: lt("拼接后严格验证…", "Assembling and verifying strictly…") });
-        const verification = await session.verify(args.sessionId, finalSource, {
-          theoremName: args.theoremName,
-          expectedSignature: args.expectedSignature,
-        });
+        const verifyOpts = { theoremName: args.theoremName, expectedSignature: args.expectedSignature };
+        // every hole closed while the session was closed: the ordinary verifier (no worker is held)
+        const verification = sessionClosed ? await verifyLeanSource(args.sessionId, finalSource, verifyOpts) : await session.verify(args.sessionId, finalSource, verifyOpts);
         if (verification.ok) {
           progress({ stage: "ok", detail: lt(`✅ 骨架 + ${holes.length} 个子目标全部通过`, `✅ Sketch + all ${holes.length} subgoal(s) verified`) });
           const bodyLines = body.split("\n");
@@ -401,6 +474,9 @@ export async function proveBySketch(args: SketchArgs): Promise<SketchResult> {
   progress({ stage: "fail", detail: lt("骨架分解未能完成证明", "Sketch decomposition did not complete the proof") });
   return done({});
 }
+
+/** The heartbeat budget the program's provers verify their scripts with (the larger of theirs). */
+const PROGRAM_HEARTBEATS = 4_000_000;
 
 /**
  * Replace each `sorry` hole (1-based line, 0-based column within `body`)

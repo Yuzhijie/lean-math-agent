@@ -72,6 +72,8 @@ export async function combinatoricsProof(args: {
   theoremType: string;
   expectedSignature?: string;
   useMathlib: boolean;
+  /** Bound for this attempt (a sketch hole gets a share of the sketch's time); default from the environment. */
+  timeLimitMs?: number;
 }): Promise<{ proof?: CombinatoricsProof; reason: string; counterexample?: string }> {
   const { sessionId, theoremName, theoremType, expectedSignature, useMathlib } = args;
   if (!looksCombinatorial(theoremType)) return { reason: "not a finite / counting statement" };
@@ -79,7 +81,7 @@ export async function combinatoricsProof(args: {
     theoremName,
     theoremType,
     useMathlib,
-    timeLimitMs: Number(process.env.COMBINATORICS_TIME_LIMIT_MS ?? 180_000),
+    timeLimitMs: (args.timeLimitMs ?? Number(process.env.COMBINATORICS_TIME_LIMIT_MS ?? 180_000)),
     tacticTimeoutMs: Number(process.env.COMBINATORICS_TACTIC_TIMEOUT_MS ?? 60_000),
     label: "combinatorics",
     debugEnv: "COMBINATORICS_DEBUG",
