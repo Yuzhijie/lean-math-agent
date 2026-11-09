@@ -4,16 +4,30 @@ import { EQUATION_SETUP_SYSTEM } from "./compute-prompts";
 
 // ── Schema ──────────────────────────────────────────────────────────
 
+export const VARIABLE_DOMAINS = ["real", "positive_real", "integer", "positive_integer", "rational"] as const;
+export type VariableDomain = (typeof VARIABLE_DOMAINS)[number];
+
+/**
+ * The domain the model wrote, as one of VARIABLE_DOMAINS. Models also write "natural",
+ * "nonnegative_integer", "number", "positive real", "ℤ", … (the setup of "375 + 24 × 5 − 68" failed on
+ * one such value); anything not recognised is "real", the widest the solver works in.
+ */
+export function normalizeDomain(v: unknown): VariableDomain {
+  if (typeof v !== "string") return "real";
+  const t = v.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if ((VARIABLE_DOMAINS as readonly string[]).includes(t)) return t as VariableDomain;
+  if (/^(ℕ\+?|ℕ\*|n\+|n\*|z\+|ℤ\+|natural(_numbers?)?|positive_(integers?|ints?|whole_numbers?|naturals?)|counting(_numbers?)?)$/.test(t)) return "positive_integer";
+  if (/^(ℕ|n|nat|ℤ|z|int|integers?|whole(_numbers?)?|non_?negative_(integers?|ints?)|nonneg_int(eger)?)$/.test(t)) return "integer";
+  if (/^(ℚ|q|rationals?|fractions?)$/.test(t)) return "rational";
+  // nonnegative stays "real" (0 may be the answer); the constraints carry the sign
+  if (/^(ℝ\+|r\+|positive(_reals?|_numbers?)?|real_positive)$/.test(t)) return "positive_real";
+  return "real";
+}
+
 export const equationVariableSchema = z.object({
   name: z.string().min(1),
   description: z.string().min(1),
-  domain: z.enum([
-    "real",
-    "positive_real",
-    "integer",
-    "positive_integer",
-    "rational",
-  ]),
+  domain: z.preprocess(normalizeDomain, z.enum(VARIABLE_DOMAINS)),
 });
 
 export const equationSchema = z.object({

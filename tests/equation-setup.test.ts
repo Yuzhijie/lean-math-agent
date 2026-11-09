@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { setupEquations } from "@/lib/llm/equation-setup";
-import { equationSetupSchema } from "@/lib/llm/equation-setup";
+import { equationSetupSchema, normalizeDomain } from "@/lib/llm/equation-setup";
 
 // ── Test helpers ────────────────────────────────────────────────────
 
@@ -169,5 +169,39 @@ describe("equationSetupSchema: a list where one expression is expected", () => {
     expect(equationSetupSchema.parse({ ...base, target_expression: ["x*y"], target_description: "积" }).target_expression).toBe("x*y");
     expect(equationSetupSchema.parse({ ...base, target_expression: 12, target_description: "值" }).target_expression).toBe("12");
     expect(equationSetupSchema.safeParse({ ...base, target_expression: [], target_description: "值" }).success).toBe(false);
+  });
+});
+
+describe("variable domains the model writes", () => {
+  it("maps synonyms onto the five domains, anything else to real", () => {
+    expect(normalizeDomain("integer")).toBe("integer");
+    expect(normalizeDomain("Positive Integer")).toBe("positive_integer");
+    expect(normalizeDomain("natural")).toBe("positive_integer");
+    expect(normalizeDomain("ℕ+")).toBe("positive_integer");
+    expect(normalizeDomain("nonnegative_integer")).toBe("integer");
+    expect(normalizeDomain("whole number")).toBe("integer");
+    expect(normalizeDomain("ℤ")).toBe("integer");
+    expect(normalizeDomain("positive")).toBe("positive_real");
+    expect(normalizeDomain("non-negative real")).toBe("real");
+    expect(normalizeDomain("Q")).toBe("rational");
+    expect(normalizeDomain("number")).toBe("real");
+    expect(normalizeDomain("complex")).toBe("real");
+    expect(normalizeDomain(null)).toBe("real");
+  });
+
+  it("an arithmetic setup with domain \"natural\" is accepted (375 + 24 × 5 − 68)", () => {
+    const r = equationSetupSchema.safeParse({
+      variables: [{ name: "x", description: "结果", domain: "natural" }],
+      equations: [{ lhs: "x", rhs: "375 + 24*5 - 68", description: "按运算顺序计算" }],
+      constraints: [],
+      target_expression: "x",
+      target_description: "算式的值",
+      solution_methods: [
+        { name: "先乘后加减", description: "24×5=120，375+120−68" },
+        { name: "凑整", description: "375−68=307，再加120" },
+      ],
+    });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.variables[0].domain).toBe("positive_integer");
   });
 });

@@ -51,7 +51,7 @@ export const EQUATION_SETUP_SYSTEM = `You are a mathematical modeling specialist
 - Use parentheses for grouping: (3-x)**2 + 3
 
 ## Output Requirements:
-1. variables: list each unknown with its name, description (Chinese), and domain
+1. variables: list each unknown with its name, description (Chinese), and domain — exactly one of "real", "positive_real", "integer", "positive_integer", "rational" (a count or a natural number is "positive_integer" or "integer"; a pure calculation such as 375 + 24 × 5 − 68 still gets one variable for the result, e.g. {"name": "x", "domain": "integer"} with the equation x = 375 + 24*5 - 68)
 2. equations: list each equation as { lhs, rhs, description }.
    - lhs and rhs must be valid SymPy expressions
    - The equation represents lhs = rhs
