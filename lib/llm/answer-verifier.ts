@@ -212,3 +212,24 @@ export function verifyAnswer(problem: Omit<GeneratedProblem, "id">): Verificatio
     computed,
   };
 }
+
+/**
+ * When the stem is a bare computation (a single $…$ span that is an
+ * arithmetic expression, optionally "= ?"), the expression the programmatic
+ * verifier would evaluate. Word problems return null: the verifier's
+ * "first a op b in the text" heuristic is only reliable for bare sums.
+ */
+export function bareArithmetic(stem: string): string | null {
+  const spans = [...stem.matchAll(/\$([^$]+)\$/g)].map((m) => m[1]);
+  if (spans.length !== 1) return null;
+  const span = spans[0].replace(/=\s*(?:\?|？|\\square|\\_+|_+|\\boxed\{\s*\})?\s*$/, "");
+  const expr = extractArithmetic(`$${span}$`);
+  if (!expr) return null;
+  const whole = span
+    .replace(/\\times|\\cdot/g, "*")
+    .replace(/\\div/g, "/")
+    .replace(/[×✕✖·⋅]/g, "*")
+    .replace(/÷/g, "/")
+    .replace(/[,，\s]/g, "");
+  return whole === expr ? expr : null;
+}

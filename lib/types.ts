@@ -392,6 +392,10 @@ export interface GeneratedVerification {
   proof_skipped?: boolean;
   /** The independent solver's answer ("true" / "false" for a claim to prove). */
   independent_answer?: string;
+  /** How the answer was found: by the program (a bare computation, no model solve) or a model solve at this effort ("default" = the configured one). */
+  solved_by?: "program" | "low" | "medium" | "high" | "default";
+  /** A lower-effort solve disagreed and a high-effort solve checked it again (its verdict counts). */
+  escalated?: boolean;
   /** The problem as a Lean statement and whether the program proved it (no model). */
   lean?: { statement: string; proved: boolean; strategy?: string };
 }

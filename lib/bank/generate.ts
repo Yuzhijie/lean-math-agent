@@ -21,7 +21,8 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { chatJson } from "../llm/client";
 import { lt } from "../llm/output-locale";
-import { extractArithmetic, verifyAnswer } from "../llm/answer-verifier";
+import { bareArithmetic, verifyAnswer } from "../llm/answer-verifier";
+import { baseSolveEffort, escalates, type SolveEffort } from "../generation-effort";
 import type { GeneratedProblem } from "../types";
 import { describeItem, detectLanguage, getProfile, inBankLanguage, LETTERS, pickExemplars, styleProfile, typeName, usesFigure, deriveProfile } from "./profile";
 import { categoryMembers, itemsHash } from "./query";
@@ -204,27 +205,6 @@ function resolveLetter(answer: string, options: string[]): string | null {
     if (hits.length === 1) return LETTERS[hits[0][1]];
   }
   return null;
-}
-
-/**
- * When the stem is a bare computation (a single $…$ span that is an
- * arithmetic expression, optionally "= ?"), the expression the programmatic
- * verifier would evaluate. Word problems return null: the verifier's
- * "first a op b in the text" heuristic is only reliable for bare sums.
- */
-function bareArithmetic(stem: string): string | null {
-  const spans = [...stem.matchAll(/\$([^$]+)\$/g)].map((m) => m[1]);
-  if (spans.length !== 1) return null;
-  const span = spans[0].replace(/=\s*(?:\?|？|\\square|\\_+|_+|\\boxed\{\s*\})?\s*$/, "");
-  const expr = extractArithmetic(`$${span}$`);
-  if (!expr) return null;
-  const whole = span
-    .replace(/\\times|\\cdot/g, "*")
-    .replace(/\\div/g, "/")
-    .replace(/[×✕✖·⋅]/g, "*")
-    .replace(/÷/g, "/")
-    .replace(/[,，\s]/g, "");
-  return whole === expr ? expr : null;
 }
 
 // ── Model calls ─────────────────────────────────────────────────────
@@ -797,13 +777,23 @@ export function selectionCheck(c: Pick<Draft, "stem" | "type" | "options" | "ans
   return { mismatch: false, detail: lt(`程序核对：只有 ${show(sets[0])} 正好是 ${fmtMoney(total)}`, `checked by the program: only ${show(sets[0])} makes ${fmtMoney(total)}`) };
 }
 
-/** The answer checks the program makes without a model (select-all totals, tile rows, reflections, orderings, arithmetic): a failing one, or undefined. */
-export function programAnswerFailure(c: Draft): Check | undefined {
+/**
+ * The answer as the program settles it without a model (select-all totals, tile rows, reflections,
+ * orderings, arithmetic — each works the whole question out, not a part of it): a check that passes or
+ * fails, or undefined when none applies.
+ */
+export function programAnswer(c: Draft): Check | undefined {
   const sel = selectionCheck(c) ?? tileRowCheck(c) ?? reflectionCheck(c) ?? orderingCheck(c);
-  if (sel?.mismatch) return check(false, sel.detail);
-  const arith = sel ? null : arithmeticCheck(c);
-  if (arith?.mismatch) return check(false, arith.detail);
+  if (sel) return check(!sel.mismatch, sel.detail);
+  const arith = arithmeticCheck(c);
+  if (arith) return check(!arith.mismatch, arith.detail);
   return undefined;
+}
+
+/** The answer checks the program makes without a model: a failing one, or undefined. */
+export function programAnswerFailure(c: Draft): Check | undefined {
+  const a = programAnswer(c);
+  return a && !a.ok ? a : undefined;
 }
 
 /**
@@ -820,11 +810,13 @@ export function cheapFailures(c: { format: Check; novelty: Check; answer?: Check
     .map(([k]) => k);
 }
 
-function answerCheck(c: Draft, independent: string | undefined, resolveError: string | undefined): Check {
+function answerCheck(c: Draft, independent: string | undefined, resolveError: string | undefined, how: { settled?: boolean; escalated?: boolean } = {}): Check {
   const sel = selectionCheck(c) ?? tileRowCheck(c) ?? reflectionCheck(c) ?? orderingCheck(c);
   if (sel?.mismatch) return check(false, sel.detail);
   const arith = sel ?? arithmeticCheck(c);
   if (arith?.mismatch) return check(false, arith.detail);
+  // settled by the program: no model solve was asked for
+  if (how.settled && arith) return check(true, lt(`程序核对：${arith.detail}`, `checked by the program: ${arith.detail}`));
   const extra = arith ? ` ${arith.detail}` : "";
   // Checked by the program: enough for answers no solver can compare (e.g. "card 1 top right, card 4 bottom right").
   if (sel && c.type !== "multiple_choice" && c.type !== "numeric") return check(true, sel.detail);
@@ -836,8 +828,8 @@ function answerCheck(c: Draft, independent: string | undefined, resolveError: st
   const cmp = compareAnswers(c, independent);
   if (!cmp.comparable) return check(false, lt(`答案“${c.answer}”无法与独立解答“${independent}”比较`, `answer "${c.answer}" cannot be compared with the independent answer "${independent}"`) + extra);
   return cmp.same
-    ? check(true, lt(`独立解答一致：${independent}`, `independent answer agrees: ${independent}`) + extra)
-    : check(false, lt(`独立解答为 ${independent}，与答案 ${c.answer} 不一致`, `independent answer is ${independent}, not ${c.answer}`) + extra);
+    ? check(true, lt(`独立解答一致：${independent}`, `independent answer agrees: ${independent}`) + (how.escalated ? lt("（高强度复核）", " (high-effort re-check)") : "") + extra)
+    : check(false, lt(`独立解答为 ${independent}，与答案 ${c.answer} 不一致`, `independent answer is ${independent}, not ${c.answer}`) + (how.escalated ? lt("（高强度复核后）", " (after a high-effort re-check)") : "") + extra);
 }
 
 const REWORD_SYSTEM = `You reword generated maths questions that are too close to questions already in the bank (the close question is shown with each).
@@ -1082,7 +1074,7 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
   // timed and its model usage counted (stats on the record, one line in the generation log)
   const m = await measured((clock) => generateRun(args, clock));
   const { data, all, rounds, tally } = m.result;
-  const stats = { ...generationStats(m, { rounds, written: all.length, passed: all.filter((c) => c.passed).length }), early_rejected: tally.cheapBlocked, model_checks_skipped: tally.modelChecksSkipped };
+  const stats = { ...generationStats(m, { rounds, written: all.length, passed: all.filter((c) => c.passed).length }), early_rejected: tally.cheapBlocked, model_checks_skipped: tally.modelChecksSkipped, solved_by_program: tally.solvedByProgram, solve_escalated: tally.escalated };
   const g = putGeneration(args.owner, args.bankId, { ...data, stats });
   logGeneration({
     at: Date.now(),
@@ -1103,7 +1095,7 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
 async function generateRun(
   args: { owner: string; bankId: string; template: TemplateRef; count: number; onProgress?: (p: GenerationProgress) => void },
   clock: StageClock,
-): Promise<{ data: Omit<Generation, "id" | "bank_id" | "created_at">; all: Candidate[]; rounds: number; tally: { cheapBlocked: number; modelChecksSkipped: number } }> {
+): Promise<{ data: Omit<Generation, "id" | "bank_id" | "created_at">; all: Candidate[]; rounds: number; tally: { cheapBlocked: number; modelChecksSkipped: number; solvedByProgram: number; escalated: number } }> {
   const { owner, bankId, template } = args;
   const bank = getBank(owner, bankId);
   if (!bank.allow_model) throw new BankError(lt("该题库不允许将内容发送给模型服务", "this bank does not allow sending its content to the model service"), 403);
@@ -1155,7 +1147,7 @@ async function generateRun(
   const system = figures.on ? `${GENERATE_SYSTEM.replace(FIGURE_RULE, FIGURE_RULE_WITH_SPECS)}\n\n${VISUAL_GUIDE}` : GENERATE_SYSTEM;
 
   /** Drafts stopped by the cheap checks, and drafts the model checks (solve, fit review) were spared for. */
-  const tally = { cheapBlocked: 0, modelChecksSkipped: 0 };
+  const tally = { cheapBlocked: 0, modelChecksSkipped: 0, solvedByProgram: 0, escalated: 0 };
   /** One round: write `ask` questions, repair, reword, check. `earlier` = candidates of earlier rounds (not to be repeated). */
   const round = async (ask: number, earlier: Candidate[], r: number): Promise<Candidate[]> => {
     const step = (stage: GenerationProgress["stage"], zh: string, en: string) => progress({ stage, round: r, detail: lt(`第 ${r} 轮 · ${zh}`, `Round ${r} · ${en}`) });
@@ -1227,19 +1219,50 @@ async function generateRun(
     step("solving", "正在独立解题并评审…", "solving independently and reviewing…");
     const open = drafts.map((d, i) => ({ d, n: i + 1 })).filter(({ n }) => !blocked.has(n - 1));
     tally.modelChecksSkipped += drafts.length - open.length;
-    const solvable = open.filter(({ d }) => d.type === "multiple_choice" || d.type === "numeric");
-    const resolveP = solvable.length
-      ? inLang(() =>
-          chatJson({
-            system: RESOLVE_SYSTEM,
-            user: `Questions:\n\n${solvable.map(({ d, n }) => describeItem(withFigureText(d), n, false)).join("\n\n")}`,
-            schema: resolveSchema,
-            schemaName: "IndependentAnswers",
-            temperature: 0,
-            noCache: true,
-          }),
-        )
-      : Promise.resolve({ answers: [] });
+    // Answers the program settles (select-all totals, tile rows, reflections, orderings, bare
+    // arithmetic) need no model solve; the rest are solved at the effort their grade needs.
+    const settled = new Set(open.filter(({ d }) => programAnswer(d)?.ok).map(({ n }) => n));
+    tally.solvedByProgram += settled.size;
+    const solvable = open.filter(({ d, n }) => (d.type === "multiple_choice" || d.type === "numeric") && !settled.has(n));
+    const effortOf = (d: Draft) => baseSolveEffort({ grade: d.grade ?? profile.grade, difficulty: d.difficulty ?? profile.difficulty_range?.[1] });
+    const solveBatch = (items: typeof solvable, effort: SolveEffort | undefined) =>
+      inLang(() =>
+        chatJson({
+          system: RESOLVE_SYSTEM,
+          user: `Questions:\n\n${items.map(({ d, n }) => describeItem(withFigureText(d), n, false)).join("\n\n")}`,
+          schema: resolveSchema,
+          schemaName: "IndependentAnswers",
+          temperature: 0,
+          noCache: true,
+          ...(effort ? { reasoningEffort: effort } : {}),
+        }),
+      );
+    const escalated = new Set<number>();
+    const resolveP = (async () => {
+      const answers = new Map<number, string>();
+      if (!solvable.length) return answers;
+      const groups = new Map<SolveEffort | undefined, typeof solvable>();
+      for (const it of solvable) groups.set(effortOf(it.d), [...(groups.get(effortOf(it.d)) ?? []), it]);
+      const results = await Promise.all([...groups].map(([effort, items]) => solveBatch(items, effort)));
+      for (const r of results) for (const a of r.answers) answers.set(Math.round(a.n), a.answer.trim());
+      // a lower-effort solve that disagrees (or finds the question unsolvable) is checked again at high
+      const again = solvable.filter(({ d, n }) => escalates(effortOf(d)) && answers.has(n) && !compareAnswers(d, answers.get(n)!).same);
+      if (again.length) {
+        try {
+          const hi = await solveBatch(again, "high");
+          for (const a of hi.answers) {
+            const n = Math.round(a.n);
+            if (!again.some((x) => x.n === n)) continue;
+            answers.set(n, a.answer.trim());
+            escalated.add(n);
+          }
+        } catch {
+          // the lower-effort answers stand
+        }
+        tally.escalated += escalated.size;
+      }
+      return answers;
+    })();
     const judgeP = open.length
       ? inLang(() =>
           chatJson({
@@ -1253,8 +1276,7 @@ async function generateRun(
         )
       : Promise.resolve({ scores: [] as { n: number; score: number; reason: string }[] });
     const [resolved, judged] = await Promise.allSettled([resolveP, judgeP]);
-    const answers = new Map<number, string>();
-    if (resolved.status === "fulfilled") for (const a of resolved.value.answers) answers.set(Math.round(a.n), a.answer.trim());
+    const answers = resolved.status === "fulfilled" ? resolved.value : new Map<number, string>();
     const scores = new Map<number, { score: number; reason: string }>();
     if (judged.status === "fulfilled") for (const s of judged.value.scores) scores.set(Math.round(s.n), { score: s.score, reason: s.reason.trim() });
 
@@ -1288,7 +1310,7 @@ async function generateRun(
             : check(fitScore.score >= JUDGE_PASS, `${lt("匹配度", "fit")} ${fitScore.score}/5${fitScore.reason ? ` — ${fitScore.reason}` : ""}`);
       const checks = {
         format: cheap[i].format,
-        answer: answerCheck(d, answers.get(n), resolved.status === "rejected" ? errText(resolved.reason) : undefined),
+        answer: answerCheck(d, answers.get(n), resolved.status === "rejected" ? errText(resolved.reason) : undefined, { settled: settled.has(n), escalated: escalated.has(n) }),
         novelty: novelty[i],
         fit,
         ...(figure ? { figure } : {}),

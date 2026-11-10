@@ -146,7 +146,8 @@ describe("generating from a select-all template", () => {
     expect(gen.user).toContain("keep the examples' kind (cards); do not turn it into a table");
     expect(gen.user).not.toContain("TABLE:");
     expect(gen.user).not.toContain("AREAS:"); // one image on the template question
-    expect(calls.find((c) => c.kind === "resolve")!.system).toContain('"Select all" questions: every correct letter');
+    // the program settles both answers (Noah's total fits, Liam's has two subsets): no model solve
+    expect(calls.some((c) => c.kind === "resolve")).toBe(false);
 
     const noah = g.candidates.find((c) => c.stem.startsWith("Noah"))!;
     expect(noah.answer).toBe("A, D");

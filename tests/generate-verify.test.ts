@@ -143,6 +143,29 @@ describe("built-in generation is checked", () => {
     expect(v.passed).toBe(true);
   });
 
+  it("elementary: a bare computation is checked by the program; a medium solve that disagrees is re-checked at high", async () => {
+    const efforts: Array<string | undefined> = [];
+    const base0 = chatMock.getMockImplementation()!;
+    chatMock.mockImplementation(async (req: { schemaName: string; user: string; reasoningEffort?: string }) => {
+      if (req.schemaName === "generateProblemResponse") {
+        return { problems: (rounds.shift() ?? []).map((p) => ({ ...base, ...p, grade_level: "elementary" })) };
+      }
+      if (req.schemaName === "independent_solve") {
+        efforts.push(req.reasoningEffort);
+        // medium gets it wrong, high right
+        return { well_posed: true, issue: null, answer: req.reasoningEffort === "high" ? "12" : "11", claim_holds: null };
+      }
+      return base0(req);
+    });
+    rounds = [[{ statement: "计算 $36 \\times 12$", answer: "432" }, { statement: "小明有 7 个苹果，又买了 5 个，一共有几个？", answer: "12" }]];
+    const r = await generateProblems({ ...opts, gradeLevel: "elementary", count: 2 });
+    const [calc, word] = r.problems;
+    expect(calc.verification).toMatchObject({ passed: true, solved_by: "program" });
+    expect(word.verification).toMatchObject({ passed: true, solved_by: "high", escalated: true });
+    // only the word problem went to the solver: medium, then high
+    expect(efforts).toEqual(["medium", "high"]);
+  });
+
   it("tells proofs from questions asking for a value", () => {
     expect(isProofProblem("求证：$a^2+b^2 \\ge 2ab$。")).toBe(true);
     expect(isProofProblem("Prove that n^2 + n is even.")).toBe(true);

@@ -2,7 +2,10 @@
  * Checks for a problem the built-in generator wrote, so that what it hands out can be solved and,
  * for a claim to prove, is true:
  *
- *  1. answer — another model call solves the problem without seeing the answer (high effort);
+ *  1. answer — a bare computation is evaluated by the program; otherwise another model call
+ *     solves the problem without seeing the answer (medium effort for primary / middle school
+ *     below competition level, re-checked at high when it disagrees; high otherwise —
+ *     lib/generation-effort.ts);
  *     the program compares the two answers (lib/grading/mark.ts compareAnswers), and only when
  *     the forms need judgement a short model call decides whether they are equal. For a claim
  *     to prove, the solver says whether it holds. Ill-posed or unsolvable problems fail.
@@ -22,6 +25,8 @@ import { lt } from "./output-locale";
 import { autoformalize } from "./autoformalize";
 import { compareAnswers } from "../grading/mark";
 import { hugePower } from "../compute/nat-expr";
+import { bareArithmetic, verifyAnswer } from "./answer-verifier";
+import { baseSolveEffort, escalates, type SolveEffort } from "../generation-effort";
 
 const PROOF_RE = /求证|证明|试说明|说明理由|prove|show that/i;
 
@@ -60,11 +65,36 @@ const ok = (detail: string): GeneratedCheck => ({ ok: true, detail });
 const fail = (detail: string): GeneratedCheck => ({ ok: false, detail });
 const skip = (detail: string): GeneratedCheck => ({ ok: true, detail, skipped: true });
 
-async function answerCheck(p: GeneratedProblem): Promise<{ check: GeneratedCheck; independent?: string }> {
+type AnswerResult = { check: GeneratedCheck; independent?: string; solvedBy?: GeneratedVerification["solved_by"]; escalated?: boolean };
+
+/**
+ * The answer check. A bare computation the program evaluates (and the writer's answer, already
+ * corrected by verifyAndFixAnswer, agrees with) needs no model. Otherwise one solve at the effort
+ * the grade and difficulty need (lib/generation-effort.ts); when a lower-effort solve fails the
+ * problem, a high-effort solve decides.
+ */
+async function answerCheck(p: GeneratedProblem): Promise<AnswerResult> {
+  if (!isProofProblem(p.statement) && bareArithmetic(p.statement)) {
+    const v = verifyAnswer(p);
+    if (v.verified && !v.corrected && v.computed !== undefined) {
+      return { check: ok(lt(`程序计算核对：${v.expression} = ${v.computed}`, `computed by the program: ${v.expression} = ${v.computed}`)), independent: String(v.computed), solvedBy: "program" };
+    }
+  }
+  // high unless the grade allows less (this check always ran at high, whatever the configured effort)
+  const effort = baseSolveEffort({ gradeLevel: p.grade_level, difficulty: p.difficulty }) ?? "high";
+  const first = await solveOnce(p, effort);
+  if (!escalates(effort) || first.check.ok || first.check.skipped) return { ...first, solvedBy: effort };
+  const again = await solveOnce(p, "high");
+  // a high-effort solve that did not finish leaves the first verdict standing
+  if (again.check.skipped) return { ...first, solvedBy: effort };
+  return { ...again, check: { ...again.check, detail: again.check.detail + lt("（高强度复核）", " (high-effort re-check)") }, solvedBy: "high", escalated: true };
+}
+
+async function solveOnce(p: GeneratedProblem, effort: SolveEffort | undefined): Promise<AnswerResult> {
   const proof = isProofProblem(p.statement);
   let r: z.infer<typeof solveOut>;
   try {
-    r = await chatJson({ system: SOLVE_SYSTEM, user: p.statement.slice(0, 6000), schema: solveOut, schemaName: "independent_solve", reasoningEffort: "high", maxRetries: 1 });
+    r = await chatJson({ system: SOLVE_SYSTEM, user: p.statement.slice(0, 6000), schema: solveOut, schemaName: "independent_solve", ...(effort ? { reasoningEffort: effort } : {}), maxRetries: 1 });
   } catch (e) {
     return { check: skip(lt(`独立解题没有完成：${e instanceof Error ? e.message : String(e)}`, `the independent solve did not finish: ${e instanceof Error ? e.message : String(e)}`)) };
   }
@@ -161,6 +191,8 @@ export async function verifyGenerated(p: GeneratedProblem): Promise<GeneratedVer
     checks: { answer: a.check, counterexample: l.check },
     ms: { answer: ms.answer ?? 0, counterexample: ms.counterexample ?? 0 },
     ...(a.independent ? { independent_answer: a.independent } : {}),
+    ...(a.solvedBy ? { solved_by: a.solvedBy } : {}),
+    ...(a.escalated ? { escalated: true } : {}),
     ...(l.lean ? { lean: l.lean } : {}),
   };
 }

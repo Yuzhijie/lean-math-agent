@@ -107,6 +107,8 @@ export async function generateProblems(options: GenerateProblemOptions): Promise
     stats: {
       ...generationStats(m, { rounds, written: written.length, passed: written.filter((p) => p.verification?.passed).length }),
       model_checks_skipped: written.filter((p) => p.verification?.proof_skipped).length,
+      solved_by_program: written.filter((p) => p.verification?.solved_by === "program").length,
+      solve_escalated: written.filter((p) => p.verification?.escalated).length,
     },
     outcomes: written.map((p) => ({
       passed: !!p.verification?.passed,

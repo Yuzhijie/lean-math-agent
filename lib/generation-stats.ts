@@ -30,6 +30,10 @@ export interface GenerationStats {
   early_rejected?: number;
   /** Questions the independent solve and fit review were not run for (bank runs); built-in: Lean proofs not attempted after a failed answer check. */
   model_checks_skipped?: number;
+  /** Questions whose answer the program settled, so no model solved them. */
+  solved_by_program?: number;
+  /** Questions a lower-effort solve disagreed with and a high-effort solve checked again. */
+  solve_escalated?: number;
 }
 
 /** Times stages that follow one another: enter(stage) closes the previous one. */

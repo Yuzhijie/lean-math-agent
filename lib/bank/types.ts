@@ -284,6 +284,8 @@ export const generationSchema = z.object({
       lean_verifications: z.number().int().optional(),
       early_rejected: z.number().int().optional(),
       model_checks_skipped: z.number().int().optional(),
+      solved_by_program: z.number().int().optional(),
+      solve_escalated: z.number().int().optional(),
     })
     .optional(),
   created_at: ts,

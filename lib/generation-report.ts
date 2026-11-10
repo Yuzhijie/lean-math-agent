@@ -183,6 +183,9 @@ export function generationReport({ generations, log, now = new Date() }: ReportI
     );
     const early = runs.reduce((s, e) => s + (e.stats.early_rejected ?? 0), 0);
     const spared = runs.reduce((s, e) => s + (e.stats.model_checks_skipped ?? 0), 0);
+    const byProgram = runs.reduce((s, e) => s + (e.stats.solved_by_program ?? 0), 0);
+    const escalated = runs.reduce((s, e) => s + (e.stats.solve_escalated ?? 0), 0);
+    out.push(`| Answers settled by the program (no model solve) | ${byProgram} of ${writtenN} |`, `| Lower-effort solves re-checked at high effort | ${escalated} |`);
     if (kind === "bank") out.push(`| Rejected by the program's checks before any model check | ${early} of ${writtenN} |`, `| Questions not sent to the solver and the fit review | ${spared} |`);
     else out.push(`| Lean proofs not attempted (answer already failed) | ${spared} |`);
     out.push("");

@@ -229,9 +229,12 @@ describe("same-type generation", () => {
     expect(callsOf("generate").length).toBeGreaterThan(1);
     expect(callsOf("generate")[0].messages[1].content).toContain("Write 5 new question(s)");
     expect(callsOf("generate")[0].messages[1].content).toContain("do NOT copy");
+    // Year 3: solved at medium effort, and the one it disagreed with (the garden) once more at high
     const solve = callsOf("resolve");
-    expect(solve).toHaveLength(1);
+    expect(solve).toHaveLength(2);
     expect(solve[0].messages[1].content).not.toMatch(/Answer:|SOLUTION-MARK/);
+    expect(solve[1].messages[1].content).toMatch(/garden/);
+    expect(solve[1].messages[1].content).not.toMatch(/baker/);
     expect(callsOf("judge")).toHaveLength(1);
 
     expect(getGeneration("local", bank.id, g.id)).toEqual(g);
@@ -257,6 +260,59 @@ describe("same-type generation", () => {
     expect(by(/train/).checks.answer).toMatchObject({ ok: true, skipped: true, detail: expect.stringMatching(/format/) });
     expect(by(/train/).passed).toBe(false);
     expect(g.stats).toMatchObject({ early_rejected: 2, model_checks_skipped: 2, written: 4, passed: 1 });
+  });
+
+  it("solves early grades at medium effort, re-checks a disagreement at high, and leaves program-settled answers to the program", async () => {
+    process.env.LLM_REASONING_EFFORT = "high";
+    try {
+      const { bank, cat } = setup();
+      replies.generate = {
+        questions: [
+          // settled by the program (bare arithmetic): never sent to the solver
+          { stem: "Compute $36 \\times 12 = ?$ and choose the result.", type: "multiple_choice", options: ["422", "432", "442", "452"], answer: "B", solution: "" },
+          { stem: "A garden has 8 rows of tulips with 7 tulips in each row. How many tulips are there in total?", type: "multiple_choice", options: ["54", "56", "58", "60"], answer: "B", solution: "" },
+          { stem: "A baker makes 24 muffins and packs them equally into 6 boxes. How many muffins are in each box?", type: "multiple_choice", options: ["3", "4", "5", "6"], answer: "B", solution: "" },
+        ],
+      };
+      // the medium solve gets the garden wrong; the high one agrees with the answer
+      let solves = 0;
+      Object.defineProperty(replies, "resolve", {
+        get: () => (solves++ === 0 ? { answers: [{ n: 2, answer: "C" }, { n: 3, answer: "B" }] } : { answers: [{ n: 2, answer: "B" }] }),
+        configurable: true,
+      });
+      const g = await generateFromTemplate({ owner: "local", bankId: bank.id, template: { category_id: cat.id }, count: 3 });
+      const solve = callsOf("resolve");
+      expect(solve).toHaveLength(2);
+      expect(solve[0].messages[1].content).not.toMatch(/36/);
+      expect((solve[0] as { reasoning_effort?: string }).reasoning_effort).toBe("medium");
+      expect((solve[1] as { reasoning_effort?: string }).reasoning_effort).toBe("high");
+      const by = (re: RegExp) => g.candidates.find((c) => re.test(c.stem))!;
+      expect(by(/36/).checks.answer).toMatchObject({ ok: true, detail: expect.stringMatching(/program|程序/) });
+      expect(by(/garden/).checks.answer).toMatchObject({ ok: true, detail: expect.stringMatching(/high-effort|高强度/) });
+      expect(g.stats).toMatchObject({ solved_by_program: 1, solve_escalated: 1 });
+    } finally {
+      delete process.env.LLM_REASONING_EFFORT;
+    }
+  });
+
+  it("GENERATE_SOLVE_EFFORT=high solves everything at high, with no re-check", async () => {
+    process.env.LLM_REASONING_EFFORT = "medium";
+    process.env.GENERATE_SOLVE_EFFORT = "high";
+    try {
+      const { bank, cat } = setup();
+      replies.generate = { questions: [{ stem: "A garden has 8 rows of tulips with 7 tulips in each row. How many tulips are there in total?", type: "multiple_choice", options: ["54", "56", "58", "60"], answer: "B", solution: "" }] };
+      replies.resolve = { answers: [{ n: 1, answer: "C" }] };
+      const g = await generateFromTemplate({ owner: "local", bankId: bank.id, template: { category_id: cat.id }, count: 1 });
+      const solve = callsOf("resolve");
+      expect(solve.length).toBeGreaterThan(0);
+      expect(solve.every((b) => (b as { reasoning_effort?: string }).reasoning_effort === "high")).toBe(true);
+      // every round's solve is a first solve: no escalation call between them
+      expect(solve).toHaveLength(callsOf("judge").length);
+      expect(g.candidates[0].checks.answer.ok).toBe(false);
+    } finally {
+      delete process.env.LLM_REASONING_EFFORT;
+      delete process.env.GENERATE_SOLVE_EFFORT;
+    }
   });
 
   it("marks the answer check skipped when the re-solve call fails", async () => {
