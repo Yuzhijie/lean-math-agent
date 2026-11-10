@@ -237,6 +237,28 @@ describe("same-type generation", () => {
     expect(getGeneration("local", bank.id, g.id)).toEqual(g);
   });
 
+  it("runs the program's checks first: a draft that fails one is not sent to the solver or the fit review", async () => {
+    const { bank, cat } = setup();
+    const firstRound = replies.generate;
+    let writes = 0;
+    Object.defineProperty(replies, "generate", { get: () => (writes++ === 0 ? firstRound : { questions: [] }), configurable: true });
+    const g = await generateFromTemplate({ owner: "local", bankId: bank.id, template: { category_id: cat.id }, count: 3 });
+    // the copy of the exemplar (novelty) and the three-option question (format) were stopped by the program
+    const solved = callsOf("resolve")[0].messages[1].content;
+    const judged = callsOf("judge")[0].messages[1].content;
+    for (const text of [solved, judged]) {
+      expect(text).not.toContain("Tom has 12 apples");
+      expect(text).not.toMatch(/train travels/);
+      expect(text).toMatch(/baker/);
+      expect(text).toMatch(/garden/);
+    }
+    const by = (re: RegExp) => g.candidates.find((c) => re.test(c.stem))!;
+    expect(by(/Tom has 12 apples/).checks.fit).toMatchObject({ ok: true, skipped: true, detail: expect.stringMatching(/novelty/) });
+    expect(by(/train/).checks.answer).toMatchObject({ ok: true, skipped: true, detail: expect.stringMatching(/format/) });
+    expect(by(/train/).passed).toBe(false);
+    expect(g.stats).toMatchObject({ early_rejected: 2, model_checks_skipped: 2, written: 4, passed: 1 });
+  });
+
   it("marks the answer check skipped when the re-solve call fails", async () => {
     const { bank, cat } = setup();
     replies.resolve = { nope: true };

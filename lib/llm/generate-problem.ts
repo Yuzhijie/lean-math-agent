@@ -104,7 +104,10 @@ export async function generateProblems(options: GenerateProblemOptions): Promise
     kind: "builtin",
     label: `${options.gradeLevel} · ${options.difficulty} · ${options.domain}`,
     requested,
-    stats: generationStats(m, { rounds, written: written.length, passed: written.filter((p) => p.verification?.passed).length }),
+    stats: {
+      ...generationStats(m, { rounds, written: written.length, passed: written.filter((p) => p.verification?.passed).length }),
+      model_checks_skipped: written.filter((p) => p.verification?.proof_skipped).length,
+    },
     outcomes: written.map((p) => ({
       passed: !!p.verification?.passed,
       failed: Object.fromEntries(Object.entries(p.verification?.checks ?? {}).filter(([, c]) => !c.ok && !c.skipped).map(([k, c]) => [k, c.detail.slice(0, 300)])),

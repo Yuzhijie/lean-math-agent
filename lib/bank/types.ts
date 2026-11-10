@@ -282,6 +282,8 @@ export const generationSchema = z.object({
       cost_usd: z.number().optional(),
       by_model: z.record(z.string(), z.object({ calls: z.number(), prompt_tokens: z.number(), completion_tokens: z.number() })).optional(),
       lean_verifications: z.number().int().optional(),
+      early_rejected: z.number().int().optional(),
+      model_checks_skipped: z.number().int().optional(),
     })
     .optional(),
   created_at: ts,

@@ -94,7 +94,10 @@ async function answerCheck(p: GeneratedProblem): Promise<{ check: GeneratedCheck
   };
 }
 
-async function leanChecks(p: GeneratedProblem): Promise<{ check: GeneratedCheck; lean?: GeneratedVerification["lean"] }> {
+async function leanChecks(
+  p: GeneratedProblem,
+  answerFailed: Promise<boolean> = Promise.resolve(false),
+): Promise<{ check: GeneratedCheck; lean?: GeneratedVerification["lean"]; proofSkipped?: boolean }> {
   const proof = isProofProblem(p.statement);
   const { problemWithAnswer, proveWithoutModel } = await import("../pipeline/lean-attempt");
   let formal: Awaited<ReturnType<typeof autoformalize>>;
@@ -122,6 +125,8 @@ async function leanChecks(p: GeneratedProblem): Promise<{ check: GeneratedCheck;
           ? ok(lt("反例搜索无法判定（没有找到反例）", "the counterexample search was inconclusive (none found)"))
           : ok(lt("没有找到反例", "no counterexample found"));
   let lean: GeneratedVerification["lean"] = { statement: formal.formal_statement, proved: false };
+  // a proof is a bonus: not worth Lean's time for a problem whose answer check already failed
+  if (await answerFailed) return { check: found, lean, proofSkipped: true };
   try {
     const r = await proveWithoutModel({
       sessionId: "generate-verify",
@@ -142,11 +147,16 @@ async function leanChecks(p: GeneratedProblem): Promise<{ check: GeneratedCheck;
 export async function verifyGenerated(p: GeneratedProblem): Promise<GeneratedVerification> {
   const t0 = Date.now();
   const ms: { answer?: number; counterexample?: number } = {};
+  const answer = answerCheck(p).finally(() => (ms.answer = Date.now() - t0));
   const [a, l] = await Promise.all([
-    answerCheck(p).finally(() => (ms.answer = Date.now() - t0)),
-    leanChecks(p).finally(() => (ms.counterexample = Date.now() - t0)),
+    answer,
+    leanChecks(
+      p,
+      answer.then((r) => !r.check.ok && !r.check.skipped, () => false),
+    ).finally(() => (ms.counterexample = Date.now() - t0)),
   ]);
   return {
+    ...(l.proofSkipped ? { proof_skipped: true } : {}),
     passed: a.check.ok && l.check.ok,
     checks: { answer: a.check, counterexample: l.check },
     ms: { answer: ms.answer ?? 0, counterexample: ms.counterexample ?? 0 },

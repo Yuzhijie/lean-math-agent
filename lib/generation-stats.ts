@@ -26,6 +26,10 @@ export interface GenerationStats {
   /** Model calls and tokens per model. */
   by_model?: Record<string, { calls: number; prompt_tokens: number; completion_tokens: number }>;
   lean_verifications?: number;
+  /** Questions the program's own checks rejected before any model checked them (bank runs). */
+  early_rejected?: number;
+  /** Questions the independent solve and fit review were not run for (bank runs); built-in: Lean proofs not attempted after a failed answer check. */
+  model_checks_skipped?: number;
 }
 
 /** Times stages that follow one another: enter(stage) closes the previous one. */

@@ -117,6 +117,17 @@ describe("built-in generation is checked", () => {
     expect(r.problems[0].verification?.lean).toMatchObject({ proved: true, strategy: "hammer" });
   });
 
+  it("does not look for a Lean proof once the answer check has failed", async () => {
+    rounds = [[{ statement: "求方程 $x+y=9$ 中 $y=2$ 时 $x$ 的值。", answer: "6" }], [], []];
+    solver = { "求方程 $x+y=9$ 中 $y=2$ 时 $x$ 的值。": { answer: "7" } };
+    const r = await generateProblems({ ...opts, count: 1 });
+    const v = r.problems[0].verification!;
+    expect(v.passed).toBe(false);
+    expect(v.proof_skipped).toBe(true);
+    expect(v.checks.counterexample.ok).toBe(true); // the counterexample search still ran (side by side with the solve)
+    expect(proveMock).not.toHaveBeenCalled();
+  });
+
   it("an answer the program cannot compare goes to a model judge; a statement that does not compile needs a look", async () => {
     rounds = [[{ statement: "化简 $\\frac{x^2-1}{x-1}$。", answer: "x+1" }], [], []];
     solver = { "化简 $\\frac{x^2-1}{x-1}$。": { answer: "1+x" } };

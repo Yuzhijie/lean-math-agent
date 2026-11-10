@@ -480,7 +480,13 @@ For each question return a corrected "figure" that follows the FIGURES guide exa
 Return JSON only: {"fixes":[{"n":1,"figure":{…}}]}`;
 
 /** One repair round for figures the program could not draw, or that a required kind is missing from. */
-async function repairFigures(drafts: Draft[], figures: FigurePlan, inLang: <T>(fn: () => Promise<T>) => Promise<T>, svgChecks = new Map<number, Check>()): Promise<number[]> {
+async function repairFigures(
+  drafts: Draft[],
+  figures: FigurePlan,
+  inLang: <T>(fn: () => Promise<T>) => Promise<T>,
+  svgChecks = new Map<number, Check>(),
+  wanted: (i: number) => boolean = () => true,
+): Promise<number[]> {
   const needs = (d: Draft, i: number): string | undefined => {
     if (d.figureIssue && !d.figure) return d.figureIssue;
     const svg = svgChecks.get(i);
@@ -493,7 +499,7 @@ async function repairFigures(drafts: Draft[], figures: FigurePlan, inLang: <T>(f
     if (figures.tables && !hasTableFigure(d.figure?.spec) && !tablesIn(d.stem).length) return "a table figure is required";
     return undefined;
   };
-  const todo = drafts.map((d, i) => ({ d, i, why: needs(d, i) })).filter((x) => x.why);
+  const todo = drafts.map((d, i) => ({ d, i, why: wanted(i) ? needs(d, i) : undefined })).filter((x) => x.why);
   if (!todo.length) return [];
   let res: { fixes: Array<{ n: number; figure?: unknown }> };
   try {
@@ -791,6 +797,29 @@ export function selectionCheck(c: Pick<Draft, "stem" | "type" | "options" | "ans
   return { mismatch: false, detail: lt(`程序核对：只有 ${show(sets[0])} 正好是 ${fmtMoney(total)}`, `checked by the program: only ${show(sets[0])} makes ${fmtMoney(total)}`) };
 }
 
+/** The answer checks the program makes without a model (select-all totals, tile rows, reflections, orderings, arithmetic): a failing one, or undefined. */
+export function programAnswerFailure(c: Draft): Check | undefined {
+  const sel = selectionCheck(c) ?? tileRowCheck(c) ?? reflectionCheck(c) ?? orderingCheck(c);
+  if (sel?.mismatch) return check(false, sel.detail);
+  const arith = sel ? null : arithmeticCheck(c);
+  if (arith?.mismatch) return check(false, arith.detail);
+  return undefined;
+}
+
+/**
+ * Cheap checks first (lib/bank/generate.ts round): which of the program's own checks a draft fails
+ * before any model looks at it — format, closeness to the bank, the answer checks the program can make,
+ * and a figure that cannot be right whatever it looks like (an invalid spec, a required table or 3D
+ * figure missing, a stem that refers to a figure it does not have, a program figure whose conditions or
+ * angles fail, a figure that gives the answer away). Model-drawn figures are not judged here (the vision
+ * model does that). The names of the failing checks; empty when the draft goes on to the model checks.
+ */
+export function cheapFailures(c: { format: Check; novelty: Check; answer?: Check; figure?: Check }): string[] {
+  return Object.entries(c)
+    .filter(([, v]) => v && !v.ok && !v.skipped)
+    .map(([k]) => k);
+}
+
 function answerCheck(c: Draft, independent: string | undefined, resolveError: string | undefined): Check {
   const sel = selectionCheck(c) ?? tileRowCheck(c) ?? reflectionCheck(c) ?? orderingCheck(c);
   if (sel?.mismatch) return check(false, sel.detail);
@@ -991,9 +1020,9 @@ function figureCheck(d: Draft, svgCheck: Check | undefined, needTable = false, n
 }
 
 /** Re-read model-drawn SVG figures with the vision model (needs sharp to rasterise). Keyed by draft index. */
-async function checkModelFigures(drafts: Draft[]): Promise<Map<number, Check>> {
+async function checkModelFigures(drafts: Draft[], wanted: (i: number) => boolean = () => true): Promise<Map<number, Check>> {
   const out = new Map<number, Check>();
-  let todo = drafts.map((d, i) => ({ d, i })).filter(({ d }) => d.figure?.source === "model");
+  let todo = drafts.map((d, i) => ({ d, i })).filter(({ d, i }) => d.figure?.source === "model" && wanted(i));
   // Things covering each other are found by the program first (no model call needed).
   todo = todo.filter(({ d, i }) => {
     const covered = svgOverlaps(d.figure!.svg);
@@ -1033,10 +1062,6 @@ async function checkModelFigures(drafts: Draft[]): Promise<Map<number, Check>> {
   return out;
 }
 
-function listForModel(drafts: Draft[], withAnswer: boolean): string {
-  return drafts.map((d, i) => describeItem(d, i + 1, withAnswer)).join("\n\n");
-}
-
 const errText = (e: unknown) => clip(e instanceof Error ? e.message : String(e), 200);
 
 // ── Generation ──────────────────────────────────────────────────────
@@ -1056,8 +1081,8 @@ export interface GenerationProgress {
 export async function generateFromTemplate(args: { owner: string; bankId: string; template: TemplateRef; count: number; onProgress?: (p: GenerationProgress) => void }): Promise<Generation> {
   // timed and its model usage counted (stats on the record, one line in the generation log)
   const m = await measured((clock) => generateRun(args, clock));
-  const { data, all, rounds } = m.result;
-  const stats = generationStats(m, { rounds, written: all.length, passed: all.filter((c) => c.passed).length });
+  const { data, all, rounds, tally } = m.result;
+  const stats = { ...generationStats(m, { rounds, written: all.length, passed: all.filter((c) => c.passed).length }), early_rejected: tally.cheapBlocked, model_checks_skipped: tally.modelChecksSkipped };
   const g = putGeneration(args.owner, args.bankId, { ...data, stats });
   logGeneration({
     at: Date.now(),
@@ -1078,7 +1103,7 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
 async function generateRun(
   args: { owner: string; bankId: string; template: TemplateRef; count: number; onProgress?: (p: GenerationProgress) => void },
   clock: StageClock,
-): Promise<{ data: Omit<Generation, "id" | "bank_id" | "created_at">; all: Candidate[]; rounds: number }> {
+): Promise<{ data: Omit<Generation, "id" | "bank_id" | "created_at">; all: Candidate[]; rounds: number; tally: { cheapBlocked: number; modelChecksSkipped: number } }> {
   const { owner, bankId, template } = args;
   const bank = getBank(owner, bankId);
   if (!bank.allow_model) throw new BankError(lt("该题库不允许将内容发送给模型服务", "this bank does not allow sending its content to the model service"), 403);
@@ -1129,6 +1154,8 @@ async function generateRun(
     : "No example questions: follow the profile.";
   const system = figures.on ? `${GENERATE_SYSTEM.replace(FIGURE_RULE, FIGURE_RULE_WITH_SPECS)}\n\n${VISUAL_GUIDE}` : GENERATE_SYSTEM;
 
+  /** Drafts stopped by the cheap checks, and drafts the model checks (solve, fit review) were spared for. */
+  const tally = { cheapBlocked: 0, modelChecksSkipped: 0 };
   /** One round: write `ask` questions, repair, reword, check. `earlier` = candidates of earlier rounds (not to be repeated). */
   const round = async (ask: number, earlier: Candidate[], r: number): Promise<Candidate[]> => {
     const step = (stage: GenerationProgress["stage"], zh: string, en: string) => progress({ stage, round: r, detail: lt(`第 ${r} 轮 · ${zh}`, `Round ${r} · ${en}`) });
@@ -1156,21 +1183,51 @@ async function generateRun(
     const rewordNotes = new Map<number, string>();
     step("rewording", "正在查重…", "checking for duplicates…");
     await rewordTooClose(drafts, listItems(owner, bankId), inLang, rewordNotes);
+    // Cheap checks first: the program's own checks (no model call). A draft that fails one of them is
+    // not sent to the vision model, the independent solver or the fit judge — it cannot pass anyway.
+    const earlierItems = [...listItems(owner, bankId), ...earlier.map((c) => ({ stem: c.stem }) as Item)];
+    const novelty = noveltyChecks(drafts, earlierItems, rewordNotes);
+    const programFigure = (d: Draft) => (figures.on || d.figure || d.figureIssue ? figureCheck(d, undefined, figures.tables, figures.solids) : undefined);
+    const cheap = drafts.map((d, i) => ({ format: formatCheck(d, profile), novelty: novelty[i], answer: programAnswerFailure(d), figure: programFigure(d) }));
+    const blocked = new Map<number, string[]>();
+    cheap.forEach((c, i) => {
+      const bad = cheapFailures(c);
+      if (bad.length) blocked.set(i, bad);
+    });
+    tally.cheapBlocked += blocked.size;
+
     // Model-drawn figures (no kind fitted): the vision model checks them against their description.
     if (figures.on) step("checking_figures", "正在检查图形…", "checking figures…");
-    const svgChecks = figures.on ? await checkModelFigures(drafts) : new Map<number, Check>();
+    const svgChecks = figures.on ? await checkModelFigures(drafts, (i) => !blocked.has(i)) : new Map<number, Check>();
     // A model-drawn figure that does not match, or a figure whose angles contradict the question: one more repair round.
-    if (figures.on && drafts.some((d, i) => (svgChecks.get(i) && !svgChecks.get(i)!.ok && !svgChecks.get(i)!.skipped) || (d.figure?.source === "program" && angleCheck(d)?.ok === false) || answerLeak(d))) {
+    // (a draft blocked by the format, novelty or answer checks is not redrawn: a better figure would not save it)
+    const redrawable = (i: number) => !blocked.has(i) || blocked.get(i)!.every((k) => k === "figure");
+    if (figures.on && drafts.some((d, i) => redrawable(i) && ((svgChecks.get(i) && !svgChecks.get(i)!.ok && !svgChecks.get(i)!.skipped) || (d.figure?.source === "program" && angleCheck(d)?.ok === false) || answerLeak(d)))) {
       step("repairing", "正在重画有问题的图形…", "redrawing figures that failed…");
-      const fixed = await repairFigures(drafts, figures, inLang, svgChecks);
+      const fixed = await repairFigures(drafts, figures, inLang, svgChecks, redrawable);
       for (const i of fixed) svgChecks.delete(i);
       const again = await checkModelFigures(fixed.map((i) => drafts[i]));
       for (const [k, c] of again) svgChecks.set(fixed[k], c);
+      // a redrawn figure is judged again
+      for (const i of fixed) {
+        const f = programFigure(drafts[i]);
+        cheap[i].figure = f;
+        const bad = cheapFailures(cheap[i]);
+        if (bad.length) blocked.set(i, bad);
+        else blocked.delete(i);
+      }
+    }
+    // A model-drawn figure the vision model still rejects: no solve or review for it either.
+    for (const [i, c] of svgChecks) {
+      if (c.ok || c.skipped) continue;
+      blocked.set(i, [...new Set([...(blocked.get(i) ?? []), "figure"])]);
     }
 
     // 2. Independent re-solve and fit judge (in parallel; neither sees the other).
     step("solving", "正在独立解题并评审…", "solving independently and reviewing…");
-    const solvable = drafts.map((d, i) => ({ d, n: i + 1 })).filter(({ d }) => d.type === "multiple_choice" || d.type === "numeric");
+    const open = drafts.map((d, i) => ({ d, n: i + 1 })).filter(({ n }) => !blocked.has(n - 1));
+    tally.modelChecksSkipped += drafts.length - open.length;
+    const solvable = open.filter(({ d }) => d.type === "multiple_choice" || d.type === "numeric");
     const resolveP = solvable.length
       ? inLang(() =>
           chatJson({
@@ -1183,27 +1240,45 @@ async function generateRun(
           }),
         )
       : Promise.resolve({ answers: [] });
-    const judgeP = inLang(() =>
-      chatJson({
-        system: JUDGE_SYSTEM,
-        user: `PROFILE\n${profileText(profile, figures, hints)}\n\nGenerated questions:\n\n${listForModel(drafts.map(withFigureText), true)}`,
-        schema: judgeSchema,
-        schemaName: "FitScores",
-        temperature: 0,
-        noCache: true,
-      }),
-    );
+    const judgeP = open.length
+      ? inLang(() =>
+          chatJson({
+            system: JUDGE_SYSTEM,
+            user: `PROFILE\n${profileText(profile, figures, hints)}\n\nGenerated questions:\n\n${open.map(({ d, n }) => describeItem(withFigureText(d), n, true)).join("\n\n")}`,
+            schema: judgeSchema,
+            schemaName: "FitScores",
+            temperature: 0,
+            noCache: true,
+          }),
+        )
+      : Promise.resolve({ scores: [] as { n: number; score: number; reason: string }[] });
     const [resolved, judged] = await Promise.allSettled([resolveP, judgeP]);
     const answers = new Map<number, string>();
     if (resolved.status === "fulfilled") for (const a of resolved.value.answers) answers.set(Math.round(a.n), a.answer.trim());
     const scores = new Map<number, { score: number; reason: string }>();
     if (judged.status === "fulfilled") for (const s of judged.value.scores) scores.set(Math.round(s.n), { score: s.score, reason: s.reason.trim() });
 
-    // 3. Checks.
-    // Earlier rounds' questions count as existing questions for the novelty check.
-    const novelty = noveltyChecks(drafts, [...listItems(owner, bankId), ...earlier.map((c) => ({ stem: c.stem }) as Item)], rewordNotes);
+    // 3. Checks. (Earlier rounds' questions counted as existing questions for the novelty check above.)
     const candidates: Candidate[] = drafts.map((d, i) => {
       const n = i + 1;
+      const figure = figures.on || d.figure || d.figureIssue ? figureCheck(d, svgChecks.get(i), figures.tables, figures.solids) : undefined;
+      const stopped = blocked.get(i);
+      if (stopped) {
+        // failed a cheaper check: the model checks were not run (they could not make it pass)
+        const why = stopped.join(", ");
+        const notRun = (what: string) => check(true, lt(`未做${what}：已有检查不通过（${why}）`, `${what === "独立解题" ? "independent solve" : "fit review"} not run: ${why} failed first`), true);
+        const checks = {
+          format: cheap[i].format,
+          answer: cheap[i].answer ?? notRun("独立解题"),
+          novelty: cheap[i].novelty,
+          fit: notRun("匹配度评审"),
+          ...(figure ? { figure } : {}),
+        };
+        const { figureIssue: _issue, figureRaw: _raw, ...candidate } = d;
+        void _issue;
+        void _raw;
+        return { ...candidate, checks, passed: false };
+      }
       const fitScore = scores.get(n);
       const fit =
         judged.status === "rejected"
@@ -1211,9 +1286,8 @@ async function generateRun(
           : !fitScore
             ? check(true, lt("评审没有给出这道题的分数", "the review gave no score for this question"), true)
             : check(fitScore.score >= JUDGE_PASS, `${lt("匹配度", "fit")} ${fitScore.score}/5${fitScore.reason ? ` — ${fitScore.reason}` : ""}`);
-      const figure = figures.on || d.figure || d.figureIssue ? figureCheck(d, svgChecks.get(i), figures.tables, figures.solids) : undefined;
       const checks = {
-        format: formatCheck(d, profile),
+        format: cheap[i].format,
         answer: answerCheck(d, answers.get(n), resolved.status === "rejected" ? errText(resolved.reason) : undefined),
         novelty: novelty[i],
         fit,
@@ -1260,6 +1334,7 @@ async function generateRun(
     data: { template, template_label: clip(label, 200), mode: "same_type", requested: count, note, matched, ...(figure_plan ? { figure_plan } : {}), candidates: [...passed, ...failed] },
     all,
     rounds,
+    tally,
   };
 }
 

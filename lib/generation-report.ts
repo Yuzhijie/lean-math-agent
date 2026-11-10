@@ -180,8 +180,12 @@ export function generationReport({ generations, log, now = new Date() }: ReportI
       `| Time per passed question | ${passed ? sec(total / passed) : "—"} |`,
       `| Model calls per passed question | ${passed ? (calls / passed).toFixed(1) : "—"} |`,
       `| Cost per passed question | ${costs.length && passed ? `$${(cost / passed).toFixed(4)}${costs.length < runs.length ? ` (${costs.length} of ${runs.length} runs priced)` : ""}` : "— (no LLM_PRICES for the models used)"} |`,
-      "",
     );
+    const early = runs.reduce((s, e) => s + (e.stats.early_rejected ?? 0), 0);
+    const spared = runs.reduce((s, e) => s + (e.stats.model_checks_skipped ?? 0), 0);
+    if (kind === "bank") out.push(`| Rejected by the program's checks before any model check | ${early} of ${writtenN} |`, `| Questions not sent to the solver and the fit review | ${spared} |`);
+    else out.push(`| Lean proofs not attempted (answer already failed) | ${spared} |`);
+    out.push("");
     const stage = new Map<string, number>();
     for (const e of runs) for (const [k, v] of Object.entries(e.stats.stage_ms)) stage.set(k, (stage.get(k) ?? 0) + v);
     const stageTotal = [...stage.values()].reduce((a, b) => a + b, 0);

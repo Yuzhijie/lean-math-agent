@@ -388,6 +388,8 @@ export interface GeneratedVerification {
   checks: { answer: GeneratedCheck; counterexample: GeneratedCheck };
   /** How long each check took (ms; they run side by side). */
   ms?: { answer: number; counterexample: number };
+  /** No Lean proof was looked for: the answer check had already failed. */
+  proof_skipped?: boolean;
   /** The independent solver's answer ("true" / "false" for a claim to prove). */
   independent_answer?: string;
   /** The problem as a Lean statement and whether the program proved it (no model). */
