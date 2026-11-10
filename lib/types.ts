@@ -386,6 +386,8 @@ export interface GeneratedVerification {
   /** The answer agrees with an independent solve and no counterexample was found. */
   passed: boolean;
   checks: { answer: GeneratedCheck; counterexample: GeneratedCheck };
+  /** How long each check took (ms; they run side by side). */
+  ms?: { answer: number; counterexample: number };
   /** The independent solver's answer ("true" / "false" for a claim to prove). */
   independent_answer?: string;
   /** The problem as a Lean statement and whether the program proved it (no model). */

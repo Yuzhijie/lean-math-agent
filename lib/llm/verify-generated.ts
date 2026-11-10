@@ -140,10 +140,16 @@ async function leanChecks(p: GeneratedProblem): Promise<{ check: GeneratedCheck;
 
 /** Run the checks on one generated problem. */
 export async function verifyGenerated(p: GeneratedProblem): Promise<GeneratedVerification> {
-  const [a, l] = await Promise.all([answerCheck(p), leanChecks(p)]);
+  const t0 = Date.now();
+  const ms: { answer?: number; counterexample?: number } = {};
+  const [a, l] = await Promise.all([
+    answerCheck(p).finally(() => (ms.answer = Date.now() - t0)),
+    leanChecks(p).finally(() => (ms.counterexample = Date.now() - t0)),
+  ]);
   return {
     passed: a.check.ok && l.check.ok,
     checks: { answer: a.check, counterexample: l.check },
+    ms: { answer: ms.answer ?? 0, counterexample: ms.counterexample ?? 0 },
     ...(a.independent ? { independent_answer: a.independent } : {}),
     ...(l.lean ? { lean: l.lean } : {}),
   };

@@ -268,6 +268,22 @@ export const generationSchema = z.object({
     .object({ kinds: z.array(z.string()).max(20), layout: z.string().max(300).optional(), tables: z.boolean(), solids: z.array(z.string()).max(4), areas: z.number().int().optional(), note: z.string().max(300).optional() })
     .optional(),
   candidates: z.array(candidateSchema),
+  /** Time, rounds, questions written / passed and model usage of the run (lib/generation-stats.ts); absent on older records. */
+  stats: z
+    .object({
+      duration_ms: z.number(),
+      rounds: z.number().int(),
+      written: z.number().int(),
+      passed: z.number().int(),
+      stage_ms: z.record(z.string(), z.number()),
+      llm_calls: z.number().int(),
+      prompt_tokens: z.number(),
+      completion_tokens: z.number(),
+      cost_usd: z.number().optional(),
+      by_model: z.record(z.string(), z.object({ calls: z.number(), prompt_tokens: z.number(), completion_tokens: z.number() })).optional(),
+      lean_verifications: z.number().int().optional(),
+    })
+    .optional(),
   created_at: ts,
 });
 export type Generation = z.infer<typeof generationSchema>;

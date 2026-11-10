@@ -22,6 +22,7 @@ process.env.PROOF_MEMORY_PATH = path.join(root, "proof-memory.json");
 process.env.AUTO_RULE_STATS_PATH = path.join(root, "auto-rule-stats.json");
 process.env.AUTO_RULES_PATH = path.join(root, "auto-rules.json");
 process.env.AUTO_LEARNED_PATH = path.join(root, "auto-learned.json");
+process.env.GENERATION_LOG_PATH = path.join(root, "generation-log.jsonl");
 process.env.AUTO_LEARN ??= "off";
 process.env.PREMISE_INDEX_PATH = path.join(root, "premise-index.json"); // absent → curated seed only
 // Never talk to a real compute server, LLM or Loogle from unit tests by accident.

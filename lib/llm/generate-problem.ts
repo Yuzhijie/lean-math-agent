@@ -11,6 +11,7 @@ import { buildGeneratorPrompt } from "./agent-prompt";
 import { verifyAndFixAnswer } from "./answer-verifier";
 import { lt } from "./output-locale";
 import { failureNote, verifyGenerated } from "./verify-generated";
+import { generationStats, logGeneration, measured, type StageClock } from "../generation-stats";
 
 export interface GenerateProblemOptions {
   gradeLevel: GradeLevel;
@@ -95,13 +96,37 @@ async function pool<T, R>(items: T[], n: number, fn: (x: T) => Promise<R>): Prom
 export async function generateProblems(options: GenerateProblemOptions): Promise<BuiltinResult> {
   const requested = Math.max(1, Math.min(10, options.count));
   if (options.verify === false) return { problems: await writeProblems(options, requested, []), requested };
+  // timed and its model usage counted: one line in the generation log (lib/generation-stats.ts)
+  const m = await measured((clock) => generateChecked(options, requested, clock));
+  const { result, written, rounds } = m.result;
+  logGeneration({
+    at: Date.now(),
+    kind: "builtin",
+    label: `${options.gradeLevel} · ${options.difficulty} · ${options.domain}`,
+    requested,
+    stats: generationStats(m, { rounds, written: written.length, passed: written.filter((p) => p.verification?.passed).length }),
+    outcomes: written.map((p) => ({
+      passed: !!p.verification?.passed,
+      failed: Object.fromEntries(Object.entries(p.verification?.checks ?? {}).filter(([, c]) => !c.ok && !c.skipped).map(([k, c]) => [k, c.detail.slice(0, 300)])),
+      ...(p.verification?.ms ? { check_ms: p.verification.ms } : {}),
+    })),
+  });
+  return result;
+}
+
+async function generateChecked(options: GenerateProblemOptions, requested: number, clock: StageClock): Promise<{ result: BuiltinResult; written: GeneratedProblem[]; rounds: number }> {
+  const written: GeneratedProblem[] = [];
+  let rounds = 0;
   const passed: GeneratedProblem[] = [];
   const failed: GeneratedProblem[] = [];
   const rejected: string[] = [];
-  const progress = (stage: BuiltinProgress["stage"], round: number, detail: string) =>
+  const progress = (stage: BuiltinProgress["stage"], round: number, detail: string) => {
+    clock.enter(stage);
     options.onProgress?.({ stage, round, rounds: BUILTIN_ROUNDS, requested, passed: passed.length, detail });
+  };
   for (let round = 1; round <= BUILTIN_ROUNDS && passed.length < requested; round++) {
     const need = requested - passed.length;
+    rounds = round;
     progress("writing", round, lt(`第 ${round} 轮：正在写 ${need} 道题…`, `Round ${round}: writing ${need} problem(s)…`));
     let drafts: GeneratedProblem[];
     try {
@@ -118,6 +143,7 @@ export async function generateProblems(options: GenerateProblemOptions): Promise
       progress("checking", round, lt(`第 ${round} 轮：独立解题并在 Lean 里找反例（${done}/${drafts.length}）…`, `Round ${round}: solving independently and searching for counterexamples in Lean (${done}/${drafts.length})…`));
       return { ...p, verification };
     });
+    written.push(...checked);
     for (const p of checked) {
       if (p.verification!.passed && passed.length < requested) passed.push(p);
       else if (!p.verification!.passed) {
@@ -134,7 +160,7 @@ export async function generateProblems(options: GenerateProblemOptions): Promise
           `After ${BUILTIN_ROUNDS} rounds only ${passed.length} passed the checks; the failed ones follow, each with its reason.`,
         )
       : undefined;
-  return { problems: [...passed, ...(passed.length < requested ? failed : [])], requested, ...(note ? { note } : {}) };
+  return { result: { problems: [...passed, ...(passed.length < requested ? failed : [])], requested, ...(note ? { note } : {}) }, written, rounds };
 }
 
 // ── Label helpers ────────────────────────────────────────────────────

@@ -20,6 +20,7 @@
     "bench:fetch": "tsx scripts/fetch-benchmark.ts",
     "postinstall": "prisma generate",
     "bench:report": "tsx scripts/bench-report.ts",
+    "gen:report": "tsx scripts/generation-report.ts",
     "bench:baseline": "tsx scripts/bench-baseline.ts",
     "bench:merge": "tsx scripts/bench-merge.ts",
     "bench:ablation": "tsx scripts/bench-ablation.ts",

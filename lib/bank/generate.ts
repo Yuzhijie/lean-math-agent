@@ -27,6 +27,7 @@ import { describeItem, detectLanguage, getProfile, inBankLanguage, LETTERS, pick
 import { categoryMembers, itemsHash } from "./query";
 import { relaxationNote, selectTemplateItems } from "./select";
 import { StemIndex, TOO_CLOSE } from "./similarity";
+import { generationStats, logGeneration, measured, type StageClock } from "../generation-stats";
 import { addItems, BankError, getBank, getCategory, getGeneration, getItem, listCategories, listItems, putGeneration } from "./store";
 import { QUESTION_TYPES, type Candidate, type Check, type Generation, type Item, type QuestionType, type TemplateProfile, type TemplateRef } from "./types";
 import { vocabFor } from "./vocab";
@@ -1053,11 +1054,37 @@ export interface GenerationProgress {
 }
 
 export async function generateFromTemplate(args: { owner: string; bankId: string; template: TemplateRef; count: number; onProgress?: (p: GenerationProgress) => void }): Promise<Generation> {
+  // timed and its model usage counted (stats on the record, one line in the generation log)
+  const m = await measured((clock) => generateRun(args, clock));
+  const { data, all, rounds } = m.result;
+  const stats = generationStats(m, { rounds, written: all.length, passed: all.filter((c) => c.passed).length });
+  const g = putGeneration(args.owner, args.bankId, { ...data, stats });
+  logGeneration({
+    at: Date.now(),
+    kind: "bank",
+    bank_id: args.bankId,
+    generation_id: g.id,
+    label: data.template_label,
+    requested: data.requested,
+    stats,
+    outcomes: all.map((c) => ({
+      passed: c.passed,
+      failed: Object.fromEntries(Object.entries(c.checks).filter(([, v]) => v && !v.ok && !v.skipped).map(([k, v]) => [k, v!.detail.slice(0, 300)])),
+    })),
+  });
+  return g;
+}
+
+async function generateRun(
+  args: { owner: string; bankId: string; template: TemplateRef; count: number; onProgress?: (p: GenerationProgress) => void },
+  clock: StageClock,
+): Promise<{ data: Omit<Generation, "id" | "bank_id" | "created_at">; all: Candidate[]; rounds: number }> {
   const { owner, bankId, template } = args;
   const bank = getBank(owner, bankId);
   if (!bank.allow_model) throw new BankError(lt("该题库不允许将内容发送给模型服务", "this bank does not allow sending its content to the model service"), 403);
   const count = Math.min(MAX_COUNT, Math.max(1, Math.floor(Number(args.count) || 1)));
   const progress = (p: Omit<GenerationProgress, "rounds" | "requested">) => {
+    clock.enter(p.stage);
     try {
       args.onProgress?.({ ...p, rounds: MAX_ROUNDS, requested: count });
     } catch {
@@ -1203,9 +1230,11 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
 
   // Rounds: when fewer than `count` questions pass, write more (at most two more rounds), telling the writer what failed.
   const all: Candidate[] = [];
+  let rounds = 0;
   for (let r = 0; r < MAX_ROUNDS; r++) {
     const need = count - all.filter((c) => c.passed).length;
     if (need <= 0) break;
+    rounds = r + 1;
     try {
       all.push(...(await round(r === 0 ? Math.ceil(count * 1.5) : Math.min(MAX_COUNT, need + 1), all, r + 1)));
       const ok = all.filter((c) => c.passed).length;
@@ -1227,7 +1256,11 @@ export async function generateFromTemplate(args: { owner: string; bankId: string
   const passed = candidates.filter((c) => c.passed).slice(0, count);
   const failed = candidates.filter((c) => !c.passed);
   const figure_plan = figures.on || visuals ? { kinds: (visuals?.itemKinds.length ? visuals.itemKinds : figures.kinds).slice(0, 20), layout: figures.layout?.slice(0, 300), tables: figures.tables, solids: figures.solids, ...(figures.areas ? { areas: figures.areas } : {}), ...(visuals?.note ? { note: visuals.note.slice(0, 300) } : {}) } : undefined;
-  return putGeneration(owner, bankId, { template, template_label: clip(label, 200), mode: "same_type", requested: count, note, matched, ...(figure_plan ? { figure_plan } : {}), candidates: [...passed, ...failed] });
+  return {
+    data: { template, template_label: clip(label, 200), mode: "same_type", requested: count, note, matched, ...(figure_plan ? { figure_plan } : {}), candidates: [...passed, ...failed] },
+    all,
+    rounds,
+  };
 }
 
 // ── Adoption ────────────────────────────────────────────────────────
