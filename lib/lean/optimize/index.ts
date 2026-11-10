@@ -13,6 +13,7 @@ import { proveOptimization } from "./prove";
 import { colourFamily, familyEvalCommand, familyScript, maxFamily, parseFamily, readFamilyGraph } from "./family";
 import type { ProofSession } from "../proof-state";
 import { ekrScript, ekrShape, groundEvalCommand, readGround } from "./ekr";
+import { oddtownProof, oddtownShape } from "./oddtown";
 import { vennOptimize } from "./venn";
 
 /** IsGreatest / IsLeast / bounds, or a conjunction of an ∃ and a ∀ (attained + bound). */
@@ -86,6 +87,20 @@ export async function optimizationProof(args: {
   if (typeof opened === "string") return { reason: opened };
   const { run, script, session } = opened;
   try {
+    // Oddtown (odd sizes, even pairwise intersections ⇒ at most |U|): linear algebra over 𝔽₂ (oddtown.ts)
+    const odd = oddtownShape(theoremType);
+    if (odd) {
+      const mark = run.save();
+      const o = await oddtownProof(run, odd);
+      if (o.ok) {
+        const tactics = script.join("\n");
+        const source = scriptSource({ theoremName, theoremType, tactics, useMathlib, heartbeats });
+        const verification = await session.verify(sessionId, source, { theoremName, expectedSignature, timeoutMs: Number(process.env.OPTIMIZE_VERIFY_TIMEOUT_MS ?? 300_000) });
+        if (verification.ok) return { proof: { verification, source, tactics }, reason: "" };
+        if (process.env.OPTIMIZE_DEBUG) console.error(`[optimize] Oddtown proof did not verify:\n${source}\n${verification.log}`);
+      } else if (process.env.OPTIMIZE_DEBUG) console.error(`[optimize] Oddtown: ${o.reason}`);
+      run.restore(mark);
+    }
     // "largest family of subsets": a colouring the kernel checks (family.ts), before the generic search
     const fam = parseFamily(theoremType);
     if (fam) {
