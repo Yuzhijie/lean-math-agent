@@ -265,6 +265,9 @@ export function positivityProofs(E: string, f: Facts, strict: boolean): string[]
   });
   const squares = squareBases(E).map((b) => `sq_nonneg (${b})`);
   out.push(`(show (0:ℝ) ${rel} ${E} by nlinarith [${[...squares, ...pos, ...pos.map((p) => `mul_pos ${p} ${p}`)].join(", ")}])`);
+  // square roots of rationals (2√3 − 3 > 0: positivity has no bounds for them) and |…| ≥ 0
+  const rh = rootHints(E, f.realVars);
+  if (rh) out.unshift(`(show (0:ℝ) ${rel} ${E} by nlinarith [${[rh, ...squares].join(", ")}])`);
   for (const p of f.pointNes) {
     const u = `(${slice(p.text, p.a)}) - (${slice(p.text, p.b)})`;
     const v = `(${slice(p.text, p.c)}) - (${slice(p.text, p.d)})`;
@@ -453,6 +456,56 @@ async function numericAbs(run: TacticRunner): Promise<void> {
  * the facts nlinarith proves it from — √r ^ 2 = r, 0 ≤ √r, lo < √r < hi to six digits; undefined when it
  * is not such a number or too close to 0 to tell.
  */
+/** Lean facts about √r for a rational r > 0 (√r ^ 2 = r, 0 ≤ √r, lo < √r < hi to six digits). */
+function sqrtFacts(arg: string): { value: number; hints: string[] } | undefined {
+  let r: Frac | undefined;
+  try {
+    r = toPoly(arg, parseTerm(arg), new VarTable(new Set())).constValue();
+  } catch {
+    return undefined;
+  }
+  if (!r || r.n <= 0n) return undefined;
+  const x = Math.sqrt(Number(r.n) / Number(r.d));
+  // strict on both sides, also for a perfect square (√1: 0.999999 < √1 < 1.000001)
+  const lo = Math.ceil(x * 1e6) - 1;
+  const hi = Math.floor(x * 1e6) + 1;
+  const R = `(${arg} : ℝ)`;
+  return {
+    value: x,
+    hints: [
+      `Real.sq_sqrt (show (0:ℝ) ≤ ${R} by norm_num)`,
+      `Real.sqrt_nonneg ${R}`,
+      `(Real.lt_sqrt (by norm_num)).mpr (by norm_num : ((${lo} / 1000000 : ℝ)) ^ 2 < ${R})`,
+      `(Real.sqrt_lt' (by norm_num)).mpr (by norm_num : ${R} < ((${hi} / 1000000 : ℝ)) ^ 2)`,
+    ],
+  };
+}
+
+/**
+ * nlinarith hints for an expression with square roots of rationals and |…| atoms (each √r's facts,
+ * `abs_nonneg` of each |…|), or undefined when it has no root of a rational.
+ */
+export function rootHints(E: string, realVars: Set<string>): string | undefined {
+  const vars = new VarTable(realVars);
+  try {
+    toPoly(E, parseTerm(E), vars);
+  } catch {
+    return undefined;
+  }
+  const hints: string[] = [];
+  let roots = 0;
+  for (const a of vars.atoms) {
+    if (a.kind === "sqrt" && a.argNode && isNumeric(a.argNode)) {
+      const sf = sqrtFacts(a.arg!);
+      if (sf) {
+        hints.push(...sf.hints);
+        roots++;
+      }
+    } else if (a.kind === "abs" && a.arg) hints.push(`abs_nonneg (${a.arg})`);
+  }
+  return roots ? hints.join(", ") : undefined;
+}
+
 export function rootNumberSign(src: string, n: Node): { positive: boolean; hints: string } | undefined {
   const vars = new VarTable(new Set());
   let p: Poly;
@@ -466,25 +519,10 @@ export function rootNumberSign(src: string, n: Node): { positive: boolean; hints
   const hints: string[] = [];
   for (const a of vars.atoms) {
     if (a.kind !== "sqrt" || !a.argNode || !isNumeric(a.argNode)) return undefined;
-    let r: Frac | undefined;
-    try {
-      r = toPoly(a.arg!, parseTerm(a.arg!), new VarTable(new Set())).constValue();
-    } catch {
-      return undefined;
-    }
-    if (!r || r.n <= 0n) return undefined;
-    const x = Math.sqrt(Number(r.n) / Number(r.d));
-    value.set(a.index, x);
-    // strict on both sides, also for a perfect square (√1: 0.999999 < √1 < 1.000001)
-    const lo = Math.ceil(x * 1e6) - 1;
-    const hi = Math.floor(x * 1e6) + 1;
-    const R = `(${a.arg} : ℝ)`;
-    hints.push(
-      `Real.sq_sqrt (show (0:ℝ) ≤ ${R} by norm_num)`,
-      `Real.sqrt_nonneg ${R}`,
-      `(Real.lt_sqrt (by norm_num)).mpr (by norm_num : ((${lo} / 1000000 : ℝ)) ^ 2 < ${R})`,
-      `(Real.sqrt_lt' (by norm_num)).mpr (by norm_num : ${R} < ((${hi} / 1000000 : ℝ)) ^ 2)`,
-    );
+    const sf = sqrtFacts(a.arg!);
+    if (!sf) return undefined;
+    value.set(a.index, sf.value);
+    hints.push(...sf.hints);
   }
   let v = 0;
   for (const [m, c] of p.terms) {

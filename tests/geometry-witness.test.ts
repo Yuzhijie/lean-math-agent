@@ -37,3 +37,13 @@ describe("signs of numbers with square roots (|…| and denominators)", () => {
     for (const t of ["2 - 1", "x - √2", "√2 * √2 - 2"]) expect(rootNumberSign(t, parseTerm(t))).toBeUndefined();
   });
 });
+
+describe("positivity hints for expressions with roots of rationals", () => {
+  it("bounds √3 and keeps |…| nonnegative (2√3 + |E| − 3 > 0)", async () => {
+    const { rootHints } = await import("@/lib/lean/geometry/prove");
+    const h = rootHints("2 * (√3) + (|(Yx - Xx) * (Zy - Xy)|) - 3", new Set(["Xx", "Xy", "Yx", "Zy"]))!;
+    expect(h).toContain("(Real.lt_sqrt (by norm_num)).mpr (by norm_num : ((1732050 / 1000000 : ℝ)) ^ 2 < (3 : ℝ))");
+    expect(h).toContain("abs_nonneg ((Yx - Xx) * (Zy - Xy))");
+    expect(rootHints("x + |x|", new Set(["x"]))).toBeUndefined(); // no root of a rational
+  });
+});
