@@ -239,15 +239,28 @@ export async function numericCounterexample(run: TacticRunner): Promise<Countere
   if (!equations.length) return undefined;
 
   const points = await findPoints({ vars: vars.names.length, fixed, equations, inequalities });
+  const debug = process.env.GEOMETRY_DEBUG ? (m: string) => console.error(`[refute] ${m}`) : () => {};
+  debug(`${points.length} point(s) for ${equations.length} equation(s) in ${vars.names.length} variable(s)`);
   for (const pt of points) {
     const env: Env = new Map();
     for (const v of realVars) {
       const x = pt.get(vars.variable(v));
       if (x !== undefined) env.set(v, x);
     }
-    if (env.size !== realVars.size) continue;
-    if (!hyps.every((h) => evalProp(h.node, env) === true)) continue;
-    if (evalProp(goal, env, 1e-4) !== false) continue;
+    if (env.size !== realVars.size) {
+      debug("a point without every variable");
+      continue;
+    }
+    const bad = hyps.find((h) => evalProp(h.node, env) !== true);
+    if (bad) {
+      debug(`hypothesis not ${evalProp(bad.node, env) === false ? "true" : "decided"} there: ${bad.text.slice(0, 120)}`);
+      continue;
+    }
+    const verdict = evalProp(goal, env, 1e-4);
+    if (verdict !== false) {
+      debug(`conclusion ${verdict === true ? "holds" : "not decided"} at ${[...env].map(([k, v]) => `${k}=${v.toFixed(4)}`).join(" ")}`);
+      continue;
+    }
     const g = unwrap(goal);
     const sides: Counterexample["sides"] =
       g.k === "bin" && g.op === "="

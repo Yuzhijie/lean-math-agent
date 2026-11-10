@@ -179,6 +179,17 @@ describe.skipIf(!sympy)("polynomial certificates (SymPy)", () => {
     expect(ds[1]).toBeCloseTo(1, 9);
   });
 
+  it("finds points when known values limit the precision (√3 as a double, an overdetermined orthocentre)", async () => {
+    // s = √3 fixed; h = (s + 3) / 6 from two of three consistent equations, and s² = 3 itself:
+    // nothing can get below double precision, which once left an orthocentre statement with no point
+    const vars = new VarTable(new Set(["h", "s"]));
+    const P = (t: string) => toPoly(t, parseTerm(t), vars);
+    const eqs = [P("6 * h - s - 3"), P("12 * h - 2 * s - 6"), P("s ^ 2 - 3"), P("h * s - (s ^ 2 + 3 * s) / 6")];
+    const pts = await findPoints({ vars: 2, fixed: new Map([[1, Math.sqrt(3)]]), equations: eqs, inequalities: [] });
+    expect(pts.length).toBeGreaterThan(0);
+    expect(pts[0].get(0)!).toBeCloseTo((Math.sqrt(3) + 3) / 6, 9);
+  });
+
   it("cancels a factor whose inverse is known (b · w = 1): b · (p − c · r) = 0 gives p = c · r", async () => {
     const vars = new VarTable(new Set(["b", "p", "c", "r", "w"]));
     const P = (s: string) => toPoly(s, parseTerm(s), vars);

@@ -1081,6 +1081,7 @@ def numeric_points(req: dict) -> dict:
     def residual(x):
         return [_eval(e, x) for e in eqs]
 
+    accept_fixed = mpmath.mpf("1e-20")
     for _ in range(trials):
         x = [fixed[i] if i in fixed else mpmath.mpf(rng.uniform(-3, 3)) for i in range(n)]
         lam = mpmath.mpf("1e-3")
@@ -1117,7 +1118,11 @@ def numeric_points(req: dict) -> dict:
                 lam *= 10
                 if lam > 1e12:
                     break
-        if norm > mpmath.mpf("1e-50"):
+        # known values come in at double precision (√3, cos(π/9), an arccos of numbers): an equation
+        # in them alone, or an overdetermined but consistent system (an orthocentre from three
+        # altitudes), cannot get below ~1e-32 then — the caller checks every point against the
+        # statement anyway
+        if norm > (accept_fixed if fixed else mpmath.mpf("1e-50")):
             continue
         ok = True
         for terms, rel in ineqs:
