@@ -27,6 +27,7 @@ import { ParseError, parseTerm, slice, unwrap, type Node } from "./expr";
 import { isInaccessible, parseGoal, type GoalState } from "./goal";
 import { Frac, NotPolynomial, Poly, toPoly, VarTable, hasNonConstDivision, isNumeric, type Atom } from "./poly";
 import { findCertificate } from "./certificate";
+import { existsWitness } from "./witness";
 import { angleProof, chooseStep, piMultiple, scaledFieldRoots, sqrtTexts, trigSetup } from "./angles";
 
 export type { TacticRunner } from "../tactic-runner";
@@ -341,6 +342,9 @@ export async function proveNonzero(run: TacticRunner, src: string, D: Node, f: F
   const text = slice(src, D);
   const name = run.fresh("hden");
   const direct = [`(show (${text}) ≠ 0 by positivity)`, `(show (${text}) ≠ 0 by norm_num)`];
+  // a number written with square roots of rationals: its sign from the bounds of the roots
+  const sign = rootNumberSign(src, D);
+  if (sign) direct.unshift(sign.positive ? `(show (0:ℝ) < ${text} by nlinarith [${sign.hints}]).ne'` : `(show ${text} < (0:ℝ) by nlinarith [${sign.hints}]).ne`);
   if (await haveFirst(run, name, `(${text}) ≠ 0`, direct)) return name;
   // factor by factor: √E needs 0 < E (or an equal square root that is known positive)
   const parts: string[] = [];
@@ -397,7 +401,7 @@ async function trigFacts(run: TacticRunner, done: Set<string>): Promise<void> {
 async function numericAbs(run: TacticRunner): Promise<void> {
   const st = state(run);
   const seen = new Set<string>();
-  const found: { text: string; arg: string; nonneg: boolean }[] = [];
+  const found: { text: string; arg: string; nonneg: boolean; hints?: string }[] = [];
   const walk = (src: string, n: Node) => {
     const u = unwrap(n);
     if (u.k === "abs") {
@@ -412,7 +416,14 @@ async function numericAbs(run: TacticRunner): Promise<void> {
             // not a number after all
           }
         }
-      } else walk(src, u.a);
+      } else {
+        const r = rootNumberSign(src, u.a);
+        const arg = slice(src, u.a);
+        if (r && !seen.has(arg)) {
+          seen.add(arg);
+          found.push({ text: slice(src, u), arg, nonneg: r.positive, hints: r.hints });
+        } else if (!r) walk(src, u.a);
+      }
       return;
     }
     for (const k of ["a", "b"] as const) {
@@ -426,9 +437,66 @@ async function numericAbs(run: TacticRunner): Promise<void> {
     if (n) walk(text, n);
   }
   for (const a of found) {
-    const lemma = a.nonneg ? `abs_of_nonneg (show (0:ℝ) ≤ ${a.arg} by norm_num)` : `abs_of_neg (show ${a.arg} < (0:ℝ) by norm_num)`;
+    const lemma = a.hints
+      ? a.nonneg
+        ? `abs_of_pos (show (0:ℝ) < ${a.arg} by nlinarith [${a.hints}])`
+        : `abs_of_neg (show ${a.arg} < (0:ℝ) by nlinarith [${a.hints}])`
+      : a.nonneg
+        ? `abs_of_nonneg (show (0:ℝ) ≤ ${a.arg} by norm_num)`
+        : `abs_of_neg (show ${a.arg} < (0:ℝ) by norm_num)`;
     await run.apply(`simp only [${lemma}] at *`);
   }
+}
+
+/**
+ * The sign of a number written with square roots of positive rationals (`(0 - (3 + √3) / 6) * …`), with
+ * the facts nlinarith proves it from — √r ^ 2 = r, 0 ≤ √r, lo < √r < hi to six digits; undefined when it
+ * is not such a number or too close to 0 to tell.
+ */
+export function rootNumberSign(src: string, n: Node): { positive: boolean; hints: string } | undefined {
+  const vars = new VarTable(new Set());
+  let p: Poly;
+  try {
+    p = toPoly(src, n, vars);
+  } catch {
+    return undefined;
+  }
+  if (!vars.atoms.length) return undefined;
+  const value = new Map<number, number>();
+  const hints: string[] = [];
+  for (const a of vars.atoms) {
+    if (a.kind !== "sqrt" || !a.argNode || !isNumeric(a.argNode)) return undefined;
+    let r: Frac | undefined;
+    try {
+      r = toPoly(a.arg!, parseTerm(a.arg!), new VarTable(new Set())).constValue();
+    } catch {
+      return undefined;
+    }
+    if (!r || r.n <= 0n) return undefined;
+    const x = Math.sqrt(Number(r.n) / Number(r.d));
+    value.set(a.index, x);
+    // strict on both sides, also for a perfect square (√1: 0.999999 < √1 < 1.000001)
+    const lo = Math.ceil(x * 1e6) - 1;
+    const hi = Math.floor(x * 1e6) + 1;
+    const R = `(${a.arg} : ℝ)`;
+    hints.push(
+      `Real.sq_sqrt (show (0:ℝ) ≤ ${R} by norm_num)`,
+      `Real.sqrt_nonneg ${R}`,
+      `(Real.lt_sqrt (by norm_num)).mpr (by norm_num : ((${lo} / 1000000 : ℝ)) ^ 2 < ${R})`,
+      `(Real.sqrt_lt' (by norm_num)).mpr (by norm_num : ${R} < ((${hi} / 1000000 : ℝ)) ^ 2)`,
+    );
+  }
+  let v = 0;
+  for (const [m, c] of p.terms) {
+    let t = Number(c.n) / Number(c.d);
+    for (const part of m ? m.split("*") : []) {
+      const [x, e] = part.split("^");
+      t *= value.get(Number(x.slice(1)))! ** (e ? Number(e) : 1);
+    }
+    v += t;
+  }
+  if (!Number.isFinite(v) || Math.abs(v) < 1e-4) return undefined;
+  return { positive: v > 0, hints: hints.join(", ") };
 }
 
 /** Step 2: clear top-level fractions. */
@@ -1260,6 +1328,14 @@ export async function proveGeometryGoals(run: TacticRunner): Promise<GeometryOut
         await clearFractions(run);
         await atomFacts(run, atomsDone);
         await closeEquation(run, atomsDone, trigDone);
+        continue;
+      }
+      if (t.k === "quant" && t.q === "∃") {
+        // a witness fixed by linear equations (a circumcentre: the squares cancel), solved by the program
+        const w = existsWitness(st.target, readFacts(st).realVars);
+        if (!w) throw new Fail(`no witness for ${st.target.replace(/\s+/g, " ").slice(0, 80)}`);
+        if (!(await run.apply(w.tactic))) throw new Fail(`the witness ${w.values.join(", ")} was refused: ${run.lastError().split("\n")[0]}`);
+        await run.apply("dsimp only"); // (x, y).1 → x
         continue;
       }
       throw new Fail(`goal shape not handled: ${st.target.replace(/\s+/g, " ").slice(0, 100)}`);

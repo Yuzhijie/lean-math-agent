@@ -61,7 +61,7 @@ export class Frac {
 /** Monomial key: "v0^2*v3" (variables sorted by index), "" for the constant. */
 export type Mono = string;
 
-function monoParts(m: Mono): [number, number][] {
+export function monoParts(m: Mono): [number, number][] {
   if (!m) return [];
   return m.split("*").map((p) => {
     const [v, e] = p.split("^");
@@ -69,7 +69,7 @@ function monoParts(m: Mono): [number, number][] {
   });
 }
 
-function monoKey(parts: Map<number, number>): Mono {
+export function monoKey(parts: Map<number, number>): Mono {
   return [...parts.entries()]
     .filter(([, e]) => e > 0)
     .sort((a, b) => a[0] - b[0])
