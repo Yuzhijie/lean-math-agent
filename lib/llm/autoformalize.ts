@@ -116,7 +116,16 @@ export async function autoformalize(args: {
    * caller does not claim the statement is faithful.
    */
   light?: boolean;
+  /**
+   * A statement accepted before (an earlier attempt at the same problem), checked again by the
+   * program only — layer 1 elaborate and layer 6 counterexample, no model call: its model layers
+   * passed then, and the program's checks may have become stricter since. No new formalization.
+   */
+  reuse?: { theorem_name: string; theorem_type: string };
+  /** What an earlier formalization of this problem got wrong; given to the formalizer on every attempt. */
+  feedback?: string;
 }): Promise<AutoformalizeResult> {
+  if (args.reuse) return recheckStatement(args.reuse, args.refute ?? refuteEnabled());
   const maxRetries = args.maxRetries ?? 3;
   const threshold = args.equivalenceThreshold ?? 0.8;
   const nCandidates = Math.max(1, Math.floor(args.candidates ?? envInt("AUTOFORMALIZE_CANDIDATES", 1)));
@@ -135,7 +144,8 @@ export async function autoformalize(args: {
     // Step 1: Generate formalization(s) via LLM. With several candidates the
     // statement most of them agree on (by elaborated signature) is chosen —
     // independent samples rarely make the same translation mistake.
-    const userPrompt = `Formalize the following math problem as a Lean 4 theorem statement:\n\n${args.problemText}${retryContext}`;
+    const earlier = args.feedback?.trim() ? `\n\nAn earlier formalization of this problem:\n${args.feedback.trim()}\nWrite a statement that does not repeat this.` : "";
+    const userPrompt = `Formalize the following math problem as a Lean 4 theorem statement:\n\n${args.problemText}${earlier}${retryContext}`;
     const candidates = await sampleFormalizations(userPrompt, nCandidates);
     let vote: AutoformalizeResult["vote"] | undefined;
     let formal: FormalizeResponse;
@@ -302,6 +312,36 @@ export async function autoformalize(args: {
   return lastResult!;
 }
 
+/** An earlier statement checked again by the program's layers (1, 6): see `reuse`. */
+async function recheckStatement(st: { theorem_name: string; theorem_type: string }, refuteOn: boolean): Promise<AutoformalizeResult> {
+  const formal: FormalizeResponse = {
+    theorem_name: st.theorem_name,
+    theorem_type: normalizeTheoremType(st.theorem_type),
+    domain: "algebra" as MathDomain,
+    natural_language_restatement: "",
+    numerical_instances: [],
+  };
+  const formal_statement = `theorem ${formal.theorem_name} ${formal.theorem_type} := by sorry`;
+  const l1 = await layerElaborability(formal.theorem_name, formal.theorem_type);
+  const results: ValidationResult[] = [l1.result];
+  let refutation: AutoformalizeResult["refutation"] | undefined;
+  if (l1.result.pass && refuteOn) {
+    const l6 = await layerRefutation(formal);
+    results.push(l6.result);
+    refutation = l6.refutation;
+  }
+  return {
+    theorem_name: formal.theorem_name,
+    theorem_type: formal.theorem_type,
+    domain: formal.domain,
+    formal_statement,
+    formal_signature: l1.signature,
+    validation_results: sortLayers(results),
+    accepted: results.every((r) => r.pass),
+    refutation,
+  };
+}
+
 function envInt(name: string, dflt: number): number {
   const v = Number(process.env[name]);
   return Number.isFinite(v) && v > 0 ? Math.floor(v) : dflt;
@@ -431,10 +471,16 @@ async function layerRefutation(
         result: {
           layer: 6,
           pass: false,
-          detail: lt(
-            `陈述为假：${r.detail}。请检查是否遗漏了前提（正整数、非零、范围）、ℕ 上的截断减法/整除，或量词范围。`,
-            `Statement is false: ${r.detail}. Check for missing hypotheses (positivity, nonzero, ranges), truncated subtraction/division on ℕ, or quantifier ranges.`,
-          ),
+          detail:
+            r.method === "numeric"
+              ? lt(
+                  `陈述为假：${r.detail}。这是满足所有前提的一组数值，结论在这里不成立：检查结论里各个定义（let）是否写对了题目的意思（例如“在外接圆上”是到外心的距离等于半径，不是到三个顶点等距），以及前提是否确定了题中的图形。`,
+                  `Statement is false: ${r.detail}. These values satisfy every hypothesis and the conclusion fails there: check that each definition (let) in the conclusion says what the problem means (e.g. "on the circumcircle" is distance to the circumcentre = the radius, not equidistant from the three vertices), and that the hypotheses fix the problem's figure.`,
+                )
+              : lt(
+                  `陈述为假：${r.detail}。请检查是否遗漏了前提（正整数、非零、范围）、ℕ 上的截断减法/整除，或量词范围。`,
+                  `Statement is false: ${r.detail}. Check for missing hypotheses (positivity, nonzero, ranges), truncated subtraction/division on ℕ, or quantifier ranges.`,
+                ),
         },
         refutation,
       };

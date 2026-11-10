@@ -170,3 +170,27 @@ describe("autoformalize: counterexample layer", () => {
     expect(verifyLeanSource.mock.calls.some((c) => /plausible/.test(c[1] as string))).toBe(false);
   });
 });
+
+describe("autoformalize: an earlier statement and what was wrong with it", () => {
+  it("re-checks an earlier statement with the program's layers only (no model call)", async () => {
+    leanAnswers();
+    const ok = await autoformalize({ problemText: "p", reuse: { theorem_name: "t", theorem_type: B.theorem_type } });
+    expect(ok.accepted).toBe(true);
+    expect(ok.validation_results.map((v) => v.layer)).toEqual([1, 6]);
+    expect(chatJson).not.toHaveBeenCalled();
+    // the counterexample search now refutes it: not accepted, still no model call
+    const bad = await autoformalize({ problemText: "p", reuse: { theorem_name: "t", theorem_type: A.theorem_type } });
+    expect(bad.accepted).toBe(false);
+    expect(bad.validation_results.find((v) => v.layer === 6)?.pass).toBe(false);
+    expect(chatJson).not.toHaveBeenCalled();
+  });
+
+  it("gives the formalizer the earlier statement's faults", async () => {
+    llmAnswers([B]);
+    leanAnswers();
+    await autoformalize({ problemText: "证明对正整数 n 有 n-1+1=n", maxRetries: 0, feedback: "theorem t (n : ℕ) : n - 1 + 1 = n := by sorry\nIt was rejected: L6" });
+    const first = chatJson.mock.calls.find((c) => c[0].schemaName === "formalizeResponse")![0];
+    expect(first.user).toContain("An earlier formalization of this problem:\ntheorem t (n : ℕ)");
+    expect(first.user).toContain("Write a statement that does not repeat this.");
+  });
+});

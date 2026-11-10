@@ -349,6 +349,10 @@ export interface LeanProofAttempt {
   /** Sketch stage: holes in the sketch and how many were closed. */
   holes?: number;
   holes_solved?: number;
+  /** The statement passed every check (proving was attempted). */
+  statement_accepted?: boolean;
+  /** This attempt proved an earlier attempt's statement again instead of formalizing anew. */
+  reused_statement?: boolean;
 }
 
 // ── Generated Problem ────────────────────────────────────────────────

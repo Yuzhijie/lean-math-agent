@@ -97,6 +97,23 @@ describe("numeric evaluation (refutation checks)", () => {
   });
 });
 
+describe("which part of the conclusion a counterexample breaks", () => {
+  it("names the first false conjunct with both sides, and nothing for a single equation", async () => {
+    const { failingPart } = await import("@/lib/lean/geometry/refute");
+    const t = "x + y = 2 ∧ (x - 1) ^ 2 + y ^ 2 = 4 ∧ x = 1";
+    const env = new Map([["x", 1], ["y", 1]]);
+    expect(failingPart(t, parseTerm(t), env)).toEqual({ text: "(x - 1) ^ 2 + y ^ 2 = 4", index: 2, of: 3, sides: [1, 4] });
+    expect(failingPart("x = 2", parseTerm("x = 2"), env)).toBeUndefined();
+    expect(failingPart("x = 1 ∧ y = 1", parseTerm("x = 1 ∧ y = 1"), env)).toBeUndefined();
+  });
+
+  it("is said in the counterexample's description", async () => {
+    const { describeCounterexample } = await import("@/lib/lean/geometry");
+    const d = describeCounterexample({ values: [["x", 1]], failing: { text: "x = 2", index: 2, of: 3, sides: [1, 2] } });
+    expect(d).toMatch(/x = 1.*(2\/3|part 2 of 3).*x = 2/);
+  });
+});
+
 describe("statements it takes on", () => {
   it("coordinates yes, synthetic geometry no", () => {
     expect(looksGeometric("(E F : ℝ × ℝ) : E ≠ F → √((E.1 - F.1) ^ 2) = 1")).toBe(true);

@@ -164,6 +164,30 @@ export interface Counterexample {
   values: [string, number][];
   /** The conclusion's two sides there, when it is an equation. */
   sides?: [string, number, string, number];
+  /**
+   * The first part of a conjunction that fails there (as Lean prints it after the lets are
+   * unfolded), its place among the parts, and both sides' values when it is a relation: what the
+   * next formalization has to fix ("on the circumcircle" written as "equidistant from A, B, C").
+   */
+  failing?: { text: string; index: number; of: number; sides?: [number, number] };
+}
+
+/** The conjunction's parts, left to right. */
+function conjunctionParts(n: Node): Node[] {
+  const u = unwrap(n);
+  return u.k === "bin" && u.op === "∧" ? [...conjunctionParts(u.a), ...conjunctionParts(u.b)] : [u];
+}
+
+/** The first part of the goal that is false at the point (see Counterexample.failing). */
+export function failingPart(target: string, goal: Node, env: Env): Counterexample["failing"] {
+  const parts = conjunctionParts(goal);
+  if (parts.length < 2) return undefined;
+  const i = parts.findIndex((p) => evalProp(p, env, 1e-4) === false);
+  if (i < 0) return undefined;
+  const p = parts[i];
+  const sides: [number, number] | undefined =
+    p.k === "bin" && ["=", "<", ">", "≤", "≥", "≠"].includes(p.op) ? [evalTerm(p.a, env) ?? NaN, evalTerm(p.b, env) ?? NaN] : undefined;
+  return { text: slice(target, p).replace(/\s+/g, " "), index: i + 1, of: parts.length, ...(sides ? { sides } : {}) };
 }
 
 /** Normalize, then look for a point where every hypothesis holds and the conclusion fails. */
@@ -266,7 +290,8 @@ export async function numericCounterexample(run: TacticRunner): Promise<Countere
       g.k === "bin" && g.op === "="
         ? [slice(st.target, g.a), evalTerm(g.a, env) ?? NaN, slice(st.target, g.b), evalTerm(g.b, env) ?? NaN]
         : undefined;
-    return { values: [...env].sort(), ...(sides ? { sides } : {}) };
+    const failing = failingPart(st.target, goal, env);
+    return { values: [...env].sort(), ...(sides ? { sides } : {}), ...(failing ? { failing } : {}) };
   }
   return undefined;
 }

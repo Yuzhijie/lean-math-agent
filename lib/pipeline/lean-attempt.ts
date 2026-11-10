@@ -60,6 +60,8 @@ export interface LeanAttemptContext {
   sessionId?: string;
   /** Proof budget preset (default PROOF_BUDGET, else "low" for this optional step). */
   budget?: string;
+  /** The stored attempt this one runs again ("再试一次"): its statement is reused or its faults told to the formalizer. */
+  previous?: LeanProofAttempt;
 }
 
 /** An answer as plain text: no `$`, `\\boxed{}`, `\\displaystyle` or surrounding spaces. */
@@ -824,7 +826,36 @@ export async function proveWithoutModel(args: {
   return { tried };
 }
 
+/** `theorem NAME TYPE := by sorry` → its name and type, or undefined. */
+export function parseFormalStatement(stmt: string | undefined): { theorem_name: string; theorem_type: string } | undefined {
+  const m = stmt?.trim().match(/^theorem\s+(\S+)\s+([\s\S]+?)\s*:=\s*by\s+sorry\s*$/);
+  return m ? { theorem_name: m[1], theorem_type: m[2] } : undefined;
+}
+
+/** Whether an earlier attempt's statement passed every check (attempts stored before the flag: by their reason). */
+export function statementWasAccepted(a: LeanProofAttempt | undefined): boolean {
+  if (!a?.attempted) return false;
+  return a.statement_accepted ?? /陈述通过了检查|statement passed the checks/.test(a.failure_reason ?? "");
+}
+
+/** What an earlier formalization got wrong, for the formalizer (autoformalize `feedback`). */
+export function previousAttemptFeedback(prev: LeanProofAttempt, statement: string, recheck?: string): string {
+  const said = (prev.limitations ?? []).join("\n").slice(0, 1200);
+  const what = recheck
+    ? `It no longer passes the program's checks: ${recheck}`
+    : statementWasAccepted(prev)
+      ? `It passed the checks, but neither the program's provers nor the model could prove it. What was tried:\n${said}\nWrite it in the forms the rules recommend (explicit coordinates, the circumcentre or other auxiliary points as lets or an ∃ with their defining equations, polynomial conditions), so the program's provers can read it.`
+      : `It was rejected: ${prev.failure_reason ?? ""}\n${said}`;
+  return `${statement}\n${what}`;
+}
+
 export async function attemptLeanFormalization(problemText: string, ctx: LeanAttemptContext = {}): Promise<LeanProofAttempt> {
+  const mark = { accepted: false, reused: false };
+  const r = await attemptLean(problemText, ctx, mark);
+  return mark.accepted ? { ...r, statement_accepted: true, ...(mark.reused ? { reused_statement: true } : {}) } : r;
+}
+
+async function attemptLean(problemText: string, ctx: LeanAttemptContext, mark: { accepted: boolean; reused: boolean }): Promise<LeanProofAttempt> {
   const sessionId = ctx.sessionId ?? "lean-attempt";
   let formal_statement: string | undefined;
   try {
@@ -834,9 +865,31 @@ export async function attemptLeanFormalization(problemText: string, ctx: LeanAtt
     // non-triviality check finds it built to fit — a figure encoded with 2 triangles for "2").
     const answers = ctx.answers?.length ? ctx.answers : ctx.answer ? [ctx.answer] : [undefined];
     const notes: string[] = [];
-    let formal!: Awaited<ReturnType<typeof autoformalize>>;
-    for (let k = 0; k < answers.length; k++) {
-      formal = await autoformalize({ problemText: problemWithAnswer(problemText, answers[k]) });
+    let formal: Awaited<ReturnType<typeof autoformalize>> | undefined;
+    // "Try again": a statement that passed the checks last time is proved again with the current
+    // code before anything is formalized anew (each new formalization is written differently, and a
+    // good statement was being thrown away) — once: when that fails too, the next attempt formalizes
+    // again, told what was wrong. The program checks it again first (layers 1, 6: they may have become stricter).
+    const prev = ctx.previous;
+    const prevStatement = parseFormalStatement(prev?.formal_statement);
+    let feedback: string | undefined;
+    if (prev && prevStatement && statementWasAccepted(prev) && !prev.reused_statement) {
+      const again = await autoformalize({ problemText, reuse: prevStatement });
+      if (again.accepted) {
+        formal = again;
+        formal_statement = again.formal_statement;
+        mark.reused = true;
+        notes.push(lt("沿用上次通过检查的陈述，用当前代码重新证明（没有重新形式化）", "The statement that passed the checks last time was proved again with the current code (not formalized anew)"));
+      } else {
+        const why = again.validation_results.filter((v) => !v.pass).map((v) => `L${v.layer}: ${v.detail}`).join("\n");
+        feedback = previousAttemptFeedback(prev, prev.formal_statement!, why);
+        notes.push(lt(`上次的陈述没有通过现在的检查，重新形式化（${why.split("\n")[0].slice(0, 160)}）`, `Last time's statement fails the current checks, so the problem was formalized anew (${why.split("\n")[0].slice(0, 160)})`));
+      }
+    } else if (prev && prevStatement) {
+      feedback = previousAttemptFeedback(prev, prev.formal_statement!);
+    }
+    for (let k = 0; !formal?.accepted && k < answers.length; k++) {
+      formal = await autoformalize({ problemText: problemWithAnswer(problemText, answers[k]), feedback });
       formal_statement = formal.formal_statement;
       if (formal.accepted) break;
       const refuted = formal.validation_results.some((v) => !v.pass && (v.layer === 4 || v.layer === 6));
@@ -855,6 +908,7 @@ export async function attemptLeanFormalization(problemText: string, ctx: LeanAtt
       );
     }
 
+    if (!formal) throw new Error("no formalization");
     if (!formal.accepted) {
       const failed = formal.validation_results.filter((v) => !v.pass).map((v) => `L${v.layer}: ${v.detail}`);
       const refuted = formal.validation_results.some((v) => !v.pass && (v.layer === 4 || v.layer === 6));
@@ -873,6 +927,7 @@ export async function attemptLeanFormalization(problemText: string, ctx: LeanAtt
       };
     }
 
+    mark.accepted = true;
     const theoremName = formal.theorem_name;
     const theoremType = formal.theorem_type;
     const expectedSignature = formal.formal_signature;

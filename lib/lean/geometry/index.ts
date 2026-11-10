@@ -3,6 +3,7 @@
  * the statement in REPL tactic mode and drive it step by step. A proof is verified as a whole like
  * any other; a counterexample is checked against the statement evaluated numerically.
  */
+import { lt } from "../../llm/output-locale";
 import { CancelledError } from "../../jobs";
 import type { LeanVerifyResult } from "../sandbox";
 import { openRunner, scriptSource } from "../tactic-runner";
@@ -98,5 +99,12 @@ export async function geometryRefute(args: { theoremName: string; theoremType: s
 export function describeCounterexample(c: Counterexample): string {
   const fmt = (x: number) => (Math.abs(x) >= 1e4 || (Math.abs(x) < 1e-3 && x !== 0) ? x.toExponential(4) : Number(x.toPrecision(6)).toString());
   const vals = c.values.map(([k, v]) => `${k} = ${fmt(v)}`).join(", ");
-  return c.sides ? `${vals}: ${c.sides[0]} = ${fmt(c.sides[1])}, ${c.sides[2]} = ${fmt(c.sides[3])}` : vals;
+  if (c.sides) return `${vals}: ${c.sides[0]} = ${fmt(c.sides[1])}, ${c.sides[2]} = ${fmt(c.sides[3])}`;
+  if (c.failing) {
+    const f = c.failing;
+    const text = f.text.length > 160 ? `${f.text.slice(0, 157)}…` : f.text;
+    const sides = f.sides ? lt(`（左边 ${fmt(f.sides[0])}，右边 ${fmt(f.sides[1])}）`, ` (left ${fmt(f.sides[0])}, right ${fmt(f.sides[1])})`) : "";
+    return `${vals}${lt(`；结论的第 ${f.index}/${f.of} 部分在这里不成立：`, `; part ${f.index} of ${f.of} of the conclusion fails there: `)}${text}${sides}`;
+  }
+  return vals;
 }

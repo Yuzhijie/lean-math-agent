@@ -35,7 +35,7 @@ async function handlePOST(req: Request) {
         solution: session.nl_solution,
         sessionId: session.id,
         // "Try again" after a failure searches harder than the first attempt.
-        ...(session.lean_proof_attempt?.attempted ? { budget: "normal" } : {}),
+        ...(session.lean_proof_attempt?.attempted ? { budget: "normal", previous: session.lean_proof_attempt } : {}),
       });
     } catch (e) {
       updateSession(session.id, { pipeline_stage: "complete" });
