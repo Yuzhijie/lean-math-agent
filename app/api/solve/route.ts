@@ -24,6 +24,7 @@ import { answerCandidates, attemptLeanFormalization, manualLeanAttempt, shouldAu
 import { lt, withRequestLocale } from "@/lib/llm/output-locale";
 import { requestOwner } from "@/lib/bank/http";
 import { describeProblemFigures, figureRefsSchema, figureTextOf, problemWithFigure, type FigureRef } from "@/lib/bank/problem-figures";
+import { withRequestEvalMode } from "@/lib/eval-mode";
 
 interface SolveRequest {
   problem_text?: string;
@@ -77,7 +78,8 @@ async function handlePOST(req: Request) {
 
   // A job like the streaming route's: queued behind running solves, cancelled when the client goes away.
   try {
-    return await runJob({ owner, kind: "solve", sessionId: sess.id, signal: req.signal, maxActive: admit.concurrent, timeLimitMs: solveTimeLimitMs() }, () => solveIn(sess));
+    // An evaluation run (header x-eval-run; `npm run e2e`) leaves the proof memory and learned rules as they are.
+    return await withRequestEvalMode(req, () => runJob({ owner, kind: "solve", sessionId: sess.id, signal: req.signal, maxActive: admit.concurrent, timeLimitMs: solveTimeLimitMs() }, () => solveIn(sess)));
   } catch (e) {
     if (e instanceof TooManyJobsError) return NextResponse.json({ error: e.message, session_id: sess.id }, { status: 429 });
     if (e instanceof TimeLimitError) {

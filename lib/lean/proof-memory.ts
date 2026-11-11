@@ -19,6 +19,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { Bm25Index, leanTokens, weightedQuery } from "../search/bm25";
+import { evalMode } from "../eval-mode";
 
 export interface ProofMemoryEntry {
   id: string;
@@ -114,7 +115,8 @@ export interface RememberArgs {
  * when memory is disabled or the script is empty.
  */
 export async function rememberProof(args: RememberArgs): Promise<ProofMemoryEntry | undefined> {
-  if (!proofMemoryEnabled()) return undefined;
+  // an evaluation run reads the memory but never adds to it (lib/eval-mode.ts)
+  if (!proofMemoryEnabled() || evalMode()) return undefined;
   const entries = await load();
   const entry = upsert(entries, args);
   if (!entry) return undefined;
@@ -125,7 +127,7 @@ export async function rememberProof(args: RememberArgs): Promise<ProofMemoryEntr
 
 /** Store many verified proofs with one write; returns how many were new and how many replaced an older proof. */
 export async function rememberProofs(list: RememberArgs[]): Promise<{ added: number; updated: number; skipped: number }> {
-  if (!proofMemoryEnabled()) return { added: 0, updated: 0, skipped: list.length };
+  if (!proofMemoryEnabled() || evalMode()) return { added: 0, updated: 0, skipped: list.length };
   const entries = await load();
   let added = 0;
   let updated = 0;
@@ -217,7 +219,7 @@ export async function recallScored(args: RecallArgs & { touch?: boolean; among?:
     ...(args.problemText ? [{ text: args.problemText, weight: 0.5 }] : []),
   ]);
   const hits = index.search(query, args.k ?? 3).filter((h) => h.score > 0);
-  if (args.touch !== false && !args.among) {
+  if (args.touch !== false && !args.among && !evalMode()) {
     const now = new Date().toISOString();
     for (const h of hits) {
       h.item.uses += 1;
@@ -230,6 +232,7 @@ export async function recallScored(args: RecallArgs & { touch?: boolean; among?:
 
 /** Count a replay that proved another theorem with this entry's proof. */
 export async function noteReplayHit(id: string): Promise<void> {
+  if (evalMode()) return;
   const entries = await load();
   const e = entries.find((x) => x.id === id);
   if (!e) return;
@@ -261,7 +264,7 @@ export function proofRepairsPath(): string {
 
 /** Append a repair pair (best effort; one JSON line per pair). */
 export async function rememberRepair(pair: Omit<RepairPair, "created_at">): Promise<boolean> {
-  if (!proofMemoryEnabled()) return false;
+  if (!proofMemoryEnabled() || evalMode()) return false;
   if (!pair.failed_tactics.trim() || !pair.fixed_tactics.trim() || /\b(sorry|admit)\b/.test(pair.fixed_tactics)) return false;
   try {
     const p = proofRepairsPath();

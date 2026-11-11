@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { isInaccessible, parseGoal, type GoalState, type Hyp } from "../geometry/goal";
+import { evalMode } from "../../eval-mode";
 
 export interface LearnedRule {
   id: string;
@@ -227,6 +228,8 @@ export function canonicalGoal(g: { hyps: Hyp[]; target: string }): string {
 
 /** Store a proof of a goal as a rule; false when it is not worth keeping or already known. */
 export function addLearned(args: { goal: string; tactics: string; source: string; strategy?: string; theorem?: string; opens?: string[] }): boolean {
+  // an evaluation run uses the learned rules but adds none (lib/eval-mode.ts)
+  if (evalMode()) return false;
   const st = parseGoal(args.goal);
   const tactics = args.tactics.trim();
   if (!st || !tactics || tactics.length > MAX_TACTICS || /\bsorry\b|\badmit\b|#eval|\baxiom\b|\bunsafe\b/.test(tactics)) return false;
@@ -247,7 +250,7 @@ export function addLearned(args: { goal: string; tactics: string; source: string
 
 /** Count replays (called by the search after it tried learned tactics). */
 export function noteLearnedUse(counts: Map<string, { tried: number; hits: number }>): void {
-  if (!counts.size) return;
+  if (!counts.size || evalMode()) return;
   try {
     const rules = readLearned().map((r) => {
       const c = counts.get(r.id);

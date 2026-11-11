@@ -5,6 +5,7 @@ import { withUsageScope } from "@/lib/llm/usage-tracker";
 import { answerCandidates, attemptLeanFormalization, leanAttemptRetryable } from "@/lib/pipeline/lean-attempt";
 import { lt } from "@/lib/llm/output-locale";
 import { modelRoute } from "@/lib/model-route";
+import { withRequestEvalMode } from "@/lib/eval-mode";
 
 /**
  * The last solving step, started by hand: Lean 4 formalization of a solved
@@ -25,7 +26,8 @@ async function handlePOST(req: Request) {
   if (!leanAttemptRetryable(session.lean_proof_attempt)) {
     return NextResponse.json({ lean_proof_attempt: session.lean_proof_attempt });
   }
-  return withUsageScope(async (metrics) => {
+  // An evaluation run (header x-eval-run) leaves the proof memory and learned rules as they are.
+  return withRequestEvalMode(req, () => withUsageScope(async (metrics) => {
     // A page reopened meanwhile sees this stage and waits for the result (the request goes on without its client).
     updateSession(session.id, { pipeline_stage: "lean_attempting" });
     let attempt;
@@ -43,7 +45,7 @@ async function handlePOST(req: Request) {
     }
     updateSession(session.id, { lean_proof_attempt: attempt, pipeline_stage: "complete" });
     return NextResponse.json({ lean_proof_attempt: attempt, metrics: metrics() });
-  });
+  }));
 }
 
 // Signed-in caller, spend limit and rate limit checked; model calls charged to the caller (lib/model-route.ts).
