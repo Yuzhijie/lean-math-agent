@@ -108,6 +108,29 @@ describe("attemptLeanFormalization", () => {
     expect(m.proveWholeTheorem).not.toHaveBeenCalled();
   });
 
+  it("says what a proved statement does not cover: a figure the model read, a computation on numbers worked out while solving", async () => {
+    m.hammerTheorem.mockResolvedValue({ tactic: "norm_num", attempts: [], durationMs: 5 });
+    // a computation the problem itself asks for: nothing to add
+    const plain = await attemptLeanFormalization("求 2^2024+1 与 2^3036-1 的最大公因数。", { answer: "1" });
+    expect(plain.success).toBe(true);
+    expect(plain.limitations).toBeUndefined();
+    // the focus (5, 0) and the asymptote 4x − 3y = 0 were worked out before Lean saw anything
+    const type = ": |4 * (5 : ℝ) - 3 * (0 : ℝ)| / Real.sqrt ((4 : ℝ)^2 + (-3 : ℝ)^2) = 4";
+    m.autoformalize.mockResolvedValue({ ...GCD, theorem_name: "focus_distance", theorem_type: type, formal_statement: `theorem focus_distance ${type} := by sorry` });
+    const hollow = await attemptLeanFormalization("求双曲线 $\\dfrac{x^2}{9}-\\dfrac{y^2}{16}=1$ 的右焦点到它的一条渐近线的距离。", { answer: "4" });
+    expect(hollow.success).toBe(true);
+    expect(hollow.limitations?.join(" ")).toMatch(/不含未知量的算式.*5、3|closed computation.*5, 3/);
+    // a figure: the statement holds the model's reading of it
+    const fig = await attemptLeanFormalization("How many vegetables were not used?\n\n【题目图形（由模型从图中读取）】\n12 vegetables in a row", { answer: "5" });
+    expect(fig.limitations?.join(" ")).toMatch(/带图|came with a figure/);
+    // a failed attempt carries its own account only
+    m.hammerTheorem.mockResolvedValue(undefined);
+    m.proveWholeTheorem.mockResolvedValue({ ok: false, attempts: [], rounds: 1 });
+    const failed = await attemptLeanFormalization("How many?\n\n【题目图形（由模型从图中读取）】\n12 vegetables", { answer: "5" });
+    expect(failed.success).toBe(false);
+    expect((failed.limitations ?? []).join(" ")).not.toMatch(/带图|came with a figure/);
+  });
+
   it("writes the order proof itself for \"smallest n with m ∣ 2^n - 1\", before any model call", async () => {
     const type = ": (3 ^ 4 * 5 ^ 2 * 127 : ℕ) ∣ (2 ^ 3780 - 1) ∧ ∀ n : ℕ, 0 < n → (3 ^ 4 * 5 ^ 2 * 127 : ℕ) ∣ (2 ^ n - 1) → 3780 ≤ n";
     m.autoformalize.mockResolvedValue({ ...GCD, theorem_name: "smallest_n", theorem_type: type, formal_statement: `theorem smallest_n ${type} := by sorry` });

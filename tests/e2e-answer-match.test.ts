@@ -73,7 +73,36 @@ describe("matchAnswer", () => {
   it("a single value against a list of solutions is wrong; against a remark it is not", () => {
     expect(matchAnswer(one(3), "3, 5")).toBe(false);
     expect(matchAnswer(one(4), "$n=4$ 或 $n=10$")).toBe(false);
-    expect(matchAnswer(one(5), "当 $x=3$ 时取最小值 5")).toBeUndefined();
+    expect(matchAnswer(one(5), "当 $x=3$ 时取最小值 5")).toBe(true);
+  });
+
+  it("the boxed part is the answer (the three forms the first real run could not compare)", () => {
+    expect(matchAnswer(one(1470), "$$\\boxed{n=1470}$$")).toBe(true);
+    expect(matchAnswer(one(19), "共有 \\(\\boxed{19}\\) 种不同的选法。")).toBe(true);
+    expect(matchAnswer({ answer: "√5", value: Math.sqrt(5) }, "三角形 $ABC$ 的内切圆半径为 $$\\boxed{\\sqrt{5}}.$$")).toBe(true);
+    expect(matchAnswer(one(19), "\\boxed{19\\text{ 种}}")).toBe(true);
+    expect(matchAnswer(one(18), "共有 \\(\\boxed{19}\\) 种不同的选法。")).toBe(false);
+    // two boxed values under one name are two solutions
+    expect(matchAnswer(one(4), "\\boxed{x=4} 或 \\boxed{x=10}")).toBe(false);
+    expect(matchAnswer({ answer: "4, 10", values: [4, 10] }, "$$\\boxed{n=4\\text{ 或 }n=10}$$")).toBe(true);
+  });
+
+  it("a sentence with formulas is read formula by formula", () => {
+    expect(matchAnswer({ answer: "√5", value: Math.sqrt(5) }, "三角形 $ABC$ 的内切圆半径为 $\\sqrt{5}$。")).toBe(true);
+    expect(matchAnswer(one(5), "当 $x=3$ 时，$y$ 取最小值 $5$")).toBe(true);
+    expect(matchAnswer(one(19), "共有 19 种不同的选法（$n=5$）")).toBe(true);
+    expect(matchAnswer(one(36), "面积 $S = 6^2 = 36$ 平方厘米")).toBe(true);
+    expect(matchAnswer(one(7), "答案是 7.")).toBe(true);
+    expect(matchAnswer({ answer: "4, 10", values: [4, 10] }, "所有解为 $n=4$ 和 $n=10$。")).toBe(true);
+  });
+
+  it("says wrong only when every number of the answer was read", () => {
+    // the six values, where their sum was asked for: read, and wrong
+    expect(matchAnswer(one(166), "$n=6,10,15,30,45,60$")).toBe(false);
+    // a part the program cannot evaluate may be the answer: not compared
+    expect(matchAnswer(one(7), "$x + 1$")).toBeUndefined();
+    expect(matchAnswer(one(5), "$x=3$，最小值为 $\\min f$")).toBeUndefined();
+    expect(matchAnswer(one(6), "$x=2$，$y=3$，所以 $xy=6$")).toBeUndefined();
   });
 
   it("a set of values in any order", () => {

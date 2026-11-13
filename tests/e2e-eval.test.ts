@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { parseHeldout, selectProblems, type HeldoutProblem } from "@/lib/e2e/heldout";
-import { needsLeanAttempt, parseRun, rowOf, solved, stopOf, type EvalRow, type RunFile } from "@/lib/e2e/outcome";
+import { needsLeanAttempt, parseRun, rematchAnswers, rowOf, solved, stopOf, type EvalRow, type RunFile } from "@/lib/e2e/outcome";
 import { e2eReport, wilson } from "@/lib/e2e/report";
 import { EVAL_HEADER, evalMode, withEvalMode } from "@/lib/eval-mode";
 import { allProofs, recallProofs, rememberProof, rememberRepair, readRepairs } from "@/lib/lean/proof-memory";
@@ -270,6 +270,35 @@ describe("run files and the report", () => {
     // a run on another version of the set is not compared
     const other = e2eReport([second, { ...first, meta: { ...first.meta, set_hash: "ffffffffffff" } }]);
     expect(other).not.toContain("与上一次");
+  });
+
+  it("compares the stored answers again with the current matcher", () => {
+    const refs = new Map([
+      ["nt-01", { answer: "1470", value: 1470 }],
+      ["co-01", { answer: "19", value: 19 }],
+      ["al-01", { answer: "7", value: 7 }],
+    ]);
+    const run: RunFile = {
+      ...first,
+      rows: [
+        // could not be compared when the run was made: decided now
+        row("nt-01", { split: "dev", answer: "$$\\boxed{n=1470}$$", answer_ok: null }),
+        row("co-01", { split: "dev", answer: "共有 \\(\\boxed{18}\\) 种", answer_ok: null }),
+        // still not decided: the run's verdict stays (it may rest on the product's decimal)
+        row("al-01", { split: "dev", answer: "七", answer_ok: true }),
+        // a stored answer that was cut short, a claim to prove, a problem the set no longer has
+        row("al-02", { answer: "$$\\boxed{12}…", answer_ok: null }),
+        row("al-03", { kind: "prove", answer_ok: null }),
+        row("zz-09", { answer: "5", answer_ok: null }),
+      ],
+    };
+    const again = rematchAnswers(run, refs);
+    expect(again.rematched).toBe(2);
+    expect(again.rows.map((r) => r.answer_ok)).toEqual([true, false, true, null, null, null]);
+    expect(solved(again.rows[0])).toBe(true);
+    expect(e2eReport([again])).toContain("2 题的结论与运行当时不同");
+    // nothing to change: the run is returned as it is
+    expect(rematchAnswers(first, refs)).toBe(first);
   });
 
   it("says what to do when there is no run yet", () => {

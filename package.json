@@ -24,6 +24,7 @@
     "e2e": "tsx scripts/e2e-eval.ts",
     "e2e:report": "tsx scripts/e2e-report.ts",
     "e2e:check": "python3 scripts/heldout_check.py",
+    "formalize:audit": "tsx scripts/formalize-audit.ts",
     "bench:baseline": "tsx scripts/bench-baseline.ts",
     "bench:merge": "tsx scripts/bench-merge.ts",
     "bench:ablation": "tsx scripts/bench-ablation.ts",

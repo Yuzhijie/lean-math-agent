@@ -22,7 +22,7 @@ function braced(s: string, open: number): { body: string; end: number } | undefi
 /** LaTeX / typed maths → a plain expression of numbers, + - * / ^, sqrt( ), pi, parentheses. */
 function normalise(raw: string): string | undefined {
   let s = raw
-    .replace(/\$/g, "")
+    .replace(/\$|\\[()[\]]/g, " ")
     .replace(/\{,\}/g, "")
     .replace(/\\[,;!]/g, " ")
     .replace(/\\(?:left|right|displaystyle|quad|qquad)(?![a-zA-Z])/g, " ")
@@ -34,7 +34,8 @@ function normalise(raw: string): string | undefined {
     .replace(/\\pi(?![a-zA-Z])|π/g, " pi ")
     .replace(/\^\s*\{\s*\\circ\s*\}|\^\s*\\circ|°|\\degree/g, " ")
     .replace(/\\(?:text|mathrm|mathbf|operatorname)\s*\{[^{}]*\}/g, " ");
-  // \boxed{X}
+  // \boxed{X}, \fbox{X}
+  s = s.replace(/\\fbox(?![a-zA-Z])/g, "\\boxed");
   for (let i = s.indexOf("\\boxed"); i >= 0; i = s.indexOf("\\boxed")) {
     const b = braced(s, s.indexOf("{", i));
     if (!b) return undefined;
@@ -211,8 +212,8 @@ export function evalNumber(raw: string): number | undefined {
 
 /** The separate values an answer lists ("4, 10", "n = 4 或 n = 10", "(4, 10)", "\{4, 10\}"). */
 export function answerItems(answer: string): string[] {
-  let s = answer.replace(/\$/g, " ").replace(/\\\{|\\\}/g, " ").replace(/\\(?:left|right)(?![a-zA-Z])/g, "").trim();
-  s = s.replace(/[。．]\s*$/, "");
+  let s = answer.replace(/\$|\\[()[\]]/g, " ").replace(/\\\{|\\\}/g, " ").replace(/\\(?:left|right)(?![a-zA-Z])/g, "").trim();
+  s = s.replace(/[。．.]\s*$/, "");
   const wrapped = /^[([{](.*)[)\]}]$/.exec(s);
   if (wrapped && /[,，、;；]/.test(wrapped[1]) && depthZeroSplit(wrapped[1]).length > 1) s = wrapped[1];
   return depthZeroSplit(s)
@@ -249,6 +250,8 @@ interface Item {
   /** the name before the "=", for telling "n = 4 或 n = 10" (two solutions) from "12，此时 a = 6" (a remark) */
   name: string;
   value: number | undefined;
+  /** it holds a number or a symbol the program could not read as a value ("x + 1", "y 取最小值 5"); plain words do not count */
+  unread: boolean;
 }
 
 /** What one item states: the value after its last "=" / "∈" / "≈", words and remarks in brackets removed. */
@@ -261,7 +264,42 @@ function readItem(item: string): Item {
   const cut = Math.max(bare.lastIndexOf("="), bare.lastIndexOf("≈"), bare.lastIndexOf("\\in") >= 0 ? bare.lastIndexOf("\\in") + 2 : -1, bare.lastIndexOf("\\approx") >= 0 ? bare.lastIndexOf("\\approx") + 6 : -1);
   const tail = (cut >= 0 ? bare.slice(cut + 1) : bare).replace(/^\s*:/, "");
   const first = bare.indexOf("=");
-  return { named: cut >= 0, name: first >= 0 ? bare.slice(0, first).replace(/\s+/g, "") : "", value: evalNumber(tail) };
+  const value = evalNumber(tail);
+  return { named: cut >= 0, name: first >= 0 ? bare.slice(0, first).replace(/\s+/g, "") : "", value, unread: value === undefined && /[0-9A-Za-z\\√π]/.test(bare) };
+}
+
+/** What the answer marks as the answer itself: the contents of every `\boxed{…}` / `\fbox{…}`. */
+function boxedParts(answer: string): string[] {
+  const out: string[] = [];
+  const re = /\\(?:boxed|fbox)\s*\{/g;
+  for (let m = re.exec(answer); m; m = re.exec(answer)) {
+    const b = braced(answer, m.index + m[0].length - 1);
+    if (!b) break;
+    out.push(b.body);
+    re.lastIndex = b.end;
+  }
+  return out;
+}
+
+/**
+ * A sentence with formulas in it ("当 $x=3$ 时，$y$ 取最小值 $5$") cut at the formulas' delimiters, so
+ * that each formula and each stretch of words is read on its own; undefined when the answer has no
+ * delimited formula, or nothing outside them.
+ */
+function sentencePieces(answer: string): string[] | undefined {
+  const re = /\$\$([\s\S]+?)\$\$|\$([^$]+)\$|\\\(([\s\S]+?)\\\)|\\\[([\s\S]+?)\\\]/g;
+  const out: string[] = [];
+  let last = 0;
+  let outside = "";
+  for (let m = re.exec(answer); m; m = re.exec(answer)) {
+    out.push(answer.slice(last, m.index), m[1] ?? m[2] ?? m[3] ?? m[4]);
+    outside += answer.slice(last, m.index);
+    last = m.index + m[0].length;
+  }
+  if (!out.length) return undefined;
+  out.push(answer.slice(last));
+  outside += answer.slice(last);
+  return outside.trim() ? out.filter((x) => x.trim()) : undefined;
 }
 
 function same(got: number, want: number): boolean {
@@ -289,6 +327,11 @@ export interface Reference {
 /**
  * true / false when the program can tell, undefined when it cannot (or the problem has no
  * answer). `decimal` is the product's own decimal value of the answer, when it gave one.
+ *
+ * What is read: the boxed part when the answer has one (`$$\boxed{n=1470}$$`, "共有 \(\boxed{19}\) 种")
+ * — it is the model's own "this is the answer"; otherwise the answer as a list of values, and when
+ * that decides nothing, the sentence cut at its formulas. "Wrong" is only said when every number
+ * in the answer was read: an answer with a part the program cannot evaluate is "not compared".
  */
 export function matchAnswer(ref: Reference, answer: string | undefined, decimal?: string | number): boolean | undefined {
   const want = ref.values ?? (ref.value !== undefined ? [ref.value] : undefined);
@@ -296,21 +339,37 @@ export function matchAnswer(ref: Reference, answer: string | undefined, decimal?
   const dec = typeof decimal === "number" ? decimal : decimal !== undefined && /^\s*-?\d+(?:\.\d+)?(?:e-?\d+)?\s*$/i.test(decimal) ? Number(decimal) : undefined;
   const byDecimal = () => (dec !== undefined && want.length === 1 ? same(dec, want[0]) : undefined);
   if (!answer?.trim()) return byDecimal();
-  const items = answerItems(answer).map(readItem);
+  const boxed = boxedParts(answer);
+  const readings: string[][] = boxed.length ? [boxed.flatMap(answerItems)] : [answerItems(answer)];
+  const pieces = boxed.length ? undefined : sentencePieces(answer);
+  if (pieces) readings.push(pieces.flatMap(answerItems));
+  for (const texts of readings) {
+    const verdict = decide(texts.map(readItem), want);
+    if (verdict !== undefined) return verdict;
+  }
+  return byDecimal();
+}
+
+function decide(all: Item[], want: number[]): boolean | undefined {
+  // plain words between the values ("此时", "共有") say nothing
+  const items = all.filter((x) => x.value !== undefined || x.unread);
+  const complete = items.every((x) => x.value !== undefined);
   if (want.length > 1) {
     // a set of values: every item must be one of them
-    return items.every((x) => x.value !== undefined) ? sameSet(items.map((x) => x.value!), want) : undefined;
+    return complete && items.length ? sameSet(items.map((x) => x.value!), want) : undefined;
   }
+  /** "wrong" needs every part of the answer read: the part that was not may be the answer */
+  const verdict = (ok: boolean) => (ok ? true : complete ? false : undefined);
   // one value: the item that states it bare ("12" in "12，此时 a = 6"), else the one that names it ("x = 4")
   const bare = items.filter((x) => !x.named && x.value !== undefined);
-  if (bare.length === 1) return same(bare[0].value!, want[0]);
-  if (bare.length > 1) return bare.every((x) => same(x.value!, want[0])) ? true : false;
+  if (bare.length === 1) return verdict(same(bare[0].value!, want[0]));
+  if (bare.length > 1) return verdict(bare.every((x) => same(x.value!, want[0])));
   const named = items.filter((x) => x.named && x.value !== undefined);
-  if (named.length === 1) return same(named[0].value!, want[0]);
+  if (named.length === 1) return verdict(same(named[0].value!, want[0]));
   if (named.length > 1) {
     if (named.every((x) => same(x.value!, want[0]))) return true;
     // several values under one name are several solutions (wrong); under different names, one of them may be a remark
-    if (new Set(named.map((x) => x.name)).size === 1) return false;
+    if (new Set(named.map((x) => x.name)).size === 1) return verdict(false);
   }
-  return byDecimal();
+  return undefined;
 }

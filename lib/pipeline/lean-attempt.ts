@@ -24,6 +24,7 @@ import { autoProof } from "../lean/auto";
 import { assembleLeanSource } from "../lean/assemble";
 import { hammerTheorem } from "../lean/hammer";
 import { checkLeanAvailable, verifyLeanSource, type LeanVerifyResult } from "../lean/sandbox";
+import { scopeNotes, statementScope } from "../lean/statement-scope";
 import { tryTrivialProof } from "../lean/trivial-proof";
 import { CancelledError } from "../jobs";
 import { CostCapError } from "../llm/client";
@@ -852,7 +853,20 @@ export function previousAttemptFeedback(prev: LeanProofAttempt, statement: strin
 export async function attemptLeanFormalization(problemText: string, ctx: LeanAttemptContext = {}): Promise<LeanProofAttempt> {
   const mark = { accepted: false, reused: false };
   const r = await attemptLean(problemText, ctx, mark);
-  return mark.accepted ? { ...r, statement_accepted: true, ...(mark.reused ? { reused_statement: true } : {}) } : r;
+  const out = mark.accepted ? { ...r, statement_accepted: true, ...(mark.reused ? { reused_statement: true } : {}) } : r;
+  return out.success ? withScopeNotes(out, problemText, ctx) : out;
+}
+
+/**
+ * A proved statement with what its proof does not cover (lib/lean/statement-scope.ts): a figure
+ * the model read, or a closed computation on numbers worked out while solving. Shown under
+ * "Lean 已证" — of 62 proofs read in the formalization audit, 12 were of such statements.
+ */
+export function withScopeNotes(attempt: LeanProofAttempt, problemText: string, ctx: Pick<LeanAttemptContext, "answer" | "answers"> = {}): LeanProofAttempt {
+  if (!attempt.success || !attempt.formal_statement) return attempt;
+  const answers = [ctx.answer, ...(ctx.answers ?? [])].filter((a): a is string => !!a);
+  const notes = scopeNotes(statementScope(problemText, attempt.formal_statement, answers));
+  return notes.length ? { ...attempt, limitations: [...(attempt.limitations ?? []), ...notes] } : attempt;
 }
 
 async function attemptLean(problemText: string, ctx: LeanAttemptContext, mark: { accepted: boolean; reused: boolean }): Promise<LeanProofAttempt> {

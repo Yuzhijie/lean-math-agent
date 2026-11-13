@@ -1,12 +1,13 @@
 /**
- * `npm run e2e:report [-- file.jsonl …] [--dir bench/results] [--out bench/E2E.md]` — the report
- * of the end-to-end runs (lib/e2e/report.ts) from their result files; no model calls.
+ * `npm run e2e:report [-- file.jsonl …] [--dir bench/results] [--out bench/E2E.md] [--set bench/heldout.json]`
+ * — the report of the end-to-end runs (lib/e2e/report.ts) from their result files; no model calls.
+ * The stored answers are compared again with the current matcher (runs on the set as it is now).
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { parseRun, type RunFile } from "../lib/e2e/outcome";
 import { e2eReport } from "../lib/e2e/report";
-import { readRuns } from "./e2e-eval";
+import { readRuns, rematched } from "./e2e-eval";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -21,5 +22,5 @@ const runs: RunFile[] = files.length
     })
   : readRuns(arg("dir") ?? path.join("bench", "results"));
 const out = arg("out") ?? path.join("bench", "E2E.md");
-writeFileSync(out, e2eReport(runs, { now: new Date() }));
+writeFileSync(out, e2eReport(rematched(runs, arg("set") ?? path.join("bench", "heldout.json")), { now: new Date() }));
 console.log(`${runs.length} run(s) → ${out}`);

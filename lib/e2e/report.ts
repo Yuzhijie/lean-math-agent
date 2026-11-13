@@ -112,7 +112,7 @@ export function e2eReport(runs: RunFile[], opts: { now?: Date } = {}): string {
     "- **端到端解决** = Lean 证明通过，且（求值题）答案与参考答案一致。这是主指标。",
     "- 留出部分（test）只报总数，不列题目；逐题情况只列开发部分（dev）。不要针对 test 里的某一道题改程序。",
     "- 评测运行不写入证明记忆和学到的规则，所以重复运行不会因为“记住了上次的证明”而变好。",
-    "- 陈述是否忠实于原题由产品自己的检查层判断，这里没有另外核对；“证了但答案错”是唯一能自动发现的不忠实信号。",
+    "- 陈述是否忠实于原题，这里只有一个自动信号：“证了但答案错”。dev 部分的陈述另由人逐条读过（忠实 / 空心 / 有偏差），结论在 `bench/FORMALIZATION-AUDIT.md`（`npm run formalize:audit`）；test 部分的陈述按留出纪律不读。",
     "",
   );
   if (!sorted.length) {
@@ -168,6 +168,7 @@ export function e2eReport(runs: RunFile[], opts: { now?: Date } = {}): string {
   const bySplit = ["test", "dev"].filter((s) => rows.some((r) => r.split === s));
   out.push(...table(FUNNEL_HEAD, [...bySplit.map((s) => funnelRow(s === "test" ? "留出（test）" : "开发（dev）", rows.filter((r) => r.split === s))), ...(bySplit.length > 1 ? [funnelRow("合计", rows)] : [])]), "");
   if (t.answerUnknown) out.push(`求值题里有 ${t.answerUnknown} 题的答案没能自动比对（写法无法求值），不计入“答案正确”。`, "");
+  if (run.rematched) out.push(`答案已按现在的比较程序重新比对过：${run.rematched} 题的结论与运行当时不同（当时的比较程序读不了那种写法，例如 \`$$\\boxed{n=1470}$$\`）。`, "");
 
   // ── by topic
   const topics = [...new Set(rows.map((r) => r.topic))];

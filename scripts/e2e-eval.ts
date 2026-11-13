@@ -41,7 +41,7 @@ import http from "node:http";
 import https from "node:https";
 import path from "node:path";
 import { loadHeldout, selectProblems, type HeldoutProblem } from "../lib/e2e/heldout";
-import { needsLeanAttempt, parseRun, rowOf, solved, stopOf, type Capture, type EvalRow, type RunFile, type RunMeta } from "../lib/e2e/outcome";
+import { needsLeanAttempt, parseRun, rematchAnswers, rowOf, solved, stopOf, type Capture, type EvalRow, type RunFile, type RunMeta } from "../lib/e2e/outcome";
 import { e2eReport } from "../lib/e2e/report";
 import { EVAL_HEADER } from "../lib/eval-mode";
 
@@ -168,6 +168,19 @@ export function readRuns(dir: string): RunFile[] {
       const r = parseRun(path.join(dir, f), readFileSync(path.join(dir, f), "utf8"));
       return r ? [r] : [];
     });
+}
+
+/** The runs made on the set as it is now, with their stored answers compared again by the current matcher. */
+export function rematched(runs: RunFile[], setFile: string): RunFile[] {
+  if (!existsSync(setFile)) return runs;
+  let set: ReturnType<typeof loadHeldout>;
+  try {
+    set = loadHeldout(setFile);
+  } catch {
+    return runs;
+  }
+  const refs = new Map(set.problems.map((p) => [p.id, p]));
+  return runs.map((r) => (r.meta.set_hash === set.hash ? rematchAnswers(r, refs) : r));
 }
 
 async function main() {
@@ -297,7 +310,7 @@ async function main() {
   if (notRun) console.log(`${notRun} problem(s) not run${stopped ? ` — ${stopped}` : ""}. Continue with: npm run e2e -- --resume ${file}${stopped ? " --max-cost <more>" : ""}`);
   if (!flag("no-report")) {
     const out = arg("report") ?? path.join("bench", "E2E.md");
-    writeFileSync(out, e2eReport(readRuns(path.dirname(file)), { now: new Date() }));
+    writeFileSync(out, e2eReport(rematched(readRuns(path.dirname(file)), setFile), { now: new Date() }));
     console.log(`Report: ${out}`);
   }
 }

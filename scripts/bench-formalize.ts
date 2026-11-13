@@ -7,11 +7,13 @@
  * validation layers) and the result is compared with the official Lean statement:
  *   - same:        both elaborate to the same signature (bound variables renamed)
  *   - equivalent:  the hammer proves `official ↔ ours`
- *   - not shown:   neither — unfaithful, or faithful in a form the hammer cannot connect
+ *   - not shown:   neither — unfaithful, or faithful in a form the hammer cannot connect; these are read
+ *                  by a person (`npm run formalize:audit`: of the first run's 19, 16 read as faithful)
  *   - refuted:     our statement has a counterexample (miniF2F statements are true, so it is wrong)
  * plus how often the validation layers rejected the formalization, per layer, and the cost.
  *
  *   npm run bench:formalize -- [--sample 40] [--file bench/minif2f-test.json] [--concurrency 2] [--max-cost 3]
+ *   npm run bench:formalize -- --render bench/results/<time>-formalize.json   (the report again from a result file; free)
  *
  * Needs the LLM key and the Lean sandbox, like `npm run bench`. Spends real money (several model calls
  * per problem: formalization, back-translation, relevance check).
@@ -79,22 +81,23 @@ export function renderFormalization(rows: FormalizeRow[], meta: { file: string; 
     "| --- | --- | --- |",
     `| Same statement (signature) | ${count("same")} | ${pct(count("same"), n)} |`,
     `| Equivalent (hammer proved official ↔ ours) | ${count("equivalent")} | ${pct(count("equivalent"), n)} |`,
-    `| **Faithful (same or equivalent)** | **${faithful}** | **${pct(faithful, n)}** |`,
+    `| **Shown faithful by the program (same or equivalent)** | **${faithful}** | **${pct(faithful, n)}** |`,
     `| Not shown equivalent | ${count("not_shown")} | ${pct(count("not_shown"), n)} |`,
     `| Refuted (our statement is false) | ${count("refuted")} | ${pct(count("refuted"), n)} |`,
     `| No statement produced | ${count("not_formalized")} | ${pct(count("not_formalized"), n)} |`,
     "",
     `- Accepted by the validation layers: ${accepted.length}/${n} (${pct(accepted.length, n)}); of those, ${acceptedFaithful} shown faithful (${pct(acceptedFaithful, accepted.length)}).`,
     `- Rejected although shown faithful: ${rejectedFaithful} — the layers are too strict there.`,
-    `- Accepted but not shown faithful: ${accepted.length - acceptedFaithful} — review these first (table below).`,
+    `- Accepted, equivalence not shown: ${accepted.length - acceptedFaithful} — to be read (table below).`,
     `- Failed layers on the final attempt: ${[...layerFails].sort((a, b) => b[1] - a[1]).map(([l, k]) => `${l} ${LAYER_NAMES[l] ?? ""} ${k}`).join(", ") || "none"}.`,
     `- Cost ${`$${cost.toFixed(2)}`}, ${n ? `$${(cost / n).toFixed(3)}` : "—"} per problem.`,
     rows.length > n ? `- ${rows.length - n} official statement(s) did not elaborate and are left out.` : "",
+    "- “Not shown equivalent” is not “unfaithful”: the hammer does not connect statements that differ in form or generality (ℝ where the official statement has ℕ, `IsLeast` where it has a bound), and an official statement can differ from the informal text. Such statements have to be read: `npm run formalize:audit` joins this run with the reading verdicts in bench/formalization-labels.json and lists the statements nobody has read yet (bench/FORMALIZATION-AUDIT.md).",
     "",
   ].filter((l) => l !== "");
   const review = judged.filter((r) => r.accepted && r.verdict !== "same" && r.verdict !== "equivalent");
   if (review.length) {
-    out.push("", "## Accepted but not shown faithful", "", "| Theorem | Verdict | Official | Ours |", "| --- | --- | --- | --- |");
+    out.push("", "## Accepted, equivalence not shown", "", "| Theorem | Verdict | Official | Ours |", "| --- | --- | --- | --- |");
     const cell = (s?: string) => (s ?? "").replace(/\|/g, "\\|").replace(/\n/g, " ").slice(0, 160);
     for (const r of review) out.push(`| ${r.id} | ${r.verdict} | \`${cell(r.official)}\` | \`${cell(r.ours)}\` |`);
   }
@@ -132,6 +135,14 @@ async function main(): Promise<void> {
     } catch {
       /* absent */
     }
+  }
+  // the report again from a stored run: no model, no Lean
+  const render = arg("render");
+  if (render) {
+    const run = JSON.parse(await fs.readFile(render, "utf8")) as { started_at: string; file: string; commit?: string; rows: FormalizeRow[] };
+    await fs.writeFile("bench/FORMALIZATION.md", renderFormalization(run.rows, { file: run.file, commit: run.commit, started_at: run.started_at }));
+    console.log(`report  → bench/FORMALIZATION.md (${run.rows.length} rows of ${render})`);
+    return;
   }
   const file = arg("file") ?? "bench/minif2f-test.json";
   if (!existsSync(file)) {

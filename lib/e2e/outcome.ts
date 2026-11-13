@@ -8,7 +8,7 @@
  * answer; a proof next to a wrong answer is counted apart — it means the statement that was
  * proved is not the problem.
  */
-import { matchAnswer } from "./answer-match";
+import { matchAnswer, type Reference } from "./answer-match";
 import type { HeldoutProblem } from "./heldout";
 
 /** The strategies the program runs without a model (lib/pipeline/lean-attempt.ts proveWithoutModel). */
@@ -178,6 +178,8 @@ export interface RunFile {
   rows: EvalRow[];
   /** total wall time, when the run reached its end */
   ended?: { at: string; wall_ms: number; stopped?: string };
+  /** rows whose answer verdict changed when the answers were compared again (rematchAnswers) */
+  rematched?: number;
 }
 
 /** Read a run (JSON lines: the run record, the rows as they finished, the end record). A later row of the same id replaces the earlier one. */
@@ -198,4 +200,24 @@ export function parseRun(file: string, text: string): RunFile | undefined {
     else if (typeof rec.id === "string") rows.set(rec.id, rec as unknown as EvalRow);
   }
   return meta ? { file, meta, rows: [...rows.values()], ended } : undefined;
+}
+
+/**
+ * The answers of a stored run compared again with the matcher as it is now (a run file keeps the
+ * product's answer, so a form the matcher could not read when the run was made — `$$\boxed{n=1470}$$`
+ * — is not stuck as "not compared"). A row changes only when the matcher now decides; one it still
+ * cannot decide keeps the run's verdict (which may rest on the product's decimal value, not stored),
+ * and so does a row whose stored answer was cut short.
+ */
+export function rematchAnswers(run: RunFile, refs: ReadonlyMap<string, Reference>): RunFile {
+  let changed = 0;
+  const rows = run.rows.map((r) => {
+    const ref = refs.get(r.id);
+    if (!ref || r.status !== "done" || r.kind !== "find" || !r.answer || r.answer.endsWith("…")) return r;
+    const now = matchAnswer(ref, r.answer);
+    if (now === undefined || now === r.answer_ok) return r;
+    changed++;
+    return { ...r, answer_ok: now };
+  });
+  return changed ? { ...run, rows, rematched: changed } : run;
 }

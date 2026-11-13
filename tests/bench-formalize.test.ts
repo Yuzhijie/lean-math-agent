@@ -20,7 +20,11 @@ describe("formalization report", () => {
       [row("a", "same", true), row("b", "equivalent", false, [3]), row("c", "not_shown", true), row("d", "refuted", false, [6]), row("e", "not_formalized", false, [1, 3]), row("f", "official_broken", true)],
       { file: "minif2f-test.json", commit: "abc1234", started_at: "2026-10-15T00:00:00Z" },
     );
-    expect(md).toContain("| **Faithful (same or equivalent)** | **2** | **40%** |");
+    expect(md).toContain("| **Shown faithful by the program (same or equivalent)** | **2** | **40%** |");
+    // a statement the hammer could not connect is not thereby unfaithful: the report sends the reader to the audit
+    expect(md).toContain("“Not shown equivalent” is not “unfaithful”");
+    expect(md).toContain("npm run formalize:audit");
+    expect(md).toContain("## Accepted, equivalence not shown");
     expect(md).toContain("Accepted by the validation layers: 2/5 (40%); of those, 1 shown faithful (50%).");
     expect(md).toContain("Rejected although shown faithful: 1");
     expect(md).toContain("Failed layers on the final attempt: 3 back-translation 2, 6 no counterexample 1, 1 elaborates 1.");
