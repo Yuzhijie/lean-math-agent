@@ -11,12 +11,19 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { LogIn, LogOut, User, Settings } from 'lucide-react';
+import { LogIn, LogOut } from 'lucide-react';
 import { useI18n } from '@/lib/i18n';
 
-export function AuthButton() {
+/**
+ * The account control: who is signed in, and signing out. `signedInOnly` (the product's own pages)
+ * shows nothing until there is a signed-in user — on a machine without sign-in (the local single
+ * user) there is no account to show, and where sign-in is required nobody reaches a page without one.
+ */
+export function AuthButton({ signedInOnly = false }: { signedInOnly?: boolean }) {
   const { tr } = useI18n();
   const { data: session, status } = useSession();
+
+  if (signedInOnly && !session) return null;
 
   if (status === 'loading') {
     return (
@@ -39,39 +46,28 @@ export function AuthButton() {
     );
   }
 
+  const who = session.user?.name ?? session.user?.email ?? '';
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" className="relative h-8 w-8 rounded-full">
+        <Button variant="ghost" className="relative h-8 w-8 shrink-0 rounded-full p-0" aria-label={tr('账号', 'Account')}>
           <Avatar className="h-8 w-8">
-            <AvatarImage src={session.user?.image ?? ''} alt={session.user?.name ?? ''} />
-            <AvatarFallback className="bg-amber-600 text-white">
-              {session.user?.name?.[0]?.toUpperCase() ?? 'U'}
+            <AvatarImage src={session.user?.image ?? ''} alt={who} />
+            <AvatarFallback className="bg-primary/20 text-sm font-medium text-primary">
+              {who[0]?.toUpperCase() ?? 'U'}
             </AvatarFallback>
           </Avatar>
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent className="w-56 bg-slate-800 border-slate-700" align="end" forceMount>
+      <DropdownMenuContent className="w-60" align="end">
         <DropdownMenuLabel className="font-normal">
-          <div className="flex flex-col space-y-1">
-            <p className="text-sm font-medium text-white">{session.user?.name ?? tr('用户', 'User')}</p>
-            <p className="text-xs text-slate-400">{session.user?.email}</p>
+          <div className="flex min-w-0 flex-col space-y-1">
+            <p className="truncate text-sm font-medium text-foreground">{session.user?.name ?? tr('用户', 'User')}</p>
+            {session.user?.email && <p className="truncate text-xs text-muted-foreground">{session.user.email}</p>}
           </div>
         </DropdownMenuLabel>
-        <DropdownMenuSeparator className="border-slate-700" />
-        <DropdownMenuItem className="text-slate-300 focus:bg-slate-700 focus:text-white">
-          <User className="mr-2 h-4 w-4" />
-          <span>{tr('个人资料', 'Profile')}</span>
-        </DropdownMenuItem>
-        <DropdownMenuItem className="text-slate-300 focus:bg-slate-700 focus:text-white">
-          <Settings className="mr-2 h-4 w-4" />
-          <span>{tr('设置', 'Settings')}</span>
-        </DropdownMenuItem>
-        <DropdownMenuSeparator className="border-slate-700" />
-        <DropdownMenuItem
-          className="text-red-400 focus:bg-slate-700 focus:text-red-300"
-          onClick={() => signOut({ callbackUrl: '/' })}
-        >
+        <DropdownMenuSeparator />
+        <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => signOut({ callbackUrl: '/' })}>
           <LogOut className="mr-2 h-4 w-4" />
           <span>{tr('退出登录', 'Sign out')}</span>
         </DropdownMenuItem>

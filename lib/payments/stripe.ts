@@ -1,8 +1,12 @@
 /**
  * Stripe payment integration
  * Handles subscriptions, one-time payments, and webhooks
+ *
+ * Frozen (lib/scope.ts "payments", docs/SCOPE.md): off unless THAW names it. The plan limits the
+ * product enforces live in lib/plans.ts; this file adds what is sold on top of them.
  */
 import Stripe from 'stripe';
+import { PLAN_LIMITS, type PlanLimits } from '../plans';
 
 let _stripe: Stripe | null = null;
 
@@ -33,11 +37,7 @@ export interface SubscriptionPlan {
   currency: string;
   interval: 'month' | 'year';
   features: string[];
-  limits: {
-    proofsPerMonth: number;
-    sessionHistory: number;
-    concurrentSolvers: number;
-  };
+  limits: PlanLimits;
 }
 
 export const PLANS: Record<string, SubscriptionPlan> = {
@@ -54,11 +54,7 @@ export const PLANS: Record<string, SubscriptionPlan> = {
       '单线程求解',
       '基础方法推荐',
     ],
-    limits: {
-      proofsPerMonth: 10,
-      sessionHistory: 7,
-      concurrentSolvers: 1,
-    },
+    limits: PLAN_LIMITS.free,
   },
   pro: {
     id: 'pro',
@@ -75,11 +71,7 @@ export const PLANS: Record<string, SubscriptionPlan> = {
       '优先支持',
       '导出为 PDF',
     ],
-    limits: {
-      proofsPerMonth: 500,
-      sessionHistory: -1,
-      concurrentSolvers: 4,
-    },
+    limits: PLAN_LIMITS.pro,
   },
   enterprise: {
     id: 'enterprise',
@@ -96,11 +88,7 @@ export const PLANS: Record<string, SubscriptionPlan> = {
       '专属支持',
       'SLA 保障',
     ],
-    limits: {
-      proofsPerMonth: -1,
-      sessionHistory: -1,
-      concurrentSolvers: -1,
-    },
+    limits: PLAN_LIMITS.enterprise,
   },
 };
 

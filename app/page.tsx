@@ -13,6 +13,7 @@ import { ProblemGenerator, type GenerationSummary, type UsedProblemFigure } from
 import { useBanks } from "./components/BankTemplateControls";
 import { SessionHistory, SessionHistoryList } from "./components/SessionHistory";
 import { LocaleSwitcher } from "./components/LocaleSwitcher";
+import { AuthButton } from "./components/AuthButton";
 import { StepCard } from "./components/StepCard";
 import { StepPane } from "./components/StepPane";
 import { containsMath } from "@/lib/math-segments";
@@ -531,6 +532,7 @@ export default function Home() {
                   <ClipboardCheck className="h-3.5 w-3.5" />
                   <span className="hidden sm:inline">{tr("批改", "Marking")}</span>
                 </Link>
+                <AuthButton signedInOnly />
               </div>
             </div>
           </div>

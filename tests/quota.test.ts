@@ -11,7 +11,7 @@ beforeEach(() => {
   subMock.mockResolvedValue(null);
 });
 afterEach(() => {
-  for (const v of ["RATE_LIMIT_PER_MIN", "QUOTA_DAILY_USD_FREE", "QUOTA_DAILY_USD_PRO", "QUOTA_LOCAL_PLAN", "PROOF_COST_CAP_USD"]) delete process.env[v];
+  for (const v of ["RATE_LIMIT_PER_MIN", "QUOTA_DAILY_USD_FREE", "QUOTA_DAILY_USD_PRO", "QUOTA_LOCAL_PLAN", "QUOTA_DEFAULT_PLAN", "PROOF_COST_CAP_USD"]) delete process.env[v];
 });
 
 describe("quotas", () => {
@@ -37,6 +37,23 @@ describe("quotas", () => {
     expect(await quotaStatus("p1")).toMatchObject({ plan: "pro", monthLimit: 500, concurrent: 4 });
     subMock.mockResolvedValue({ plan: "pro", status: "cancelled" });
     expect((await quotaStatus("p1")).plan).toBe("free");
+  });
+
+  it("without payments, QUOTA_DEFAULT_PLAN is the plan of signed-in users; a subscription still wins", async () => {
+    process.env.RATE_LIMIT_PER_MIN = "0";
+    process.env.QUOTA_DEFAULT_PLAN = "pro";
+    process.env.QUOTA_DAILY_USD_PRO = "2";
+    expect(await quotaStatus("t1")).toMatchObject({ plan: "pro", monthLimit: 500, concurrent: 4, dayLimit: 2, unlimited: false });
+    for (let i = 0; i < 11; i++) expect((await admitSolve("t1")).ok).toBe(true); // past the free plan's 10
+    subMock.mockResolvedValue({ plan: "enterprise", status: "active" });
+    expect(await quotaStatus("t1")).toMatchObject({ plan: "enterprise", monthLimit: -1 });
+    subMock.mockResolvedValue({ plan: "gold", status: "active" }); // a plan that does not exist
+    expect((await quotaStatus("t1")).plan).toBe("pro");
+    subMock.mockResolvedValue(null);
+    process.env.QUOTA_DEFAULT_PLAN = "gold"; // not a plan: free
+    expect(await quotaStatus("t1")).toMatchObject({ plan: "free", monthLimit: 10 });
+    // the local single user is still not limited by it
+    expect((await quotaStatus("local")).unlimited).toBe(true);
   });
 
   it("daily spend limit stops further solves and caps the run", async () => {

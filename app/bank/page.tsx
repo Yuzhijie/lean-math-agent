@@ -8,6 +8,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LocaleSwitcher } from "../components/LocaleSwitcher";
+import { AuthButton } from "../components/AuthButton";
 import { useI18n } from "@/lib/i18n";
 import { api, bankUrl, errMsg, type BankDetail, type BankSummary, type CategoryWithCount, type Item, type ItemFilter } from "../components/bank/api";
 import { BankSettingsDialog, NewBankDialog } from "../components/bank/BankForms";
@@ -168,6 +169,7 @@ export default function BankPage() {
                 <ArrowLeft className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">{tr("返回求解", "Back to solver")}</span>
               </Link>
+              <AuthButton signedInOnly />
             </div>
           </div>
         </div>

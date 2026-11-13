@@ -12,6 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { LocaleSwitcher } from "../components/LocaleSwitcher";
+import { AuthButton } from "../components/AuthButton";
 import { MathText } from "../components/MathText";
 import { ErrorNote, FieldLabel } from "../components/bank/ui";
 import { api, errMsg, paperImageUrl, type Diagnosis, type MeResponse, type MemberDetail, type PaperDetail, type PaperSummary, type ProblemPrefill, type SubmissionDetail, type SubmissionSummary } from "../components/grading/api";
@@ -104,6 +105,7 @@ function Grading() {
                 <ArrowLeft className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">{tr("返回求解", "Back to solver")}</span>
               </Link>
+              <AuthButton signedInOnly />
             </div>
           </div>
         </div>

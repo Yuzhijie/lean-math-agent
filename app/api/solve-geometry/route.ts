@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { solveGeometry, parseGeometryNL, GeometryProblem } from '@/lib/geometry/clingo-solver';
 import { lt } from "@/lib/llm/output-locale";
 import { modelRoute } from "@/lib/model-route";
+import { frozenRoute } from "@/lib/scope";
 
 async function handlePOST(request: NextRequest) {
   try {
@@ -55,4 +56,5 @@ async function handlePOST(request: NextRequest) {
 
 // Server messages and model output follow the UI language (lib/llm/output-locale.ts).
 // Signed-in caller, spend limit and rate limit checked; model calls charged to the caller (lib/model-route.ts).
-export const POST = modelRoute(handlePOST);
+// Frozen (lib/scope.ts, docs/SCOPE.md): 404 unless THAW names "clingo".
+export const POST = frozenRoute("clingo", modelRoute(handlePOST));

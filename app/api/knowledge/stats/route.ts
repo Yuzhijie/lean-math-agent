@@ -3,8 +3,9 @@
  */
 import { NextResponse } from 'next/server';
 import { getStats, seedMathConcepts } from '@/lib/knowledge/neo4j-client';
+import { frozenRoute } from '@/lib/scope';
 
-export async function GET() {
+async function handleGET() {
   try {
     const stats = await getStats();
     return NextResponse.json(stats);
@@ -17,7 +18,7 @@ export async function GET() {
   }
 }
 
-export async function POST() {
+async function handlePOST() {
   try {
     await seedMathConcepts();
     const stats = await getStats();
@@ -30,3 +31,7 @@ export async function POST() {
     );
   }
 }
+
+// Frozen (lib/scope.ts, docs/SCOPE.md): 404 unless THAW names "knowledge".
+export const GET = frozenRoute('knowledge', handleGET);
+export const POST = frozenRoute('knowledge', handlePOST);

@@ -10,6 +10,7 @@
  *   With auth required and no list at all, nobody can sign in (closed by default).
  */
 import { promises as fs } from "node:fs";
+import { thawed } from "./scope";
 
 export class UnauthorizedError extends Error {
   constructor(message = "sign in required") {
@@ -23,6 +24,18 @@ export function authRequired(): boolean {
   if (v === "true" || v === "1") return true;
   if (v === "false" || v === "0") return false;
   return process.env.NODE_ENV === "production";
+}
+
+const PUBLIC_PATHS = [/^\/auth(\/|$)/, /^\/api\/auth(\/|$)/, /^\/api\/health$/];
+const STRIPE_WEBHOOK = /^\/api\/payments\/webhook$/;
+
+/**
+ * Reachable without signing in (proxy.ts): the sign-in pages, NextAuth's own routes, the health
+ * check — and Stripe's webhook only while payments are thawed (lib/scope.ts): a frozen feature
+ * leaves no door open.
+ */
+export function isPublicPath(pathname: string): boolean {
+  return PUBLIC_PATHS.some((re) => re.test(pathname)) || (STRIPE_WEBHOOK.test(pathname) && thawed("payments"));
 }
 
 export function inviteFilePath(): string {

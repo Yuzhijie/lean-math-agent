@@ -1,4 +1,6 @@
 /**
+ * FROZEN (lib/scope.ts "expert-iteration", docs/SCOPE.md): kept, not maintained; runs only with THAW=expert-iteration.
+ *
  * `npm run expert:iterate` — run expert iteration rounds end to end (lib/prover/expert-iteration.ts):
  *
  *   prove → export → train → eval → promote
@@ -56,6 +58,7 @@ import {
 } from "../lib/prover/expert-iteration";
 import { fixStatement } from "./fetch-benchmark";
 import { heldOutStatements } from "./proofs-export";
+import { requireThawed } from "../lib/scope";
 
 /** The proof memory as the file holds it now (the bench child processes write to it). */
 async function allProofs() {
@@ -319,6 +322,8 @@ async function roundOnce(reg: EiRegistry, n: number): Promise<EiRound> {
 }
 
 async function main(): Promise<void> {
+  // frozen (docs/SCOPE.md): runs only with THAW=expert-iteration (the steps it starts inherit it)
+  requireThawed("expert-iteration", "npm run expert:iterate");
   if (TRAIN_FILES.some((f) => path.resolve(f) === path.resolve(EVAL_FILE))) {
     console.error(`${EVAL_FILE} is both a training file and the held-out set`);
     process.exit(2);

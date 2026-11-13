@@ -54,6 +54,12 @@ describe('Stripe Payments', () => {
     expect(PLANS.enterprise.limits.proofsPerMonth).toBe(-1);
   });
 
+  it('takes its limits from lib/plans.ts, where the quota reads them too', async () => {
+    const { PLANS } = await import('../lib/payments/stripe');
+    const { PLAN_LIMITS } = await import('../lib/plans');
+    for (const id of ['free', 'pro', 'enterprise'] as const) expect(PLANS[id].limits).toBe(PLAN_LIMITS[id]);
+  });
+
   it('should create checkout session', async () => {
     mockStripe.checkout.sessions.create.mockResolvedValue({
       url: 'https://checkout.stripe.com/test',

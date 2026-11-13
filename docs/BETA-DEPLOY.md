@@ -12,7 +12,8 @@
 | 费用算不出 | 任何在用模型缺少 `LLM_PRICES` 价格时，服务拒绝启动 |
 | 证明不可用 | 镜像内含 Lean 4、编译好的 Mathlib 和 REPL |
 | 数据库没表 | 容器启动时自动建表（`scripts/migrate.mjs`） |
-| 端口外露 | 只有 nginx 对外（80 跳转 + 443）；应用、计算服务、Neo4j 只在内网 |
+| 端口外露 | 只有 nginx 对外（80 跳转 + 443）；应用和计算服务只在内网 |
+| 没做完的功能露在外面 | 付费、知识图谱、Clingo 几何求解已冻结（`docs/SCOPE.md`）：页面和接口一律 404，Stripe 回调不再对未登录请求开放 |
 | 进度卡住 | nginx 对 `/api/` 关闭缓冲、超时 30 分钟，实时进度和关页面取消都能用 |
 | 数据丢失 | `scripts/backup.sh` 在运行中做一致的快照 |
 
@@ -30,7 +31,7 @@
    mkdir -p certs && sudo cp /etc/letsencrypt/live/math.example.com/{fullchain,privkey}.pem certs/
    ```
 2. **登录应用**：在 GitHub（Settings → Developer settings → OAuth Apps）或 Google Cloud 建 OAuth 应用，回调地址 `https://math.example.com/api/auth/callback/github`（或 `/google`）。
-3. **配置**：`cp .env.production.example .env.production`，填 `NEXTAUTH_URL`、`NEXTAUTH_SECRET`（`openssl rand -base64 32`）、OAuth、`LLM_*`、`LLM_PRICES`、邀请名单和额度。
+3. **配置**：`cp .env.production.example .env.production`，填 `NEXTAUTH_URL`、`NEXTAUTH_SECRET`（`openssl rand -base64 32`）、OAuth、`LLM_*`、`LLM_PRICES`、邀请名单和额度。额度有两项：`QUOTA_DEFAULT_PLAN` 是所有登录用户的套餐（free 每月 10 次求解、一次一道；pro 每月 500 次、同时 4 道；模板里是 pro），`QUOTA_DAILY_USD_<套餐>` 是每人每天的费用上限。付费已冻结，套餐只能在这里设。
 4. **启动**：`docker compose up -d --build`（首次构建 10–20 分钟）。
 5. **检查**：`curl https://math.example.com/api/health` 应返回 `"ok": true`。若服务没起来，`docker compose logs web` 里 `[startup]` 开头的行会写明缺了什么。
 6. **邀请**：名单里的人用对应邮箱的 GitHub/Google 账号登录。随时加人，不用重启：
@@ -50,4 +51,4 @@
 
 ## 还没做（公开上线前要补）
 
-Lean 进程独立容器隔离、多实例（队列和限流在进程内存里）、错误监控（Sentry）、支付全流程实测、CI 里带 Lean 的冒烟测试、隐私政策与条款、计算服务换多线程服务器。
+Lean 进程独立容器隔离、多实例（队列和限流在进程内存里）、错误监控（Sentry）、CI 里带 Lean 的冒烟测试、隐私政策与条款、计算服务换多线程服务器。付费已冻结（`docs/SCOPE.md`）；要收费的话先解冻，再把支付全流程在真实 Stripe 上测一遍。

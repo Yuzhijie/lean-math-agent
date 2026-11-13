@@ -1,4 +1,6 @@
 /**
+ * FROZEN (lib/scope.ts "expert-iteration", docs/SCOPE.md): kept, not maintained; runs only with THAW=expert-iteration.
+ *
  * Expert iteration, the whole loop (plan 7b P3):
  *
  *   1. prove   — the current prover attempts the training theorems no stored proof covers yet;

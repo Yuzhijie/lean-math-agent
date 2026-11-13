@@ -5,8 +5,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { createCheckoutSession, PLANS } from '@/lib/payments/stripe';
+import { frozenRoute } from '@/lib/scope';
 
-export async function POST(request: NextRequest) {
+async function handlePOST(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user) {
@@ -38,3 +39,6 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+// Frozen (lib/scope.ts, docs/SCOPE.md): 404 unless THAW names "payments".
+export const POST = frozenRoute('payments', handlePOST);

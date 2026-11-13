@@ -3,8 +3,9 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { searchNodes } from '@/lib/knowledge/neo4j-client';
+import { frozenRoute } from '@/lib/scope';
 
-export async function POST(request: NextRequest) {
+async function handlePOST(request: NextRequest) {
   try {
     const { query, domain, type, limit } = await request.json();
 
@@ -22,3 +23,6 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+// Frozen (lib/scope.ts, docs/SCOPE.md): 404 unless THAW names "knowledge".
+export const POST = frozenRoute('knowledge', handlePOST);

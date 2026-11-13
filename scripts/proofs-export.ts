@@ -1,4 +1,6 @@
 /**
+ * FROZEN (lib/scope.ts "expert-iteration", docs/SCOPE.md): kept, not maintained; runs only with THAW=expert-iteration.
+ *
  * `npm run proofs:export` — the proof memory and the repair pairs as fine-tuning data
  * (plan 7b P3, expert iteration). Writes to --out (default data/proof-dataset):
  *
@@ -20,6 +22,7 @@ import { allProofs, readRepairs } from "../lib/lean/proof-memory";
 import { isTestSource, repairRecords, sftRecords } from "../lib/prover/dataset";
 import { normaliseStatement, withoutStatements } from "../lib/prover/expert-iteration";
 import { fixStatement } from "./fetch-benchmark";
+import { requireThawed } from "../lib/scope";
 
 /** Normalised statements of the theorems in bench files (as bench.ts runs them: fixStatement applied). */
 export async function heldOutStatements(files: string[]): Promise<Set<string>> {
@@ -53,6 +56,8 @@ async function main(): Promise<void> {
       // optional
     }
   }
+  // frozen (docs/SCOPE.md): the fine-tuning data of expert iteration; runs only with THAW=expert-iteration
+  requireThawed("expert-iteration", "npm run proofs:export");
   const out = path.resolve(arg("out") ?? "data/proof-dataset");
   const evalShare = arg("eval-share") !== undefined ? Number(arg("eval-share")) : 0.05;
   const includeTest = flag("include-test");

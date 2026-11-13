@@ -1,4 +1,6 @@
 /**
+ * FROZEN (lib/scope.ts "expert-iteration", docs/SCOPE.md): kept, not maintained; runs only with THAW=expert-iteration.
+ *
  * `npm run prover:serve` — serve the prover expert iteration promoted (.data/expert-iteration.json)
  * with mlx_lm on 127.0.0.1:<port> (default 8089), the endpoint `--apply` wrote into .env.local
  * (LLM_PROVER_BASE_URL=http://127.0.0.1:8089/v1). Runs in the foreground; Ctrl-C stops it.
@@ -10,6 +12,7 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { mlxServeArgs, readRegistry } from "../lib/prover/expert-iteration";
+import { requireThawed } from "../lib/scope";
 
 for (const f of [".env.local", ".env"]) {
   try {
@@ -22,6 +25,8 @@ for (const f of [".env.local", ".env"]) {
 const i = process.argv.indexOf("--port");
 
 async function main(): Promise<void> {
+  // frozen (docs/SCOPE.md): runs only with THAW=expert-iteration
+  requireThawed("expert-iteration", "npm run prover:serve");
   const reg = await readRegistry();
   // The port expert iteration promoted the model on (and wrote into .env.local), unless given.
   const port = i >= 0 ? Number(process.argv[i + 1]) : (reg.current.port ?? 8089);

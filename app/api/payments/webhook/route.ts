@@ -5,8 +5,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { handleWebhook } from '@/lib/payments/stripe';
 import { prisma } from '@/lib/db';
+import { frozenRoute } from '@/lib/scope';
 
-export async function POST(request: NextRequest) {
+async function handlePOST(request: NextRequest) {
   const payload = await request.text();
   const signature = request.headers.get('stripe-signature')!;
 
@@ -84,3 +85,6 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+// Frozen (lib/scope.ts, docs/SCOPE.md): 404 unless THAW names "payments".
+export const POST = frozenRoute('payments', handlePOST);

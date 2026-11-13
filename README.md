@@ -1,6 +1,8 @@
 # Lean Math Agent
 
-Interactive Lean 4 math problem solver (MVP). Domain: Nat/Int equalities.
+Solving, question generation and marking for students and teachers, with Lean 4 as the checking
+layer. What is in the product and what is frozen (payments, knowledge graph, Clingo geometry
+solver, expert iteration): [docs/SCOPE.md](docs/SCOPE.md).
 
 ## Prerequisites
 

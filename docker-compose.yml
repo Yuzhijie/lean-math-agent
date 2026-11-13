@@ -5,7 +5,8 @@
 #
 # Only nginx has public ports (80 → redirect, 443). The app, the compute server and Neo4j are
 # reachable only on the internal network. State lives on the app-data volume (back it up:
-# scripts/backup.sh). The knowledge graph (Neo4j) is optional: `--profile knowledge`.
+# scripts/backup.sh). The knowledge graph (Neo4j) is frozen (docs/SCOPE.md): its service starts
+# only with `--profile knowledge`, and the app uses it only with THAW=knowledge.
 
 services:
   web:
@@ -62,7 +63,7 @@ services:
       - web
     restart: unless-stopped
 
-  # Optional knowledge graph (set NEO4J_URI=bolt://neo4j:7687 and NEO4J_PASSWORD in .env.production).
+  # Frozen knowledge graph (THAW=knowledge, NEO4J_URI=bolt://neo4j:7687 and NEO4J_PASSWORD in .env.production).
   neo4j:
     image: neo4j:5-community
     profiles: ["knowledge"]

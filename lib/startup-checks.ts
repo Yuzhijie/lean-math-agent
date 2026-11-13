@@ -4,11 +4,14 @@
  *
  * Fatal: no NEXTAUTH_SECRET, no sign-in provider, no LLM key, a configured model without a price
  * in LLM_PRICES (spend could not be measured, so no limit would hold).
- * Warnings: no invite list (nobody can sign in), no daily spend limit for the free plan, a Stripe
- * key without its webhook secret.
+ * Warnings: no invite list (nobody can sign in), no daily spend limit for the plan signed-in
+ * users are on (QUOTA_DEFAULT_PLAN, else free), a name in THAW that is no frozen feature, and —
+ * only while payments are thawed (lib/scope.ts) — a Stripe key without its webhook secret.
  */
 import { authRequired, inviteList } from "./access";
 import { loadConfig } from "./llm/config";
+import { defaultPlan } from "./plans";
+import { readThaw, thawed } from "./scope";
 
 export interface StartupReport {
   fatal: string[];
@@ -40,8 +43,14 @@ export async function startupReport(): Promise<StartupReport> {
   }
   const invites = await inviteList();
   if (invites.emails.size === 0 && invites.domains.size === 0) warn.push("no invite list (INVITE_EMAILS / INVITE_DOMAINS / INVITE_FILE): nobody can sign in");
-  if (!env.QUOTA_DAILY_USD_FREE) warn.push("QUOTA_DAILY_USD_FREE is not set: free-plan users have no daily spend limit");
-  if (env.STRIPE_SECRET_KEY && !env.STRIPE_WEBHOOK_SECRET) warn.push("STRIPE_SECRET_KEY without STRIPE_WEBHOOK_SECRET: paid plans would never activate");
+  const plan = defaultPlan();
+  const daily = `QUOTA_DAILY_USD_${plan.toUpperCase()}`;
+  if (!env[daily]) warn.push(`${daily} is not set: ${plan}-plan users have no daily spend limit`);
+  if (env.QUOTA_DEFAULT_PLAN && env.QUOTA_DEFAULT_PLAN.trim().toLowerCase() !== plan) warn.push(`QUOTA_DEFAULT_PLAN=${env.QUOTA_DEFAULT_PLAN} is not a plan (free, pro, enterprise): signed-in users are on free`);
+  const thaw = readThaw();
+  if (thaw.unknown.length) warn.push(`THAW names no frozen feature: ${thaw.unknown.join(", ")} (lib/scope.ts)`);
+  if (thaw.on.length) warn.push(`frozen features switched on: ${thaw.on.join(", ")} — kept but not maintained (docs/SCOPE.md)`);
+  if (thawed("payments") && env.STRIPE_SECRET_KEY && !env.STRIPE_WEBHOOK_SECRET) warn.push("STRIPE_SECRET_KEY without STRIPE_WEBHOOK_SECRET: paid plans would never activate");
   return { fatal, warn };
 }
 

@@ -2,14 +2,20 @@
 
 This document describes the 7 P3 (Low Priority) features implemented in v0.2.0.
 
+> **Scope (2026-11-13, `docs/SCOPE.md`):** features 11 (payments), 12 (knowledge graph) and 13 (Clingo
+> geometry solver) are **frozen** — kept, but off by default: their pages and API routes answer 404.
+> To use one, set `THAW=payments`, `THAW=knowledge` or `THAW=clingo` (comma separated for several)
+> in the environment, then follow its section below. Feature 14's algebra module (`scripts/solve/`,
+> `compute-server-v2.py`) is not started by anything; the server in use is `compute-server.py`.
+
 ## Overview
 
 | # | Feature | Status | Files |
 |---|---------|--------|-------|
 | 10 | User Authentication (NextAuth) | ✅ Done | `lib/auth.ts`, `app/api/auth/`, `app/auth/` |
-| 11 | Payment System (Stripe/Alipay) | ✅ Done | `lib/payments/`, `app/api/payments/` |
-| 12 | Knowledge Graph (Neo4j) | ✅ Done | `lib/knowledge/`, `app/api/knowledge/` |
-| 13 | Geometry Solver (Clingo ASP) | ✅ Done | `lib/geometry/`, `app/api/solve-geometry/` |
+| 11 | Payment System (Stripe/Alipay) | ❄ Frozen | `lib/payments/`, `app/api/payments/` |
+| 12 | Knowledge Graph (Neo4j) | ❄ Frozen | `lib/knowledge/`, `app/api/knowledge/` |
+| 13 | Geometry Solver (Clingo ASP) | ❄ Frozen | `lib/geometry/`, `app/api/solve-geometry/` |
 | 14 | Algebra Solver Module (Python) | ✅ Done | `scripts/solve/` |
 | 15 | Docker Deployment | ✅ Done | `Dockerfile`, `docker-compose.yml` |
 | 16 | i18n Bilingual Support | ✅ Done | `lib/i18n/`, `app/components/LocaleSwitcher.tsx` |

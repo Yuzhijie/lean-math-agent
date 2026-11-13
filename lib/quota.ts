@@ -1,9 +1,10 @@
 /**
  * Per-user quotas and rate limits for solves.
  *
- * - Plan limits (lib/payments/stripe.ts PLANS): solves per month (`proofsPerMonth`, -1 = unlimited)
- *   and solves at once (`concurrentSolvers`, used as the job limit). The plan comes from the user's
- *   active subscription; signed-in users without one are on "free".
+ * - Plan limits (lib/plans.ts): solves per month (`proofsPerMonth`, -1 = unlimited) and solves at
+ *   once (`concurrentSolvers`, used as the job limit). The plan comes from the user's active
+ *   subscription; signed-in users without one — everyone while payments are frozen (lib/scope.ts)
+ *   — are on QUOTA_DEFAULT_PLAN (default "free").
  * - Daily spend (optional): QUOTA_DAILY_USD_FREE / _PRO / _ENTERPRISE, in the LLM_PRICES currency.
  *   What is left today also caps the cost of the run (with PROOF_COST_CAP_USD).
  * - Rate limit: at most RATE_LIMIT_PER_MIN solve starts per minute per user (default 6), and
@@ -17,7 +18,7 @@
  */
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { PLANS } from "./payments/stripe";
+import { PLAN_LIMITS, defaultPlan, isPlan } from "./plans";
 import { withBilling } from "./llm/usage-tracker";
 
 export interface QuotaStatus {
@@ -99,17 +100,17 @@ const day = (d = new Date()) => d.toISOString().slice(0, 10);
 
 // ── Plans ────────────────────────────────────────────────────────────
 
-/** The owner's plan id: the active subscription's, "free" for other signed-in users; null = unlimited. */
+/** The owner's plan id: the active subscription's, QUOTA_DEFAULT_PLAN (else "free") for other signed-in users; null = unlimited. */
 async function planOf(owner: string): Promise<string | null> {
   if (owner === "local") return process.env.QUOTA_LOCAL_PLAN || null;
   try {
     const { prisma } = await import("./db");
     const sub = await prisma.subscription.findUnique({ where: { userId: owner } });
-    if (sub && sub.status === "active" && PLANS[sub.plan]) return sub.plan;
+    if (sub && sub.status === "active" && isPlan(sub.plan)) return sub.plan;
   } catch {
-    // no database: treat as free
+    // no database: no subscription
   }
-  return "free";
+  return defaultPlan();
 }
 
 function dailyLimit(plan: string): number | undefined {
@@ -123,7 +124,7 @@ export async function quotaStatus(owner: string): Promise<QuotaStatus> {
   const m = s.get(owner, month());
   const d = s.get(owner, day());
   if (plan === null) return { plan: "local", monthSolves: m.solves, monthLimit: -1, dayCost: d.cost, concurrent: -1, unlimited: true };
-  const limits = PLANS[plan]?.limits ?? PLANS.free.limits;
+  const limits = isPlan(plan) ? PLAN_LIMITS[plan] : PLAN_LIMITS.free;
   return { plan, monthSolves: m.solves, monthLimit: limits.proofsPerMonth, dayCost: d.cost, dayLimit: dailyLimit(plan), concurrent: limits.concurrentSolvers, unlimited: false };
 }
 

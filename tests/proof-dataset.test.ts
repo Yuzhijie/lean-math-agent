@@ -127,8 +127,9 @@ describe("memory replay", () => {
   });
 });
 
-describe("harvest and export scripts", () => {
-  it("harvest a bench result into memory, then export the dataset", () => {
+describe("harvest script", () => {
+  // the export of fine-tuning data (scripts/proofs-export.ts) is frozen with expert iteration: tests/expert-iteration.test.ts
+  it("harvest a bench result into memory", () => {
     const work = fs.mkdtempSync(path.join(dir, "scripts-"));
     fs.mkdirSync(path.join(work, "bench"));
     fs.writeFileSync(
@@ -142,11 +143,6 @@ describe("harvest and export scripts", () => {
     expect(harvest).toContain("0 → 1 proofs");
     const mem1 = JSON.parse(fs.readFileSync(path.join(work, "mem.json"), "utf8"));
     expect(mem1.entries[0]).toMatchObject({ theorem_type: ": (2 : ℕ) + 2 = 4", source: "bench:minif2f-test.json", opens: ["Real"] });
-    const exp = execFileSync(tsx, [path.resolve("scripts/proofs-export.ts"), "--out", "ds"], { cwd: work, env, encoding: "utf8" });
-    expect(exp).toContain("1 test-set proofs left out");
-    expect(fs.readFileSync(path.join(work, "ds", "proofs.jsonl"), "utf8").trim().split("\n")).toHaveLength(1);
-    expect(fs.readFileSync(path.join(work, "ds", "sft-train.jsonl"), "utf8")).toBe("");
-    expect(fs.readFileSync(path.join(work, "ds", "README.md"), "utf8")).toContain("bench:minif2f-test.json 1");
   }, 60_000);
 });
 

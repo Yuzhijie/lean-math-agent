@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -169,4 +170,31 @@ describe("expert iteration: evaluation and promotion", () => {
     expect(md).toContain("| yes |");
     expect(md).toContain("npm run prover:serve");
   });
+});
+
+describe("expert iteration is frozen (lib/scope.ts): its scripts run only with THAW=expert-iteration", () => {
+  it("proofs:export refuses by default and exports the dataset when thawed", async () => {
+    const work = await fs.mkdtemp(path.join(os.tmpdir(), "proofs-export-"));
+    const entry = { id: "p1", theorem_name: "x1", theorem_type: ": (2 : ℕ) + 2 = 4", tactics: "norm_num", source: "bench:minif2f-test.json", opens: ["Real"], strategy: "hammer", uses: 0, created_at: "2026-11-13T00:00:00.000Z", last_used_at: "2026-11-13T00:00:00.000Z" };
+    await fs.writeFile(path.join(work, "mem.json"), JSON.stringify({ version: 1, entries: [entry] }));
+    const tsx = path.resolve("node_modules/.bin/tsx");
+    const run = (thaw?: string) => {
+      const env: NodeJS.ProcessEnv = { ...process.env, PROOF_MEMORY_PATH: path.join(work, "mem.json") };
+      if (thaw) env.THAW = thaw;
+      else delete env.THAW;
+      return spawnSync(tsx, [path.resolve("scripts/proofs-export.ts"), "--out", "ds"], { cwd: work, env, encoding: "utf8" });
+    };
+
+    const frozen = run();
+    expect(frozen.status).toBe(2);
+    expect(frozen.stderr).toMatch(/已冻结[\s\S]*THAW=expert-iteration npm run proofs:export/);
+    await expect(fs.access(path.join(work, "ds"))).rejects.toThrow(); // nothing written
+
+    const thawed = run("expert-iteration");
+    expect(thawed.status).toBe(0);
+    expect(thawed.stdout).toContain("1 test-set proofs left out");
+    expect((await fs.readFile(path.join(work, "ds", "proofs.jsonl"), "utf8")).trim().split("\n")).toHaveLength(1);
+    expect(await fs.readFile(path.join(work, "ds", "sft-train.jsonl"), "utf8")).toBe("");
+    expect(await fs.readFile(path.join(work, "ds", "README.md"), "utf8")).toContain("bench:minif2f-test.json 1");
+  }, 60_000);
 });
