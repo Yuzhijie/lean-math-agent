@@ -1,8 +1,8 @@
 # 产品范围
 
-**结论（2026-11-13）：产品是面向学生和老师的解题、出题、批改。** 付费、知识图谱、Clingo 几何求解、专家迭代四块冻结：代码和测试保留，默认关闭，不再往里加东西。
+**结论（2026-11-13，项目所有者确认）：产品是面向学生和老师的解题、出题、批改。** 付费、知识图谱、Clingo 几何求解、专家迭代四块冻结：代码和测试保留，默认关闭，不再往里加东西。
 
-这个方向是按现有数据选的，项目所有者还没有明确确认。如果要走另一条路（定理证明研究平台），改动很小，见"另一条路"一节。
+**冻结期限三个月：2027-02-13。** 到那天仍在冻结清单里的，连代码、测试、脚本和依赖一起删除。
 
 冻结清单在 `lib/scope.ts`（程序读的就是它），这份文档解释它。
 
@@ -54,7 +54,8 @@ Lean 在这个产品里是检查层：给生成的题找反例，给解答的结
 2. **不加功能，不修小毛病（安全问题除外）。** 它的测试照常跑；升级依赖后如果只有它的测试失败，跳过那个测试并注明日期，不花时间修。
 3. **范围内的代码不引用冻结的代码。** `tests/scope.test.ts` 逐个文件检查，违反就失败。所以以后删除某一块只是删除，不牵连别处。
 4. **数据照常收集。** 证明修复对仍然写入 `.data/proof-repairs.jsonl`，解冻专家迭代时有数据可用。
-5. **没有删除。** `stripe` 和 `neo4j-driver` 两个依赖还在 `package.json` 里。建议：三个月内没有解冻过的，连代码和依赖一起删（git 历史里还在）。这一步由项目所有者决定。
+5. **冻结有期限：2027-02-13。** 现在没有删除，`stripe` 和 `neo4j-driver` 两个依赖也还在 `package.json` 里。到期时仍在清单里的，按下面的"删除清单"删掉（git 历史里还在）。期间用 `THAW` 打开用过、想留下的，在到期前把它从清单里移除。
+6. **到期会被拦住。** 从 2027-02-14 起 `tests/scope.test.ts` 失败并列出到期的各项，直到删除完成，或者那一项已从清单移除。改期限只能由项目所有者决定（改 `lib/scope.ts` 里的 `DELETE_AFTER`）。
 
 ### 冻结带出来的两处改动
 
@@ -72,9 +73,9 @@ Lean 在这个产品里是检查层：给生成的题找反例，给解答的结
   - `/api/evaluate`、`/api/intuition`、`/api/solve-compute`、`/api/autoformalize`：界面不调用，只能作为接口直接访问。
   - CLAUDE.md 末尾的 "Current Status & TODO" 已经过时（评审的第七条会处理）。
 
-## 另一条路：定理证明研究平台
+## 没有选的另一条路：定理证明研究平台
 
-如果产品是研究平台，清单变成：
+记在这里备查。如果产品是研究平台，清单会变成：
 
 - 专家迭代解冻。
 - 题库、出题、批改、打印（约 1.7 万行）冻结，账号、额度、部署也不再需要。
@@ -87,4 +88,39 @@ Lean 在这个产品里是检查层：给生成的题找反例，给解答的结
 - **临时打开一项**：`THAW=<名称>`。
 - **永久解冻一项**：从 `lib/scope.ts` 的 `FROZEN` 里删掉它，去掉接口上的 `frozenRoute`、页面目录里的 `layout.tsx`、脚本里的 `requireThawed`，更新这份文档。
 - **冻结新的一项**：在 `FROZEN` 里加一条（代码路径、接口前缀、脚本、测试、专用依赖），给接口包上 `frozenRoute`，给页面目录加 `layout.tsx`，给脚本加 `requireThawed`。`tests/scope.test.ts` 会检查每个入口都关上了，以及范围内没有代码引用它。
-- **删除一项**：删掉 `FROZEN` 里列的代码、测试、npm 脚本和依赖，再删掉清单里那一条。
+- **删除一项**：按下面的清单。
+
+## 删除清单
+
+每一项都是：先删 `FROZEN` 里列的代码和测试，再清掉下面列的零散引用，最后删掉 `FROZEN` 里那一条，跑 `npx tsc --noEmit` 和 `npx vitest run`。
+
+**付费**
+- 代码和测试：`lib/payments/`、`app/api/payments/`、`app/subscription/`、`app/components/PricingCards.tsx`、`tests/stripe.test.ts`
+- 依赖：`npm uninstall stripe`
+- `lib/access.ts`：`STRIPE_WEBHOOK` 和 `isPublicPath` 里对应的半句
+- `lib/startup-checks.ts`：Stripe 那条警告
+- 数据库的 `Subscription` 表：`lib/quota.ts` 的 `planOf` 还在查它。两种做法选一种：去掉 `prisma/schema.prisma` 里的模型和 `planOf` 的查询，加一个删表的迁移；或者留着这张空表不动
+- 配置和文档：`.env.example` 的 Stripe 一节、`.env.production.example` 冻结一节里的 Stripe 说明、`docs/P3-FEATURES.md` 第 11 节、`docs/BETA-DEPLOY.md` 里提到付费的两处、CLAUDE.md 里带 `[frozen: payments]` 的行
+- 留下：`lib/plans.ts`（额度在用）
+
+**知识图谱**
+- 代码和测试：`lib/knowledge/`、`app/api/knowledge/`、`app/knowledge/`、`app/components/KnowledgeGraph.tsx`、`app/components/Header.tsx`、`tests/neo4j-client.test.ts`
+- 依赖：`npm uninstall neo4j-driver`
+- `docker-compose.yml`：`neo4j` 服务、`neo4j-data` 和 `neo4j-logs` 两个卷、文件头的说明
+- 配置和文档：`.env.example` 的 Neo4j 一节、`.env.production.example` 里的说明、`docs/P3-FEATURES.md` 第 12 节、CLAUDE.md 里带 `[frozen: knowledge]` 的行
+
+**Clingo 几何求解**
+- 代码和测试：`lib/geometry/`、`app/api/solve-geometry/`、`app/components/GeometryDiagram.tsx`、`tests/clingo-solver.test.ts`
+- 配置和文档：`.env.example` 的 `CLINGO_PATH`、`docs/P3-FEATURES.md` 第 13 节、CLAUDE.md 里带 `[frozen: clingo]` 的行
+- 没有专用依赖（clingo 是外部程序）
+
+**专家迭代**
+- 代码和测试：`lib/prover/expert-iteration.ts`、`scripts/expert-iterate.ts`、`scripts/prover-serve.ts`、`scripts/proofs-export.ts`、`tests/expert-iteration.test.ts`
+- `package.json` 的三个脚本：`expert:iterate`、`prover:serve`、`proofs:export`
+- `lib/prover/dataset.ts` 里只有它用的导出：`sftRecords`、`repairRecords`、`isTestSource`、`splitOf`，以及 `tests/proof-dataset.test.ts` 里对应的测试（`harvestRows`、`memoryHitStats` 留下，证明记忆在用）
+- 修复对的收集只为它服务：`lib/lean/proof-memory.ts` 的 `rememberRepair`、`readRepairs`，三处调用（`lib/pipeline/lean-attempt.ts`、`lib/pipeline/theorem-pipeline.ts`、`scripts/bench.ts`），以及 `.data/proof-repairs.jsonl`。一起删
+- 配置和文档：`.env.example` 的 `EXPERT_*` 和 `PROOF_REPAIRS_PATH`、CLAUDE.md 里带 `[frozen: expert-iteration]` 的行和 Running 一节的三条命令
+
+**四项都删完之后**
+- `FROZEN` 变成空的。`lib/scope.ts` 的开关和三道关可以留着（以后再冻结别的还用得上），`tests/scope.test.ts` 里拿具体名称举例的断言（`frozenRoute("payments", …)`、回调地址、启动检查、`closedAt`）跟着删或改
+- 这份文档的"冻结"一节改成"已删除"，写上日期和提交号

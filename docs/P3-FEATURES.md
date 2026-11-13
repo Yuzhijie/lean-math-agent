@@ -3,7 +3,8 @@
 This document describes the 7 P3 (Low Priority) features implemented in v0.2.0.
 
 > **Scope (2026-11-13, `docs/SCOPE.md`):** features 11 (payments), 12 (knowledge graph) and 13 (Clingo
-> geometry solver) are **frozen** — kept, but off by default: their pages and API routes answer 404.
+> geometry solver) are **frozen** — kept, but off by default: their pages and API routes answer 404 —
+> and will be **deleted after 2027-02-13** unless taken out of the frozen list before.
 > To use one, set `THAW=payments`, `THAW=knowledge` or `THAW=clingo` (comma separated for several)
 > in the environment, then follow its section below. Feature 14's algebra module (`scripts/solve/`,
 > `compute-server-v2.py`) is not started by anything; the server in use is `compute-server.py`.

@@ -2,7 +2,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
-import { FROZEN, FROZEN_NAMES, closedAt, frozenResponse, frozenRoute, readThaw, requireThawed, thawed, type FrozenName } from "@/lib/scope";
+import { FROZEN, FROZEN_NAMES, closedAt, frozenResponse, frozenRoute, overdue, readThaw, requireThawed, thawed, type FrozenName } from "@/lib/scope";
 import { proxy } from "@/proxy";
 import { PLAN_LIMITS, defaultPlan, isPlan } from "@/lib/plans";
 import { isPublicPath } from "@/lib/access";
@@ -65,12 +65,48 @@ describe("the frozen list is true to the repository", () => {
     expect(f.reason.length).toBeGreaterThan(10);
   });
 
-  it("the scope document names every frozen feature and how to thaw it", () => {
+  it("the scope document names every frozen feature, how to thaw it and when it is deleted", () => {
     const doc = readFileSync(path.join(ROOT, "docs", "SCOPE.md"), "utf8");
     for (const name of FROZEN_NAMES) {
       expect(doc, name).toContain(FROZEN[name].title);
       expect(doc, name).toContain(`THAW=${name}`);
+      expect(doc, name).toContain(FROZEN[name].deleteAfter);
+      // the deletion checklist lists each code path and test of the feature
+      for (const p of [...FROZEN[name].code, ...FROZEN[name].tests]) expect(doc, `${name}: ${p} in the deletion checklist`).toContain(`\`${p}\``);
     }
+  });
+});
+
+describe("frozen is for three months", () => {
+  it("every frozen feature has a deletion date: a real day, after the day it was frozen", () => {
+    for (const name of FROZEN_NAMES) {
+      const { since, deleteAfter } = FROZEN[name];
+      expect(deleteAfter, name).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(new Date(`${deleteAfter}T00:00:00Z`).toISOString().slice(0, 10), name).toBe(deleteAfter);
+      expect(deleteAfter > since, name).toBe(true);
+    }
+  });
+
+  it("overdue: nothing up to the date, what is still listed from the day after", () => {
+    const dates = FROZEN_NAMES.map((n) => FROZEN[n].deleteAfter).sort();
+    const last = dates[dates.length - 1];
+    const dayAfter = new Date(new Date(`${last}T00:00:00Z`).getTime() + 86_400_000).toISOString().slice(0, 10);
+    expect(overdue(FROZEN.payments.since)).toEqual([]);
+    expect(overdue(dates[0])).toEqual([]); // the last day itself is still inside the freeze
+    expect(overdue(dayAfter)).toEqual(FROZEN_NAMES);
+  });
+
+  // The deadline itself. From the day after `deleteAfter` this fails — on purpose, and for every
+  // run of the suite — until each feature it names is deleted (docs/SCOPE.md, "删除清单") or was
+  // taken out of FROZEN because it is wanted after all. Moving the date is the owner's decision.
+  it("no frozen feature is past its deletion date", () => {
+    const late = overdue();
+    expect(
+      late,
+      late.length
+        ? `冻结期限已过：${late.map((n) => `${FROZEN[n].title}（${n}，期限 ${FROZEN[n].deleteAfter}）`).join("、")}。按 docs/SCOPE.md 的“删除清单”删除；想留下的从 lib/scope.ts 的 FROZEN 里移除；改期限由项目所有者决定。`
+        : undefined,
+    ).toEqual([]);
   });
 });
 
@@ -198,7 +234,9 @@ describe("every door into a frozen feature is closed by default", () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
     requireThawed("expert-iteration", "npm run expert:iterate");
     expect(exit).toHaveBeenCalledWith(2);
-    expect(err.mock.calls.flat().join("\n")).toMatch(/已冻结[\s\S]*THAW=expert-iteration npm run expert:iterate/);
+    const said = err.mock.calls.flat().join("\n");
+    expect(said).toMatch(/已冻结[\s\S]*THAW=expert-iteration npm run expert:iterate/);
+    expect(said).toContain(`${FROZEN["expert-iteration"].deleteAfter} 之后仍在冻结清单里就会被删除`);
     exit.mockClear();
     process.env.THAW = "expert-iteration";
     requireThawed("expert-iteration", "npm run expert:iterate");
