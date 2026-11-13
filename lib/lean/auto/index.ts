@@ -3,6 +3,7 @@
  * tactic mode, search, verify the script as a whole. Runs after the single-tactic hammer.
  */
 import { CancelledError } from "../../jobs";
+import { summarizeFailure } from "../feedback";
 import type { LeanVerifyResult } from "../sandbox";
 import { openRunner, scriptSource } from "../tactic-runner";
 import { autoSearch, type AutoStats } from "./search";
@@ -45,7 +46,7 @@ export async function autoProof(args: {
     const source = scriptSource({ theoremName, theoremType, tactics, useMathlib, opens, heartbeats: Number(process.env.AUTO_MAX_HEARTBEATS ?? 1_000_000) });
     const verification = await session.verify(sessionId, source, { theoremName, expectedSignature });
     if (!verification.ok && process.env.AUTO_DEBUG) console.error(`[auto] verify failed:\n${source}\n${verification.log}`);
-    if (!verification.ok) return { reason: `the script did not verify: ${verification.log.split("\n")[0]?.slice(0, 160) ?? ""}`, stats };
+    if (!verification.ok) return { reason: `the script did not verify: ${summarizeFailure(verification, 160)}`, stats };
     return { proof: { verification, source, tactics, stats }, reason: "" };
   } catch (e) {
     if (e instanceof CancelledError) throw e;

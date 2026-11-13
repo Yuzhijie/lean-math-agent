@@ -18,6 +18,9 @@
 //   "plausible" + PLAUSIBLE_CE / PLAUSIBLE_OK → "Found a counter-example!" error
 //                           / silence; otherwise "Failed to create a `testable`…"
 //   "STDOUT_NOISE"        → a stray non-JSON line is printed before the response
+// Tactic mode (`{"tactic": …, "proofState": n}`): "BOOM" → the worker exits (a tactic that
+// runs it out of memory), "SLEEP" → no answer, "error_here" → a failed tactic, "CLOSE" → no
+// goals left, anything else → the goal stays.
 import { setTimeout as delay } from "node:timers/promises";
 
 let envCounter = 0;
@@ -51,6 +54,17 @@ async function handle(text) {
     req = JSON.parse(text);
   } catch (e) {
     respond({ message: `Could not parse JSON:\n${e.message}` });
+    return;
+  }
+  if (req.tactic !== undefined) {
+    const tactic = String(req.tactic);
+    if (tactic.includes("SLEEP")) return;
+    if (tactic.includes("BOOM")) process.exit(3);
+    if (tactic.includes("error_here")) {
+      respond({ message: "Lean error:\nunsolved goals\nn : Nat\n⊢ n + 0 = n" });
+      return;
+    }
+    respond({ proofState: 1000 + envCounter++, goals: tactic.includes("CLOSE") ? [] : ["n : Nat\n⊢ n + 0 = n"] });
     return;
   }
   const cmd = String(req.cmd ?? "");

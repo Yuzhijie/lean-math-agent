@@ -5,6 +5,7 @@
  */
 import { lt } from "../../llm/output-locale";
 import { CancelledError } from "../../jobs";
+import { summarizeFailure } from "../feedback";
 import type { LeanVerifyResult } from "../sandbox";
 import { openRunner, scriptSource } from "../tactic-runner";
 import { proveGeometryGoals } from "./prove";
@@ -67,7 +68,7 @@ export async function geometryProof(args: {
     const verifyMs = Number(process.env.GEOMETRY_VERIFY_TIMEOUT_MS ?? 300_000);
     const verification = await session.verify(sessionId, source, { theoremName, expectedSignature, timeoutMs: Number.isFinite(verifyMs) && verifyMs > 0 ? verifyMs : 300_000 });
     if (!verification.ok && process.env.GEOMETRY_DEBUG) console.error(`[geometry] verify failed:\n${source}\n${verification.log}`);
-    if (!verification.ok) return { reason: `the written proof did not verify: ${verification.log.split("\n")[0]?.slice(0, 160) ?? ""}` };
+    if (!verification.ok) return { reason: `the written proof did not verify: ${summarizeFailure(verification, 160)}` };
     return { proof: { verification, source, tactics }, reason: "" };
   } catch (e) {
     if (e instanceof CancelledError) throw e;

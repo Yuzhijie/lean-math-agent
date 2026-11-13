@@ -427,6 +427,82 @@ async function verifyViaRepl(source: string, probes: Probes, leased?: ReplWorker
 
 const CLI_MESSAGE_RE = /^(.*?\.lean):(\d+):(\d+): (error|warning|info): ?(.*)$/;
 
+/**
+ * `lean`'s text output → diagnostics and info lines. Errors and warnings come as
+ * `file:L:C: severity: message` with continuation lines under them; info output (`#print axioms`,
+ * `#check`) is printed bare, without a position. The probes stand at the end of the file, so
+ * their output follows the last diagnostic: a bare line that is a probe's answer ends that
+ * diagnostic — it used to be read as one more line of it, and a proof with a single linter
+ * warning ("This simp argument is unused") then failed as "could not determine the axioms"
+ * whenever the REPL had handed the check over to this path (found by `npm run lean:regress`: a
+ * regular pentagon and a circular seating verified by Lean and reported as not verified). The
+ * `#check` answer runs to the end of the output or to the next positioned message; its
+ * continuation lines need not be indented (`have Valid := …;`).
+ */
+export function parseSpawnOutput(output: string, opts: { bodyStartLine?: number; probeName?: string } = {}): { messages: LeanDiagnostic[]; sorries: LeanSorryInfo[]; infos: string[]; sorryWarning: boolean } {
+  const bodyStartLine = opts.bodyStartLine ?? Number.POSITIVE_INFINITY;
+  const messages: LeanDiagnostic[] = [];
+  const sorries: LeanSorryInfo[] = [];
+  const infos: string[] = [];
+  let sorryWarning = false;
+  let current: LeanDiagnostic | null = null;
+  let lastInfo = -1;
+  let inCheck = false;
+  const isAxioms = (line: string) => /^'[^']+' (depends on axioms:|does not depend on any axioms)/.test(line);
+  const isCheck = (line: string) => opts.probeName !== undefined && (line.startsWith(`${opts.probeName} : `) || line.startsWith(`@${opts.probeName} : `));
+  for (const line of output.split(/\r?\n/)) {
+    const m = line.match(CLI_MESSAGE_RE);
+    if (m) {
+      inCheck = false;
+      const severity = m[4] as LeanDiagnostic["severity"];
+      const rawLine = parseInt(m[2], 10);
+      current = {
+        severity,
+        line: rawLine >= bodyStartLine ? rawLine - PRELUDE_LINES : rawLine,
+        column: parseInt(m[3], 10),
+        message: m[5],
+      };
+      if (severity === "info") {
+        lastInfo = infos.push(m[5]) - 1;
+        current = null;
+      } else {
+        if (/declaration uses [`']sorry[`']/.test(m[5])) {
+          sorryWarning = true;
+          sorries.push({ line: current.line, column: current.column, goal: "" });
+        }
+        messages.push(current);
+        lastInfo = -1;
+      }
+      continue;
+    }
+    if (line.trim() === "" || line.startsWith("timeout after")) continue;
+    if (isAxioms(line) || isCheck(line)) {
+      // a probe's answer: the diagnostic before it is over
+      current = null;
+      inCheck = isCheck(line);
+      lastInfo = infos.push(line.trim()) - 1;
+      continue;
+    }
+    if (inCheck) {
+      infos[lastInfo] += "\n" + line;
+      continue;
+    }
+    if (current) {
+      // continuation (e.g. goals under "unsolved goals")
+      current.message += "\n" + line;
+      continue;
+    }
+    if (/^\s/.test(line) && lastInfo >= 0) {
+      // continuation of a wrapped `#check` / `#print axioms` line
+      infos[lastInfo] += "\n" + line;
+      continue;
+    }
+    // Plain info output (`#print axioms`, `#check` print without a position)
+    lastInfo = infos.push(line.trim()) - 1;
+  }
+  return { messages, sorries, infos, sorryWarning };
+}
+
 async function verifyViaSpawn(
   sessionId: string,
   source: string,
@@ -458,51 +534,7 @@ async function verifyViaSpawn(
     await fs.unlink(filePath).catch(() => undefined);
   }
 
-  const messages: LeanDiagnostic[] = [];
-  const sorries: LeanSorryInfo[] = [];
-  const infos: string[] = [];
-  let sorryWarning = false;
-  let current: LeanDiagnostic | null = null;
-  let lastInfo = -1;
-  const lines = output.split(/\r?\n/);
-  for (const line of lines) {
-    const m = line.match(CLI_MESSAGE_RE);
-    if (m) {
-      const severity = m[4] as LeanDiagnostic["severity"];
-      const rawLine = parseInt(m[2], 10);
-      current = {
-        severity,
-        line: rawLine >= bodyStartLine ? rawLine - PRELUDE_LINES : rawLine,
-        column: parseInt(m[3], 10),
-        message: m[5],
-      };
-      if (severity === "info") {
-        lastInfo = infos.push(m[5]) - 1;
-        current = null;
-      } else {
-        if (/declaration uses [`']sorry[`']/.test(m[5])) {
-          sorryWarning = true;
-          sorries.push({ line: current.line, column: current.column, goal: "" });
-        }
-        messages.push(current);
-        lastInfo = -1;
-      }
-      continue;
-    }
-    if (line.trim() === "" || line.startsWith("timeout after")) continue;
-    if (current) {
-      // continuation (e.g. goals under "unsolved goals")
-      current.message += "\n" + line;
-      continue;
-    }
-    if (/^\s/.test(line) && lastInfo >= 0) {
-      // continuation of a wrapped `#check` / `#print axioms` line
-      infos[lastInfo] += "\n" + line;
-      continue;
-    }
-    // Plain info output (`#print axioms`, `#check` print without a position)
-    lastInfo = infos.push(line.trim()) - 1;
-  }
+  const { messages, sorries, infos, sorryWarning } = parseSpawnOutput(output, { bodyStartLine, probeName: probes.name });
   if (exitError?.startsWith("timeout after")) {
     messages.push({ severity: "error", line: 1, column: 0, message: exitError.split("\n")[0] });
   } else if (exitError && messages.every((d) => d.severity !== "error")) {

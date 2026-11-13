@@ -133,11 +133,24 @@ rw [hpf_form, hpf_a, hpf_n]
 simp`;
 }
 
-/** Names the script binds itself: a statement using one of them for P / its hypotheses is left alone. */
+/** Names the script binds itself. */
 const SCRIPT_NAMES = new Set("x hne S hS m hm hmc hmn hmn' hgap j hj hjn hne' hjS hsq i h1 h2' hs hi hh hi1 hi2 hexp hd t ht h3 h' h0 hl h4 h5".split(" "));
 
+/**
+ * The finisher for a goal of this shape. A name the script binds itself must not shadow the
+ * polynomial or the two hypotheses it refers to: where the statement uses one (`h3 : eval 3 Q = 243`;
+ * `h1`, `h2` after the search's own `intro`), that binder of the script is renamed (h3 → h3_pf).
+ * The statement was refused before — "P(x²) = P(x)², P(2) = 1024" written with ∀ … → …, which a
+ * session had proved, no longer went through (found by `npm run lean:regress`).
+ */
 export function polySquareFinishers(st: GoalState): string[] {
   const s = polySquareEq(st);
-  if (!s || [s.poly, s.eqHyp, s.valueHyp].some((n) => SCRIPT_NAMES.has(n) || n.startsWith("hpf_"))) return [];
-  return [polySquareScript(s)];
+  if (!s || [s.poly, s.eqHyp, s.valueHyp].some((n) => n.startsWith("hpf_") || n.endsWith("_pf"))) return [];
+  const taken = new Set([s.poly, s.eqHyp, s.valueHyp]);
+  const clash = [...SCRIPT_NAMES].filter((n) => taken.has(n));
+  if (!clash.length) return [polySquareScript(s)];
+  // written with stand-in names first, so that renaming the script's binders cannot touch the statement's names
+  let script = polySquareScript({ ...s, poly: "hpf_P", eqHyp: "hpf_H", valueHyp: "hpf_V" });
+  for (const n of clash) script = script.replace(new RegExp(`(?<![\\w'.])${esc(n)}(?![\\w'])`, "g"), `${n}_pf`);
+  return [script.replace(/\bhpf_P\b/g, () => s.poly).replace(/\bhpf_H\b/g, () => s.eqHyp).replace(/\bhpf_V\b/g, () => s.valueHyp)];
 }

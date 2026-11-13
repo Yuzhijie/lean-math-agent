@@ -162,7 +162,8 @@ export class ProofSession {
   /**
    * Apply one tactic to a state. The tactic is sanitized first; a
    * forbidden token is reported as a failed tactic. Worker loss is handled
-   * by replaying the state's path on a fresh worker (once).
+   * by replaying the state's path on a fresh worker (once); a tactic that
+   * loses the worker twice is a failed tactic.
    */
   async apply(state: number, tactic: string): Promise<TacticOutcome> {
     if (this.closed) throw new ReplError("crashed", "proof session is closed");
@@ -201,6 +202,15 @@ export class ProofSession {
             return { ok: false, error: `tactic timed out after ${this.tacticTimeoutMs}ms`, durationMs: Date.now() - started };
           }
           continue;
+        }
+        if (attempt === 1 && e instanceof ReplError && e.kind === "crashed") {
+          // The worker died again on the same tactic: the tactic is what kills it (out of memory —
+          // `decide` over a million pairs of subsets on a machine with little of it). That is a
+          // failed tactic, not a failed session: without this the hammer's error ended the whole
+          // attempt before the prover that proves the statement was tried (found by lean:regress
+          // on "least |A ∪ B|" over Finset (Fin 10)).
+          await this.reopen();
+          return { ok: false, error: "the Lean worker died twice while running this tactic (out of memory?)", durationMs: Date.now() - started };
         }
         throw e;
       }

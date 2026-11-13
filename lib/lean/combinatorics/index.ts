@@ -14,6 +14,7 @@
 import { CancelledError } from "../../jobs";
 import { looksGeometric } from "../geometry";
 import { parseGoal } from "../geometry/goal";
+import { summarizeFailure } from "../feedback";
 import type { LeanVerifyResult } from "../sandbox";
 import { openRunner, scriptSource } from "../tactic-runner";
 import { closeFinite, introAll } from "./finite";
@@ -94,7 +95,7 @@ export async function combinatoricsProof(args: {
     const verification = await session.verify(sessionId, source, { theoremName, expectedSignature });
     if (!verification.ok && process.env.COMBINATORICS_DEBUG) console.error(`[combinatorics] ${method} did not verify:\n${source}\n${verification.log}`);
     if (verification.ok) return { verification, source, tactics, method };
-    reasons.push(`${method}: the written proof did not verify (${verification.log.split("\n")[0]?.slice(0, 120) ?? ""})`);
+    reasons.push(`${method}: the written proof did not verify (${summarizeFailure(verification, 120)})`);
     return undefined;
   };
   try {

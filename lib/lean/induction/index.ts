@@ -3,6 +3,7 @@
  * the program pick the scheme and close the cases, verify the script as a whole like any other proof.
  */
 import { CancelledError } from "../../jobs";
+import { summarizeFailure } from "../feedback";
 import type { LeanVerifyResult } from "../sandbox";
 import { openRunner, scriptSource } from "../tactic-runner";
 import { proveByInduction, type InductionScheme } from "./prove";
@@ -54,7 +55,7 @@ export async function inductionProof(args: {
     const source = scriptSource({ theoremName, theoremType, tactics, useMathlib, heartbeats: Number(process.env.INDUCTION_MAX_HEARTBEATS ?? 1_000_000) });
     const verification = await session.verify(sessionId, source, { theoremName, expectedSignature });
     if (!verification.ok && process.env.INDUCTION_DEBUG) console.error(`[induction] verify failed:\n${source}\n${verification.log}`);
-    if (!verification.ok) return { reason: `the written proof did not verify: ${verification.log.split("\n")[0]?.slice(0, 160) ?? ""}` };
+    if (!verification.ok) return { reason: `the written proof did not verify: ${summarizeFailure(verification, 160)}` };
     return { proof: { verification, source, tactics, scheme: out.scheme }, reason: "" };
   } catch (e) {
     if (e instanceof CancelledError) throw e;
