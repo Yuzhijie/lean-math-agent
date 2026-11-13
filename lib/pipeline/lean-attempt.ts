@@ -283,6 +283,7 @@ function orbitHint(): string {
     "  -- then {O | ∃ s, Valid s ∧ O = Orbit s} = (fun r => Orbit r.toFinset) '' {r | r ∈ RL}, InjOn from hsep (r₂.toFinset ∈ Orbit r₂.toFinset with k = 0), and",
     "  rw [hset, hinj.ncard_image, show {r | r ∈ RL} = (RL.toFinset : Set (List (Fin 15))) by ext; simp, Set.ncard_coe_finset, List.toFinset_card_of_nodup hnd]",
     "Plain `decide` hits maximum recursion depth here; `decide +kernel` does not. Quantify with `∀ i : Fin n, i ∈ r → …` rather than `∀ i ∈ r` over a Finset.",
+    "With more than a few thousand lists (6 of 18 seats: 6188) a `∀ l ∈ list, …` decided as a proposition recurses once per element (\"(kernel) deep recursion detected\"): state the check as a Bool over the list — `have h : (list).all (fun l => …) = true := by decide +kernel`, then `List.all_eq_true.1 h` — and compare sets as numbers (bit i for seat i: `(l.map Fin.val).foldl (fun b c => b ||| 2 ^ c) 0`) instead of sorting and searching lists.",
   ].join("\n");
 }
 

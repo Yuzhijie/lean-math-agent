@@ -117,8 +117,12 @@ export async function combinatoricsProof(args: {
             counterexample: `${r.reps.length} ≠ ${shape.total}; representatives: ${JSON.stringify(r.reps.slice(0, 20))}`,
           };
         } else {
-          const p = await verify(orbitScript(shape, r.reps), "orbits");
-          if (p) return { proof: p, reason: "" };
+          const tactics = orbitScript(shape, r.reps);
+          if (!tactics) reasons.push("orbits: the statement names a let the way the written proof names its own steps");
+          else {
+            const p = await verify(tactics, "orbits");
+            if (p) return { proof: p, reason: "" };
+          }
         }
       } catch (e) {
         if (e instanceof CancelledError) throw e;
