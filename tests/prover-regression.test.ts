@@ -6,6 +6,7 @@ import { looksGeometric } from "@/lib/lean/geometry";
 import { looksInductive } from "@/lib/lean/induction";
 import { looksOptimization } from "@/lib/lean/optimize";
 import { oddtownShape } from "@/lib/lean/optimize/oddtown";
+import { processShape } from "@/lib/lean/optimize/process";
 import { looksCombinatorial } from "@/lib/lean/combinatorics";
 import { circularShape } from "@/lib/lean/combinatorics/circular";
 import { orbitShape } from "@/lib/lean/combinatorics/orbit";
@@ -248,7 +249,7 @@ describe("bench/provers.json", () => {
   });
 
   it("the special routes still recognise the statements they were written for", () => {
-    const shape: Record<string, (t: string) => unknown> = { "optimize/oddtown": oddtownShape, "combinatorics/circular": circularShape, "combinatorics/orbit": orbitShape };
+    const shape: Record<string, (t: string) => unknown> = { "optimize/oddtown": oddtownShape, "optimize/process": processShape, "combinatorics/circular": circularShape, "combinatorics/orbit": orbitShape };
     for (const c of cases) {
       const read = c.for ? shape[c.for] : undefined;
       if (read && c.expect && c.expect !== "none" && c.expect === c.for!.split("/")[0]) expect(read(normalizeTheoremType(c.type)), c.id).toBeTruthy();

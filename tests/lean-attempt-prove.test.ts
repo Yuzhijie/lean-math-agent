@@ -242,6 +242,20 @@ describe("hints for the prover and the sorry report", () => {
     expect(proofHints(DODECAGON).join("\n")).not.toContain("hinj.ncard_image");
   });
 
+  it("gives a process over Relation.ReflTransGen the invariant route (induction along the process, never a search)", () => {
+    // the board with another number written: the program's own route (range + parity) does not fit, the model gets the skeleton
+    const board =
+      ": let initial : Multiset ℤ := (Multiset.range 10).map (fun n : ℕ => (n : ℤ) + 1); let step : Multiset ℤ → Multiset ℤ → Prop := fun s t => ∃ a b : ℤ, a ∈ s ∧ b ∈ s.erase a ∧ t = (s.erase a).erase b + ({a + b + a * b} : Multiset ℤ); let reach : Multiset ℤ → Multiset ℤ → Prop := Relation.ReflTransGen step; ∀ z : ℤ, reach initial ({z} : Multiset ℤ) → z = 39916799";
+    const h = proofHints(board).join("\n");
+    expect(h).toContain("the bound is an invariant, not a search");
+    expect(h).toContain("induction ht with");
+    expect(h).toContain("obtain ⟨a, b, ha, hb, rfl⟩ := hst");
+    expect(h).toContain("Multiset.sum_erase ha");
+    expect(h).toContain("Relation.ReflTransGen.head m1");
+    expect(proofHints(DODECAGON).join("\n")).not.toContain("ReflTransGen");
+    expect(proofHints(": ∀ x : ℝ, x ^ 2 ≥ 0").join("\n")).not.toContain("ReflTransGen");
+  });
+
   it("says to introduce the lets and to use witnesses + decide +kernel on finite statements", async () => {
 
     const h = proofHints(DODECAGON).join("\n");

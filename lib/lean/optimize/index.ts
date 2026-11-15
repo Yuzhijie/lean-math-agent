@@ -15,6 +15,7 @@ import { colourFamily, familyEvalCommand, familyScript, maxFamily, parseFamily, 
 import type { ProofSession } from "../proof-state";
 import { ekrScript, ekrShape, groundEvalCommand, readGround } from "./ekr";
 import { oddtownProof, oddtownShape } from "./oddtown";
+import { F_TACTICS, findMoves, invariantFault, parityBounds, processEvalCommand, processScript, processShape, readProcessData, type ProcessShape } from "./process";
 import { vennOptimize } from "./venn";
 
 /** IsGreatest / IsLeast / bounds, or a conjunction of an ∃ and a ∀ (attained + bound). */
@@ -55,6 +56,37 @@ async function familyProof(session: ProofSession, fam: NonNullable<ReturnType<ty
   return { tactics: familyScript(fam, g, best, colours), reason: "" };
 }
 
+/**
+ * A replacement process (process.ts): the numbers at the start and the table of the number
+ * written from Lean, the moves from the program; the scripts to verify, one per way of proving
+ * the facts about the number written (the first that verifies is the proof).
+ */
+async function processScripts(session: ProofSession, shape: ProcessShape): Promise<{ scripts?: string[]; reason: string; counterexample?: string }> {
+  const msgs = await session.evaluate(processEvalCommand(shape), Number(process.env.OPTIMIZE_EVAL_TIMEOUT_MS ?? 60_000));
+  const err = msgs.find((m) => m.severity === "error");
+  if (err) return { reason: `the numbers at the start could not be listed: ${err.data.split("\n")[0]}` };
+  const data = msgs.map((m) => readProcessData(m.data)).find((x) => x);
+  if (!data) return { reason: "no numbers at the start from Lean" };
+  const fault = invariantFault(data);
+  if (fault) return { reason: fault };
+  const allowed = parityBounds(data);
+  const best = shape.kind === "greatest" ? allowed.greatest : allowed.least;
+  if (shape.M !== best) {
+    // the statement's value is not what range and parity give: moves to a better one refute it
+    const better = shape.kind === "greatest" ? shape.M < best : shape.M > best;
+    const moves = better ? findMoves(data, best) : undefined;
+    if (moves) {
+      const text = `${moves.map(([x, y]) => `(${x}, ${y})`).join(", ")} leave ${best}`;
+      return { reason: `the moves ${text}, not ${shape.M}`, counterexample: `${best} ${shape.kind === "greatest" ? ">" : "<"} ${shape.M}: erasing ${text}` };
+    }
+    return { reason: `range and parity allow ${best} as the ${shape.kind} last number, the statement says ${shape.M}` };
+  }
+  const moves = findMoves(data, shape.M);
+  if (!moves) return { reason: `no moves found that leave ${shape.M}` };
+  const scripts = F_TACTICS(shape.a, shape.b, shape.f).flatMap((t) => processScript(shape, data, moves, t) ?? []);
+  return scripts.length ? { scripts, reason: "" } : { reason: "the moves do not end at the statement's value" };
+}
+
 export interface OptimizationProof {
   verification: LeanVerifyResult;
   source: string;
@@ -88,6 +120,22 @@ export async function optimizationProof(args: {
   if (typeof opened === "string") return { reason: opened };
   const { run, script, session } = opened;
   try {
+    // "two numbers are erased and one is written": an invariant and the moves (process.ts)
+    const proc = processShape(theoremType);
+    if (proc) {
+      const p = await processScripts(session, proc);
+      if (p.counterexample) return { reason: p.reason, counterexample: p.counterexample };
+      let failure = p.reason;
+      for (const tactics of p.scripts ?? []) {
+        const source = scriptSource({ theoremName, theoremType, tactics, useMathlib, heartbeats });
+        const verification = await session.verify(sessionId, source, { theoremName, expectedSignature, timeoutMs: Number(process.env.OPTIMIZE_VERIFY_TIMEOUT_MS ?? 300_000) });
+        if (verification.ok) return { proof: { verification, source, tactics }, reason: "" };
+        failure = `the written proof did not verify: ${summarizeFailure(verification, 160)}`;
+        if (process.env.OPTIMIZE_DEBUG) console.error(`[optimize] process proof did not verify:\n${source}\n${verification.log}`);
+      }
+      if (process.env.OPTIMIZE_DEBUG) console.error(`[optimize] process: ${failure}`);
+      return { reason: `process: ${failure}` };
+    }
     // Oddtown (odd sizes, even pairwise intersections ⇒ at most |U|): linear algebra over 𝔽₂ (oddtown.ts)
     const odd = oddtownShape(theoremType);
     if (odd) {

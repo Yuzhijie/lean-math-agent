@@ -207,6 +207,7 @@ export function proofHints(theoremType: string, opts: { tooMany?: boolean; huge?
     );
   }
   if (/\bncard\b|\.card\b/.test(t) && /Orbit|orbit|MulAction|Rot\b|Ref\b|rotat|reflect/.test(t)) hints.push(orbitHint());
+  if (/Relation\.ReflTransGen/.test(t) && /Multiset/.test(t)) hints.push(processHint());
   const orders = orderConditions(t);
   if (orders) hints.push(orderHint(orders));
   if (/∣/.test(t) && /\(\s*\w+\s*:\s*(ℕ|ℤ|Nat|Int)\s*\)|∀\s*\w+\s*:\s*(ℕ|ℤ)/.test(t) && /↔|∃/.test(t)) {
@@ -284,6 +285,52 @@ function orbitHint(): string {
     "  rw [hset, hinj.ncard_image, show {r | r ∈ RL} = (RL.toFinset : Set (List (Fin 15))) by ext; simp, Set.ncard_coe_finset, List.toFinset_card_of_nodup hnd]",
     "Plain `decide` hits maximum recursion depth here; `decide +kernel` does not. Quantify with `∀ i : Fin n, i ∈ r → …` rather than `∀ i ∈ r` over a Finset.",
     "With more than a few thousand lists (6 of 18 seats: 6188) a `∀ l ∈ list, …` decided as a proposition recurses once per element (\"(kernel) deep recursion detected\"): state the check as a Bool over the list — `have h : (list).all (fun l => …) = true := by decide +kernel`, then `List.all_eq_true.1 h` — and compare sets as numbers (bit i for seat i: `(l.map Fin.val).foldl (fun b c => b ||| 2 ^ c) 0`) instead of sorting and searching lists.",
+  ].join("\n");
+}
+
+/**
+ * A process stated with `Relation.ReflTransGen` over multisets ("erase two numbers, write one").
+ * The program proves the |a − b| board itself (lib/lean/optimize/process.ts); for another number
+ * written, or another shape, the model gets that proof's skeleton — models searched the boards or
+ * lost the step's variables ("Unknown identifier `b`"). Checked in Lean on 1, …, 15 with |a − b|.
+ */
+function processHint(): string {
+  return [
+    "A process stated with `Relation.ReflTransGen step` (\"erase two numbers, write a new one, until one is left\"): the bound is an invariant, not a search — find what every step keeps (the parity of the sum, the sum itself, a product, a gcd, a range the numbers stay in) and carry it along the process by induction. Never unfold `Relation.ReflTransGen` and never `decide` over all boards. The route (checked in Lean on 1, …, 15 with |a − b| written, largest last number 14: every number stays in 0 … 15 and the sum stays even):",
+    "  intro initial step reach   -- the statement's lets",
+    "  have hF : ∀ a b : ℤ, 0 ≤ a → a ≤ 15 → 0 ≤ b → b ≤ 15 → 0 ≤ ((Int.natAbs (a - b) : ℕ) : ℤ) ∧ ((Int.natAbs (a - b) : ℕ) : ℤ) ≤ 15 ∧ (((Int.natAbs (a - b) : ℕ) : ℤ) + a + b) % 2 = 0 := by intro a b h1 h2 h3 h4; omega   -- the facts about the number written, once (`|a - b|`: `rcases abs_cases (a - b) with ⟨h, _⟩ | ⟨h, _⟩ <;> rw [h] <;> omega`)",
+    "  have hinv : ∀ t, Relation.ReflTransGen step initial t → (∀ x ∈ t, 0 ≤ x ∧ x ≤ 15) ∧ t.sum % 2 = 0 := by",
+    "    intro t ht",
+    "    induction ht with",
+    "    | refl => exact ⟨by decide, by decide⟩",
+    "    | tail _ hst ih =>",
+    "      obtain ⟨a, b, ha, hb, rfl⟩ := hst   -- the step: ∃ a b, a ∈ s ∧ b ∈ s.erase a ∧ t = (s.erase a).erase b + {…}; a and b exist only from here on",
+    "      have ha' := ih.1 a ha",
+    "      have hb' := ih.1 b (Multiset.mem_of_mem_erase hb)",
+    "      obtain ⟨hf0, hf1, hf2⟩ := hF a b ha'.1 ha'.2 hb'.1 hb'.2",
+    "      have h1 := Multiset.sum_erase ha   -- a + (s.erase a).sum = s.sum",
+    "      have h2 := Multiset.sum_erase hb",
+    "      have hs0 := ih.2",
+    "      generalize ((Int.natAbs (a - b) : ℕ) : ℤ) = f at hf0 hf1 hf2 ⊢   -- the number written as one variable: omega then needs nothing about it but hF",
+    "      refine ⟨?_, ?_⟩",
+    "      · intro x hx",
+    "        rcases Multiset.mem_add.1 hx with h | h",
+    "        · exact ih.1 x (Multiset.mem_of_mem_erase (Multiset.mem_of_mem_erase h))",
+    "        · rw [Multiset.mem_singleton] at h; rw [h]; exact ⟨hf0, hf1⟩",
+    "      · rw [Multiset.sum_add, Multiset.sum_singleton]",
+    "        omega",
+    "  constructor",
+    "  · -- the value is reached: one step per move, the boards written out, each step `⟨a, b, by decide, by decide, by decide⟩`",
+    "    show Relation.ReflTransGen step initial ({14} : Multiset ℤ)",
+    "    have m1 : step initial ((([1, 2, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14] : List ℤ)) : Multiset ℤ) := ⟨15, 13, by decide, by decide, by decide⟩   -- 15 and 13 erased, 2 written",
+    "    …",
+    "    exact Relation.ReflTransGen.head m1 (Relation.ReflTransGen.head m2 (… Relation.ReflTransGen.refl))",
+    "  · intro z hz",
+    "    obtain ⟨hb0, hs0⟩ := hinv {z} hz",
+    "    have hz0 := hb0 z (Multiset.mem_singleton_self z)",
+    "    rw [Multiset.sum_singleton] at hs0",
+    "    show z ≤ 14",
+    "    omega",
   ].join("\n");
 }
 
