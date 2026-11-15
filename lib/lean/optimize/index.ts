@@ -7,8 +7,10 @@
  */
 import { CancelledError } from "../../jobs";
 import { looksGeometric } from "../geometry";
+import { splitLets, squash, stripParens, topIndex } from "../combinatorics/lets";
 import { summarizeFailure } from "../feedback";
 import type { LeanVerifyResult } from "../sandbox";
+import { splitTopLevelColon } from "../statement-prop";
 import { openRunner, scriptSource } from "../tactic-runner";
 import { proveOptimization } from "./prove";
 import { colourFamily, familyEvalCommand, familyScript, maxFamily, parseFamily, readFamilyGraph } from "./family";
@@ -18,11 +20,36 @@ import { oddtownProof, oddtownShape } from "./oddtown";
 import { F_TACTICS, findMoves, invariantFault, parityBounds, processEvalCommand, processScript, processShape, readProcessData, type ProcessShape } from "./process";
 import { vennOptimize } from "./venn";
 
+/** The statement itself, after its binders and lets, is a conjunction with an `∃ …` part and a `∀ …` part: a value attained and its bound. */
+function attainedAndBound(theoremType: string): boolean {
+  const goal = splitTopLevelColon(theoremType)?.goal ?? theoremType;
+  let rest = stripParens(squash(splitLets(`: ${goal}`)?.body ?? goal));
+  const parts: string[] = [];
+  for (let i = topIndex(rest, "∧"); i >= 0; i = topIndex(rest, "∧")) {
+    parts.push(stripParens(rest.slice(0, i)));
+    rest = rest.slice(i + 1);
+  }
+  parts.push(stripParens(rest));
+  return parts.length >= 2 && parts.some((x) => x.startsWith("∃")) && parts.some((x) => x.startsWith("∀"));
+}
+
+/**
+ * How well this prover fits a statement (the stage table, lib/lean/prover-stages.ts, runs the
+ * provers best fit first): 2 = it states an extremum — IsGreatest / IsLeast / upper- or
+ * lowerBounds, or the statement is "attained ∧ bounded" itself —, 1 = only an ∃ and a ∀ joined
+ * by ∧ somewhere with an inequality (the lets of an orbit count read like that too), 0 = not for
+ * it (ℝ / ℚ / ℂ, coordinates).
+ */
+export function optimizationFit(theoremType: string): 0 | 1 | 2 {
+  if (looksGeometric(theoremType) || /ℝ|ℚ|ℂ/.test(theoremType)) return 0;
+  if (/\b(IsGreatest|IsLeast|upperBounds|lowerBounds)\b/.test(theoremType)) return 2;
+  if (!(/∃[\s\S]*∧[\s\S]*∀|∀[\s\S]*∧[\s\S]*∃/.test(theoremType) && /[≤≥<>]/.test(theoremType))) return 0;
+  return attainedAndBound(theoremType) ? 2 : 1;
+}
+
 /** IsGreatest / IsLeast / bounds, or a conjunction of an ∃ and a ∀ (attained + bound). */
 export function looksOptimization(theoremType: string): boolean {
-  if (looksGeometric(theoremType) || /ℝ|ℚ|ℂ/.test(theoremType)) return false;
-  if (/\b(IsGreatest|IsLeast|upperBounds|lowerBounds)\b/.test(theoremType)) return true;
-  return /∃[\s\S]*∧[\s\S]*∀|∀[\s\S]*∧[\s\S]*∃/.test(theoremType) && /[≤≥<>]/.test(theoremType);
+  return optimizationFit(theoremType) > 0;
 }
 
 /** k-sets of D, any two meet: Erdős–Ko–Rado from Mathlib (ekr.ts), with D listed by Lean. */

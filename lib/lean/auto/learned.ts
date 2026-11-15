@@ -15,6 +15,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import path from "node:path";
 import { isInaccessible, parseGoal, type GoalState, type Hyp } from "../geometry/goal";
 import { evalMode } from "../../eval-mode";
+import { PROGRAM_STRATEGIES } from "../../types";
 
 export interface LearnedRule {
   id: string;
@@ -285,12 +286,12 @@ export function learnedTactics(st: GoalState, opens: string[] = []): LearnedTact
 }
 
 /** Strategies whose proofs the program finds again by itself: nothing to learn from them. */
-const PROGRAM_STRATEGIES = new Set(["auto", "geometry", "induction", "optimize", "combinatorics", "order", "bounded", "hammer", "trivial"]);
+const PROGRAM_ROUTES: ReadonlySet<string> = new Set(PROGRAM_STRATEGIES);
 
 export function worthLearning(strategy: string | undefined, source: string | undefined): boolean {
   if (process.env.AUTO_LEARN === "off") return false;
   if (source?.startsWith("bench:")) return false;
-  return !PROGRAM_STRATEGIES.has(strategy ?? "");
+  return !PROGRAM_ROUTES.has(strategy ?? "");
 }
 
 /**

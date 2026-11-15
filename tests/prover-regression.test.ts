@@ -192,6 +192,41 @@ describe("regressionReport", () => {
     expect(md).toContain("**没有退化。**");
   });
 
+  it("shows where the time goes stage by stage, when the run recorded it", () => {
+    // runs made before the stage table have no such record: no section
+    expect(regressionReport(fixture, [first])).not.toContain("时间花在哪一级");
+    const stages: Record<string, CaseRow["stages"]> = {
+      "geo-a": [
+        { id: "hammer", ms: 20_000, outcome: "failed" },
+        { id: "trivial", ms: 40_000, outcome: "failed" },
+        { id: "geometry", ms: 140_000, outcome: "proved" },
+      ],
+      "opt-a": [
+        { id: "hammer", ms: 5_000, outcome: "failed" },
+        { id: "trivial", ms: 5_000, outcome: "failed" },
+        { id: "optimize", ms: 20_000, outcome: "proved" },
+      ],
+      "open-a": [
+        { id: "hammer", ms: 30_000, outcome: "failed" },
+        { id: "trivial", ms: 300_000, outcome: "failed" },
+        { id: "induction", ms: 100_000, outcome: "failed" },
+        { id: "auto", ms: 0, outcome: "skipped" },
+      ],
+    };
+    const md = regressionReport(fixture, [{ ...first, rows: first.rows.map((r) => (stages[r.id] ? { ...r, stages: stages[r.id] } : r)) }]);
+    expect(md).toContain("### 时间花在哪一级");
+    // 660 s in all, 500 s of it in stages that proved nothing
+    expect(md).toContain("3 条有分阶段记录：各阶段合计 11.0 分钟，其中 8.3 分钟（76%）花在没证出的阶段上。");
+    expect(md).toMatch(/\| hammer \| 3 \| 0 \| 0\.0 秒 \| 55 秒 \| open-a（30 秒） \| 0 \|/);
+    expect(md).toMatch(/\| trivial \| 3 \| 0 \| 0\.0 秒 \| 5\.8 分钟 \| open-a（5\.0 分钟） \| 0 \|/);
+    expect(md).toMatch(/\| geometry \| 1 \| 1 \| 2\.3 分钟 \| 0\.0 秒 \| — \| 0 \|/);
+    expect(md).toMatch(/\| auto \| 0 \| 0 \| 0\.0 秒 \| 0\.0 秒 \| — \| 1 \|/);
+    // the stages in the table's order
+    const section = md.slice(md.indexOf("### 时间花在哪一级"));
+    expect(section.indexOf("| hammer | 3 |")).toBeLessThan(section.indexOf("| geometry | 1 |"));
+    expect(section.indexOf("| induction | 1 |")).toBeLessThan(section.indexOf("| optimize | 1 |"));
+  });
+
   it("names the cases a partial run left out", () => {
     const md = regressionReport(fixture, [{ ...first, rows: first.rows.slice(0, 2), meta: { ...first.meta, selected: 2 } }]);
     expect(md).toContain("2 条用例（清单共 7 条）");

@@ -72,6 +72,8 @@ export interface TrivialProofOptions {
    * has exactly this type.
    */
   expectedSignature?: string;
+  /** No further tactic is started after this time (ms since the epoch): eleven verifications at two minutes each are otherwise 22 minutes. */
+  deadline?: number;
 }
 
 /**
@@ -94,7 +96,8 @@ export async function tryTrivialProof(
   useMathlib: boolean,
   options: TrivialProofOptions = {},
 ): Promise<{ tactic: string; source: string; log: string; verification: LeanVerifyResult } | null> {
-  for (const tactic of TRIVIAL_TACTICS) {
+  for (const [i, tactic] of TRIVIAL_TACTICS.entries()) {
+    if (i > 0 && options.deadline !== undefined && Date.now() > options.deadline) return null;
     const source = assembleLeanSource({
       theoremName,
       theoremType,

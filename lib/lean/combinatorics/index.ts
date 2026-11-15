@@ -18,6 +18,7 @@ import { summarizeFailure } from "../feedback";
 import type { LeanVerifyResult } from "../sandbox";
 import { openRunner, scriptSource } from "../tactic-runner";
 import { closeFinite, introAll } from "./finite";
+import { splitLets, squash, stripParens } from "./lets";
 import { orbitEvalCommand, orbitScript, orbitShape, parseReps } from "./orbit";
 import { circularScript, circularShape } from "./circular";
 import { vennScript } from "./venn";
@@ -27,6 +28,24 @@ export type CombinatoricsMethod = "orbits" | "circular" | "venn" | "finite";
 export function looksCombinatorial(theoremType: string): boolean {
   if (looksGeometric(theoremType)) return false;
   return /\b(card|ncard|Fintype|Finset|Equiv\.Perm|choose|Fin \d+|List\.count|Multiset)\b|\.card\b/.test(theoremType);
+}
+
+/** The statement (no binders), after its lets, is a count: `Set.ncard … = N`, `Nat.card …`, `Fintype.card …`, `(…).card = N`, `S.card = N`. */
+function assertsCount(theoremType: string): boolean {
+  const t = squash(theoremType);
+  if (!t.startsWith(":")) return false;
+  const body = stripParens(splitLets(t)?.body ?? t.slice(1));
+  return /^(Set\.ncard|Nat\.card|Fintype\.card|Finset\.card) /.test(body) || /^(\(.+\)|[A-Za-z_][\w']*)\.card = \(?\d+(?: : ℕ\))?$/.test(body);
+}
+
+/**
+ * How well this prover fits a statement (the stage table, lib/lean/prover-stages.ts, runs the
+ * provers best fit first): 2 = the statement is a count (seatings round a table, choices up to
+ * rotation, the card of a filter …), 1 = only the vocabulary of finite sets, 0 = not for it.
+ */
+export function combinatorialFit(theoremType: string): 0 | 1 | 2 {
+  if (!looksCombinatorial(theoremType)) return 0;
+  return circularShape(theoremType) || orbitShape(theoremType) || assertsCount(theoremType) ? 2 : 1;
 }
 
 export interface CombinatoricsProof {

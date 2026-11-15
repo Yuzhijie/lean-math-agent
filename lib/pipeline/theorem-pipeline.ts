@@ -1,8 +1,10 @@
 /**
  * Theorem pipeline shared by `/api/solve` and `/api/solve-stream`.
  *
- *   NL solution → autoformalize (statement lock) → trivial one-liners
- *   → whole-proof prover loop (sample k, verify, repair with Lean feedback)
+ *   NL solution → autoformalize (statement lock)
+ *   → the stages that need no model (lib/lean/prover-stages.ts — the table the Lean attempt
+ *     runs too: automation, the program's scripts and provers best fit first, the tactic search)
+ *   → memory replay → whole-proof prover loop (sample k, verify, repair with Lean feedback)
  *   → [multi-agent] method enumeration → plan → preflight
  *   → best-first stepwise search → final verification
  *
@@ -16,7 +18,6 @@ import { assembleLeanSource } from "../lean/assemble";
 import { verifyLeanSource } from "../lean/sandbox";
 import { validateTheoremStatement } from "../lean/sanitize";
 import { sorryReport } from "../lean/sorry-gate";
-import { tryTrivialProof } from "../lean/trivial-proof";
 import { autoformalize, normalizeTheoremType } from "../llm/autoformalize";
 import { enumerateMethods } from "../llm/enumerate";
 import { generateNLSolution, generateNLTheoremSolution } from "../llm/nl-solution";
@@ -26,13 +27,9 @@ import { costCapReached, scopeCostCap } from "../llm/usage-tracker";
 import { CancelledError, throwIfCancelled } from "../jobs";
 import { buildProverContext, rememberVerifiedProof } from "../prover/context";
 import { proveBySketch, sketchEnabled } from "../prover/sketch";
+import { runProverStages, stageOf } from "../lean/prover-stages";
+import { hugePower } from "../compute/nat-expr";
 import { proveWholeTheorem, wholeProofEnabled } from "../prover/whole-proof";
-import { hammerTheorem } from "../lean/hammer";
-import { geometryProof, looksGeometric } from "../lean/geometry";
-import { inductionProof, looksInductive } from "../lean/induction";
-import { combinatoricsProof, looksCombinatorial } from "../lean/combinatorics";
-import { looksOptimization, optimizationProof } from "../lean/optimize";
-import { autoProof } from "../lean/auto";
 import { rememberRepair } from "../lean/proof-memory";
 import { replayRecalled } from "../prover/replay";
 import { lt } from "../llm/output-locale";
@@ -214,168 +211,64 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
   const { budget, preset } = budgetPreset(opts.budget);
   emit("budget", lt(`搜索预算：${budget}`, `Search budget: ${budget}`));
 
-  // ── 3. Automation first: the hammer on the root goal (REPL tactic mode),
-  //       then the single-tactic probes that also work in spawn mode ──────
+  // ── 3. Without a model: the stages of lib/lean/prover-stages.ts — the automation cascade and
+  //       single tactics, the scripts and provers the program writes (best fit first), the
+  //       tactic search — within their time budget ─────────────────────────────────────────
   try {
-    let trivial: { tactic: string; source: string; log: string; verification: Awaited<ReturnType<typeof verifyLeanSource>> } | null = null;
-    let strategy: "trivial" | "hammer" = "trivial";
-    if (process.env.LEAN_SERVER_MODE !== "spawn") {
-      const rootSource = assembleLeanSource({ theoremName, theoremType, stepCodes: ["sorry"], useMathlib });
-      const hit = await hammerTheorem(rootSource, { useMathlib });
-      if (hit) {
-        const source = assembleLeanSource({ theoremName, theoremType, stepCodes: [hit.tactic], useMathlib });
-        const verification = await verifyLeanSource(session.id, source, { theoremName, expectedSignature: frozenSignature });
-        if (verification.ok) {
-          trivial = { tactic: hit.tactic, source, log: verification.log, verification };
-          strategy = "hammer";
-        }
-      }
-    }
-    trivial ??= await tryTrivialProof(session.id, theoremName, theoremType, useMathlib, {
-      expectedSignature: frozenSignature,
-    });
-    if (trivial) {
-      emit("trivial_proof", lt(`✅ 自动化策略直接证明 (${trivial.tactic})`, `✅ Proved directly by an automation tactic (${trivial.tactic})`));
-      void rememberVerifiedProof({ theoremName, theoremType, tactics: trivial.tactic, strategy, problemText: session.problem_text });
+    const stages = await runProverStages(
+      { sessionId: session.id, theoremName, theoremType, expectedSignature: frozenSignature, useMathlib, huge: !!hugePower(theoremType) },
+      {
+        checkpoint: throwIfCancelled,
+        onStage: (e) => {
+          const texts = e.stage.texts();
+          if (e.type === "start") {
+            if (texts.trying) emit(e.stage.progress, texts.trying);
+          } else if (e.type === "proved") emit(e.stage.progress, texts.passed(e.proof.tactics));
+          else if (e.type === "failed") {
+            // the automation fails without a line of its own, as it starts without one
+            if (texts.trying) emit(e.stage.progress, texts.failed(e.reason));
+          } else emit(e.stage.progress, lt("程序证明器合计的时间已用完，这一步没有再试", "The time the program's provers have together was used up; this step was not tried"));
+        },
+      },
+    );
+    if (stages.proof) {
+      const { strategy, source, tactics, verification, attempts } = stages.proof;
+      const texts = stageOf(strategy).texts();
+      void rememberVerifiedProof({ theoremName, theoremType, tactics, strategy, problemText: session.problem_text });
       const leanProofAttempt: LeanProofAttempt = {
         attempted: true,
         success: true,
-        formal_statement: trivial.source,
-        proof_code: trivial.source,
-        axioms: trivial.verification.axioms?.axioms,
-        statement_locked: frozenSignature !== undefined && trivial.verification.signatureMatch === true,
-        verifier: trivial.verification.backend,
+        formal_statement: source,
+        proof_code: source,
+        axioms: verification.axioms?.axioms,
+        statement_locked: frozenSignature !== undefined && verification.signatureMatch === true,
+        verifier: verification.backend,
         strategy,
-        attempts: 1,
+        attempts,
       };
-      updateSession(session.id, {
-        assembled_lean: trivial.source,
-        build_status: "ok",
-        pipeline_stage: "complete",
-        lean_proof_attempt: leanProofAttempt,
-      });
-      emit("complete", lt("✅ 完全形式化验证通过（自动化策略）", "✅ Fully formally verified (automation tactic)"));
+      updateSession(session.id, { assembled_lean: source, build_status: "ok", pipeline_stage: "complete", lean_proof_attempt: leanProofAttempt });
+      emit("complete", texts.done);
       return {
         status: 200,
         body: {
           ...baseBody,
           nl_solution: nlSolution,
           lean_proof_attempt: leanProofAttempt,
-          method: { id: strategy, title: lt(`自动化策略 (${trivial.tactic})`, `Automation tactic (${trivial.tactic})`), category: "other" },
+          method: { id: strategy, title: texts.title(tactics), category: "other" },
           steps: [],
           sorry_labels: [],
           fully_verified: true,
           build_status: "ok",
-          total_attempts: 1,
+          total_attempts: attempts,
           sorry_report: { fully_verified: true, summary: lt("✅ 完全形式化验证通过", "✅ Fully formally verified"), details: [] },
-          assembled_lean: trivial.source,
-          build_log: trivial.log,
+          assembled_lean: source,
+          build_log: verification.log,
         },
       };
     }
-  } catch {
-    // Lean unavailable or similar — continue with the LLM stages.
-  }
-
-  // ── 3a. Proofs the program writes itself (no model calls): coordinate geometry, induction ──
-  const programProvers = [
-    {
-      strategy: "geometry" as const,
-      applies: looksGeometric(theoremType),
-      prove: () => geometryProof({ sessionId: session.id, theoremName, theoremType, expectedSignature: frozenSignature, useMathlib }),
-      trying: lt("尝试程序写的坐标代数证明（SymPy 求系数）", "Trying an algebraic proof in coordinates written by the program (coefficients from SymPy)"),
-      passed: lt("✅ 程序写出的坐标代数证明通过 Lean 检查", "✅ The program's algebraic proof in coordinates passed Lean"),
-      failed: (r: string) => lt(`坐标代数证明没有成功：${r}`, `The coordinate proof did not work: ${r}`),
-      title: lt("坐标代数（程序写的证明）", "Coordinate algebra (proof written by the program)"),
-      done: lt("✅ 完全形式化验证通过（坐标代数）", "✅ Fully formally verified (coordinate algebra)"),
-    },
-    {
-      strategy: "induction" as const,
-      applies: looksInductive(theoremType),
-      prove: () => inductionProof({ sessionId: session.id, theoremName, theoremType, expectedSignature: frozenSignature, useMathlib }),
-      trying: lt("尝试程序写的归纳证明（选归纳方式，逐个关闭奠基与归纳步）", "Trying an induction proof written by the program (scheme chosen, base and step closed one by one)"),
-      passed: lt("✅ 程序写出的归纳证明通过 Lean 检查", "✅ The program's induction proof passed Lean"),
-      failed: (r: string) => lt(`归纳证明没有成功：${r}`, `The induction proof did not work: ${r}`),
-      title: lt("数学归纳法（程序写的证明）", "Induction (proof written by the program)"),
-      done: lt("✅ 完全形式化验证通过（数学归纳法）", "✅ Fully formally verified (induction)"),
-    },
-    {
-      strategy: "optimize" as const,
-      applies: looksOptimization(theoremType),
-      prove: () => optimizationProof({ sessionId: session.id, theoremName, theoremType, expectedSignature: frozenSignature, useMathlib }),
-      trying: lt("尝试程序写的组合优化证明（Lean 自己找取到最值的例子，再在有界范围内逐一核对上下界）", "Trying an optimization proof written by the program (Lean finds an example attaining the value, then the bound is checked over a finite range)"),
-      passed: lt("✅ 程序写出的组合优化证明通过 Lean 检查", "✅ The program's optimization proof passed Lean"),
-      failed: (r: string) => lt(`组合优化证明没有成功：${r}`, `The optimization proof did not work: ${r}`),
-      title: lt("组合优化（程序写的证明）", "Optimization (proof written by the program)"),
-      done: lt("✅ 完全形式化验证通过（组合优化）", "✅ Fully formally verified (optimization)"),
-    },
-    {
-      strategy: "combinatorics" as const,
-      applies: looksCombinatorial(theoremType),
-      prove: () => combinatoricsProof({ sessionId: session.id, theoremName, theoremType, expectedSignature: frozenSignature, useMathlib }),
-      trying: lt("尝试程序写的组合证明（轨道代表元 / 韦恩图分区 / 有限枚举）", "Trying a combinatorial proof written by the program (orbit representatives / Venn regions / finite enumeration)"),
-      passed: lt("✅ 程序写出的组合证明通过 Lean 检查", "✅ The program's combinatorial proof passed Lean"),
-      failed: (r: string) => lt(`组合证明没有成功：${r}`, `The combinatorial proof did not work: ${r}`),
-      title: lt("组合计数（程序写的证明）", "Combinatorics (proof written by the program)"),
-      done: lt("✅ 完全形式化验证通过（组合计数）", "✅ Fully formally verified (combinatorics)"),
-    },
-    {
-      strategy: "auto" as const,
-      applies: !looksGeometric(theoremType),
-      prove: () => autoProof({ sessionId: session.id, theoremName, theoremType, expectedSignature: frozenSignature, useMathlib }),
-      trying: lt("尝试策略组合搜索（拆分目标、分情况、逐值检查，再用自动化策略收尾）", "Trying a search over tactic combinations (split the goal, cases, every value, then the automation closes each part)"),
-      passed: lt("✅ 策略组合搜索找到的证明通过 Lean 检查", "✅ The tactic-combination search found a proof that passed Lean"),
-      failed: (r: string) => lt(`策略组合搜索没有成功：${r}`, `The tactic-combination search did not work: ${r}`),
-      title: lt("策略组合搜索（程序找到的证明）", "Tactic-combination search (proof found by the program)"),
-      done: lt("✅ 完全形式化验证通过（策略组合搜索）", "✅ Fully formally verified (tactic-combination search)"),
-    },
-  ];
-  for (const pp of programProvers) {
-    if (!pp.applies) continue;
-    throwIfCancelled();
-    emit(pp.strategy, pp.trying);
-    try {
-      const out = await pp.prove();
-      if (out.proof) {
-        const proof = out.proof;
-        emit(pp.strategy, pp.passed);
-        void rememberVerifiedProof({ theoremName, theoremType, tactics: proof.tactics, strategy: pp.strategy, problemText: session.problem_text });
-        const leanProofAttempt: LeanProofAttempt = {
-          attempted: true,
-          success: true,
-          formal_statement: proof.source,
-          proof_code: proof.source,
-          axioms: proof.verification.axioms?.axioms,
-          statement_locked: frozenSignature !== undefined && proof.verification.signatureMatch === true,
-          verifier: proof.verification.backend,
-          strategy: pp.strategy,
-          attempts: 1,
-        };
-        updateSession(session.id, { assembled_lean: proof.source, build_status: "ok", pipeline_stage: "complete", lean_proof_attempt: leanProofAttempt });
-        emit("complete", pp.done);
-        return {
-          status: 200,
-          body: {
-            ...baseBody,
-            nl_solution: nlSolution,
-            lean_proof_attempt: leanProofAttempt,
-            method: { id: pp.strategy, title: pp.title, category: "other" },
-            steps: [],
-            sorry_labels: [],
-            fully_verified: true,
-            build_status: "ok",
-            total_attempts: 1,
-            sorry_report: { fully_verified: true, summary: lt("✅ 完全形式化验证通过", "✅ Fully formally verified"), details: [] },
-            assembled_lean: proof.source,
-            build_log: proof.verification.log,
-          },
-        };
-      }
-      emit(pp.strategy, pp.failed(out.reason));
-    } catch (e) {
-      if (e instanceof CancelledError) throw e;
-      // best effort
-    }
+  } catch (e) {
+    if (e instanceof CancelledError) throw e;
+    // Lean unavailable or similar — continue with the model's stages.
   }
 
   // Goal state at the initial `sorry` (also a preflight of the statement).

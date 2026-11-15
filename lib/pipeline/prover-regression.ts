@@ -16,10 +16,11 @@
  */
 import { z } from "zod";
 import { validateTheoremStatement } from "../lean/sanitize";
+import { PROGRAM_STRATEGIES, type ProgramStrategy } from "../types";
 
-/** The routes of proveWithoutModel (lib/pipeline/lean-attempt.ts), in the order they are tried. */
-export const ROUTES = ["hammer", "trivial", "order", "bounded", "geometry", "induction", "optimize", "combinatorics", "auto"] as const;
-export type Route = (typeof ROUTES)[number];
+/** The routes of proveWithoutModel: the stages of lib/lean/prover-stages.ts, in the table's order. */
+export const ROUTES = PROGRAM_STRATEGIES;
+export type Route = ProgramStrategy;
 
 /** A case that took longer than this is `slow`: left out of `--quick` (on the first run 24 of 160 cases, three quarters of the time). */
 export const SLOW_MS = 60_000;
@@ -101,6 +102,13 @@ export function selectCases(f: RegressionFixture, sel: CaseSelection = {}): Regr
 
 // ── a run ────────────────────────────────────────────────────────────────────────────────────
 
+/** One stage of one case: proved it, did not, or was left out because the stages' time together was used up. */
+export interface StageTime {
+  id: Route;
+  ms: number;
+  outcome: "proved" | "failed" | "skipped";
+}
+
 export interface CaseRow {
   id: string;
   /** what the fixture expected when the case ran */
@@ -110,6 +118,8 @@ export interface CaseRow {
   ms: number;
   /** what was tried and why it failed (the provers' own words), for a case that was not proved */
   tried?: string[];
+  /** the stages the statement went through, in order, with their time (lib/lean/prover-stages.ts; absent in runs before the stage table) */
+  stages?: StageTime[];
   /** the run itself failed (Lean not reachable, a prover threw) */
   error?: string;
   /** not proved at first, run again on a fresh Lean worker (the row is the second attempt when that one proved it) */
@@ -310,6 +320,32 @@ export function regressionReport(fixture: RegressionFixture, runs: RegressionRun
     ),
     "",
   );
+
+  // ── where the time goes, stage by stage
+  const staged = rows.filter((r) => r.stages?.length);
+  if (staged.length) {
+    const all = staged.flatMap((r) => r.stages!.map((s) => ({ ...s, case: r.id })));
+    const sum = (xs: { ms: number }[]) => xs.reduce((a, x) => a + x.ms, 0);
+    const wasted = sum(all.filter((s) => s.outcome === "failed"));
+    out.push("### 时间花在哪一级", "");
+    out.push(
+      `每条陈述按顺序过这些阶段（\`lib/lean/prover-stages.ts\`），第一个证出的就停。${staged.length} 条有分阶段记录：各阶段合计 ${secs(sum(all))}，其中 ${secs(wasted)}（${sum(all) ? Math.round((100 * wasted) / sum(all)) : 0}%）花在没证出的阶段上。`,
+      "",
+    );
+    out.push(
+      ...table(
+        ["阶段", "跑了", "证出", "证出的用时", "没证出的用时", "最慢的一次没证出", "总时间用完没跑"],
+        ROUTES.filter((id) => all.some((s) => s.id === id)).map((id) => {
+          const of = all.filter((s) => s.id === id);
+          const ok = of.filter((s) => s.outcome === "proved");
+          const no = of.filter((s) => s.outcome === "failed");
+          const worst = [...no].sort((a, b) => b.ms - a.ms)[0];
+          return [id, String(ok.length + no.length), String(ok.length), secs(sum(ok)), secs(sum(no)), worst ? `${worst.case}（${secs(worst.ms)}）` : "—", String(of.filter((s) => s.outcome === "skipped").length)];
+        }),
+      ),
+      "",
+    );
+  }
 
   // ── what did not pass
   const notOk = rows.filter((r) => verdictOf(r) !== "ok");

@@ -45,7 +45,8 @@ export async function runCase(c: RegressionCase): Promise<CaseRow> {
   try {
     const type = normalizeTheoremType(c.type);
     const r = await proveWithoutModel({ sessionId: `regress-${c.id}`, theoremName: c.name, theoremType: type, useMathlib: true, huge: !!hugePower(type) });
-    return r.proof ? { ...base, strategy: r.proof.strategy, ms: Date.now() - started } : { ...base, ms: Date.now() - started, tried: r.tried.map((t) => t.replace(/\s+/g, " ").slice(0, 400)) };
+    const stages = r.stages.map((x) => ({ id: x.id, ms: x.ms, outcome: x.outcome }));
+    return r.proof ? { ...base, strategy: r.proof.strategy, ms: Date.now() - started, stages } : { ...base, ms: Date.now() - started, tried: r.tried.map((t) => t.replace(/\s+/g, " ").slice(0, 400)), stages };
   } catch (e) {
     return { ...base, ms: Date.now() - started, error: (e instanceof Error ? e.message : String(e)).slice(0, 400) };
   }

@@ -243,6 +243,37 @@ describe("theorem pipeline: multi-agent methods and metrics", () => {
   });
 });
 
+describe("theorem pipeline: the stages that need no model", () => {
+  it("returns the automation's proof with its stage's words, before any model call", async () => {
+    const { tryTrivialProof } = await import("@/lib/lean/trivial-proof");
+    vi.mocked(tryTrivialProof).mockResolvedValueOnce({ tactic: "simp", source: `theorem problem ${TYPE} := by\n  simp`, log: "checked", verification: ok({ log: "checked" }) });
+    const { status, body } = await solve();
+    expect(status).toBe(200);
+    expect(body.fully_verified).toBe(true);
+    expect(body.lean_proof_attempt).toMatchObject({ success: true, strategy: "trivial", attempts: 1, statement_locked: true });
+    expect(body.method).toMatchObject({ id: "trivial", title: expect.stringContaining("simp") });
+    expect(body.assembled_lean).toContain("simp");
+    expect(body.build_log).toBe("checked");
+    expect(wholeMock).not.toHaveBeenCalled();
+    const events = body.pipeline_events as Array<{ stage: string; detail: string }>;
+    expect(events.some((e) => e.stage === "trivial_proof" && e.detail.includes("simp"))).toBe(true);
+    expect(events[events.length - 1]).toMatchObject({ stage: "complete" });
+    // the deadline the stage table gives the single tactics
+    expect(vi.mocked(tryTrivialProof).mock.calls[0][4]).toMatchObject({ expectedSignature: SIG, deadline: expect.any(Number) });
+  });
+
+  it("runs the table's stages in order and reports each prover that did not get there, then asks the model", async () => {
+    wholeMock.mockResolvedValue({ ok: true, source: WHOLE_SOURCE, tactics: "intro n\nsimp", verification: ok(), samples: 2, rounds: 1, llmCalls: 1, candidates: [], log: "ok", durationMs: 1 });
+    const { body } = await solve();
+    expect(body.lean_proof_attempt).toMatchObject({ strategy: "whole_proof" });
+    const stages = (body.pipeline_events as Array<{ stage: string; detail: string }>).map((e) => e.stage);
+    // ∀ n, n + 0 = n: the automation (silent when it fails), then the tactic search — started and reported — before the whole-proof loop
+    expect(stages.filter((s) => s === "auto").length).toBe(2);
+    expect(stages.indexOf("auto")).toBeLessThan(stages.indexOf("whole_proof"));
+    expect(stages).not.toContain("trivial_proof");
+  });
+});
+
 describe("theorem pipeline: memory replay", () => {
   it("proves the theorem with a remembered proof of a similar one before asking any model", async () => {
     const { rememberProof, resetProofMemoryCache } = await import("@/lib/lean/proof-memory");

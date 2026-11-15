@@ -10,9 +10,10 @@
  */
 import { matchAnswer, type Reference } from "./answer-match";
 import type { HeldoutProblem } from "./heldout";
+import { PROGRAM_STRATEGIES as PROGRAM_ROUTES } from "../types";
 
-/** The strategies the program runs without a model (lib/pipeline/lean-attempt.ts proveWithoutModel). */
-export const PROGRAM_STRATEGIES = new Set(["trivial", "hammer", "order", "bounded", "geometry", "induction", "optimize", "combinatorics", "auto"]);
+/** The strategies the program runs without a model (the stage table, lib/lean/prover-stages.ts). */
+export const PROGRAM_STRATEGIES: ReadonlySet<string> = new Set(PROGRAM_ROUTES);
 
 export interface EvalRow {
   id: string;
