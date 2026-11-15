@@ -97,6 +97,15 @@ describe("selecting template questions", () => {
   });
 });
 
+// What the mocked writer returns, different on every call by more than a tag: with a random
+// five-character tag (`in shop x7k2p`) two generated stems were 68% alike (3-gram similarity), 70%
+// and more — "too close", reworded or dropped — for about one pair in twenty, and a test that
+// expects two rounds then ran a third. Any two of the first eleven calls differ in all three words.
+const WHO = ["Mia", "Noah", "Zara", "Liam", "Aiko", "Omar", "Ruth", "Sven", "Priya", "Hugo", "Elif"];
+const WHAT = ["grapes", "marbles", "stickers", "pencils", "shells", "coins", "beads", "stamps", "buttons", "walnuts", "ribbons", "kites"];
+const WHERE = ["market", "garden", "library", "harbour", "kitchen", "school", "beach", "farm", "museum", "station", "bakery", "zoo", "park"];
+const scene = (i: number) => ({ who: WHO[i % WHO.length], what: WHAT[i % WHAT.length], where: WHERE[i % WHERE.length] });
+
 describe("POST /api/generate-problem with source bank", () => {
   const json = (body: unknown) => new Request("http://t/api/generate-problem", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
@@ -157,8 +166,8 @@ describe("POST /api/generate-problem with source bank", () => {
         if (sys.startsWith("You review generated")) return reply({ scores: [{ n: 1, score: 5, reason: "fits" }] });
         if (sys.startsWith("You solve math questions")) return reply({ answers: [{ n: 1, answer: "C" }] });
         writerPrompts.push(msgs[msgs.length - 1].content);
-        const k = Math.random().toString(36).slice(2, 7);
-        return reply({ questions: [{ stem: `Sam had 30 stickers in box ${k} and gave away 2/5. How many did he give?`, type: "multiple_choice", options: ["6", "10", "12", "15"], answer: "C", difficulty: 1 }] });
+        const { who, what, where } = scene(writerPrompts.length);
+        return reply({ questions: [{ stem: `${who} had 30 ${what} at the ${where} and gave away 2/5. How many did ${who} give?`, type: "multiple_choice", options: ["6", "10", "12", "15"], answer: "C", difficulty: 1 }] });
       }),
     );
     // Year 4 + Fractions: two bank questions match.
@@ -188,6 +197,7 @@ describe("POST /api/generate-problem with source bank", () => {
     process.env.LLM_CACHE_ENABLED = "false";
     resetGlobalCache();
     const reply = (content: unknown) => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }), { status: 200 });
+    let written = 0;
     vi.stubGlobal(
       "fetch",
       vi.fn(async (_u: string, init: RequestInit) => {
@@ -197,10 +207,10 @@ describe("POST /api/generate-problem with source bank", () => {
         if (sys.startsWith("You review generated")) return reply({ scores: [1, 2, 3].map((n) => ({ n, score: 5, reason: "fits" })) });
         // Only the first question's answer agrees: one of two passes in every round.
         if (sys.startsWith("You solve math questions")) return reply({ answers: [{ n: 1, answer: "C" }, { n: 2, answer: "A" }] });
-        const k = Math.random().toString(36).slice(2, 7);
+        const { who, what, where } = scene(written++);
         return reply({ questions: [
-          { stem: `Mia ate 2/5 of ${k.length * 6} grapes in shop ${k}. How many?`, type: "multiple_choice", options: ["6", "10", "12", "15"], answer: "C", difficulty: 2 },
-          { stem: `A rope of 40 m (${k}) is cut into quarters. How long is each piece?`, type: "multiple_choice", options: ["8 m", "10 m", "12 m", "20 m"], answer: "B", difficulty: 2 },
+          { stem: `${who} ate 2/5 of 30 ${what} at the ${where}. How many?`, type: "multiple_choice", options: ["6", "10", "12", "15"], answer: "C", difficulty: 2 },
+          { stem: `A rope of 40 m at the ${where} of ${who} is cut into quarters. How long is each piece?`, type: "multiple_choice", options: ["8 m", "10 m", "12 m", "20 m"], answer: "B", difficulty: 2 },
         ] });
       }),
     );
