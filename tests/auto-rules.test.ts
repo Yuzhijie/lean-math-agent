@@ -65,6 +65,9 @@ describe("rule table", () => {
     const sp = splitterEntries(parseGoal("x : ℕ\nh₀ : x < 5\n⊢ x ≠ 2 ∧ x < 9")!, (b) => `${b}${++k}`);
     expect(sp.find((s) => s.tactic === "interval_cases x")!.rule).toBe("interval");
     expect(sp.find((s) => s.tactic === "constructor")!.rule).toBe("constructor");
+    // a conjunction Lean printed over two lines (the same goal with longer names) is still split
+    const wrapped = splitterEntries(parseGoal("a_1 b_1 : ℝ\n⊢ 1 ≤ (a_1 ^ 2 + b_1 ^ 2) / (a_1 + b_1) ∧\n    ((a_1 ^ 2 + b_1 ^ 2) / (a_1 + b_1) = 1 ↔ a_1 = 1 ∧ b_1 = 1)")!, (b) => `${b}${++k}`);
+    expect(wrapped[0]).toMatchObject({ tactic: "constructor", rule: "constructor" });
   });
 
   it("a new strategy is one registered rule, placed before another or at the end of its kind", () => {

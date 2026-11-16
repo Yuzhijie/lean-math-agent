@@ -16,7 +16,8 @@ export function looksInductive(theoremType: string): boolean {
   // `∀ n ≥ 1, …` has no ℕ written: Lean infers it
   if (!/ℕ|∀/.test(theoremType)) return false;
   if (/EuclideanSpace|ℝ\s*×\s*ℝ|Filter|Tendsto|deriv|∫/.test(theoremType)) return false;
-  return /∑|∏|Finset\.(range|Icc)|∣|\^ \(?[a-z]|\([a-z] \+ [1-3]\)|≤ [a-z]\b|[a-z] ≥ \d/.test(theoremType);
+  // (a variable is any lower-case name, not only one letter: `(n_1 + 1)` is `(n + 1)` with another name)
+  return /∑|∏|Finset\.(range|Icc)|∣|\^ \(?[a-z]|\([a-z]\w* \+ [1-3]\)|≤ [a-z]\w*\b|[a-z]\w* ≥ \d/.test(theoremType);
 }
 
 export interface InductionProof {

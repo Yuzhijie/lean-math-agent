@@ -60,6 +60,8 @@ describe("the induction prover's steps", () => {
   it("takes statements over ℕ, not geometry", () => {
     expect(looksInductive(": ∀ n : ℕ, 7 ∣ 8 ^ n - 1")).toBe(true);
     expect(looksInductive(": ∀ n ≥ 1, (n : ℝ) ≤ 2 ^ (n - 1)")).toBe(true);
+    // a variable with a longer name (the reading form of `n₁` is `n_1`)
+    expect(looksInductive("(a_1 : ℕ → ℕ) (hs : ∀ n_1, a_1 (n_1 + 1) = a_1 n_1 + 2 * n_1 + 1) : ∀ n_1, a_1 n_1 = n_1 ^ 2")).toBe(true);
     expect(looksInductive("(A B : ℝ × ℝ) : A = B")).toBe(false);
     expect(looksInductive(": (2 : ℕ) + 2 = 4")).toBe(false);
   });

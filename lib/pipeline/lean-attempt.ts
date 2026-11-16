@@ -17,6 +17,7 @@
 import { autoformalize } from "../llm/autoformalize";
 import { lt } from "../llm/output-locale";
 import { orderConditions, orderHint } from "../lean/order-proof";
+import { readingForm } from "../lean/reading-form";
 import { runProverStages, triedTexts, type StageRun } from "../lean/prover-stages";
 import { checkLeanAvailable, type LeanVerifyResult } from "../lean/sandbox";
 import { scopeNotes, statementScope } from "../lean/statement-scope";
@@ -202,7 +203,8 @@ export function proofHints(theoremType: string, opts: { tooMany?: boolean; huge?
   }
   if (/\bncard\b|\.card\b/.test(t) && /Orbit|orbit|MulAction|Rot\b|Ref\b|rotat|reflect/.test(t)) hints.push(orbitHint());
   if (/Relation\.ReflTransGen/.test(t) && /Multiset/.test(t)) hints.push(processHint());
-  const orders = orderConditions(t);
+  // recognised in the form the provers read (`n ≥ B` is `B ≤ n` there): the orders do not depend on the spelling
+  const orders = orderConditions(readingForm(theoremType).type.replace(/^\s*:\s*/, ""));
   if (orders) hints.push(orderHint(orders));
   if (/∣/.test(t) && /\(\s*\w+\s*:\s*(ℕ|ℤ|Nat|Int)\s*\)|∀\s*\w+\s*:\s*(ℕ|ℤ)/.test(t) && /↔|∃/.test(t)) {
     hints.push(

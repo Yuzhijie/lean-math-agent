@@ -34,6 +34,7 @@
     "proofs:eval": "tsx scripts/proofs-eval.ts",
     "lean:recheck": "tsx scripts/lean-recheck.ts",
     "lean:regress": "tsx scripts/provers-regress.ts",
+    "lean:variants": "tsx scripts/provers-variants.ts",
     "lean:renames": "python3 scripts/mathlib_renames.py",
     "auto:rules": "tsx scripts/auto-rules.ts",
     "auto:learn": "tsx scripts/auto-learn.ts",

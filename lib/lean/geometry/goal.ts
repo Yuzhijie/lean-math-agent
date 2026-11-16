@@ -1,6 +1,12 @@
 /**
  * A goal as the REPL prints it — hypotheses `names : type` (long types continue on indented
  * lines; let-bound ones end in `:= value`) and `⊢ target` — split into its parts.
+ *
+ * Lean breaks a term that is longer than the line (120 characters), wherever it fits: after a
+ * `∧`, inside a sum. Where it breaks depends on how long the names are, not on what is said — so
+ * the parts come back on one line each (every run of white space one space): a rule that looks
+ * for ` ∧ ` finds it whether the goal was `(d e f : ℝ)` or `(a_1 b_1 c_1 : ℝ)` (measured by
+ * `npm run lean:variants`: the AM–GM statement with longer names was not split at its `∧`).
  */
 export interface Hyp {
   names: string[];
@@ -14,12 +20,15 @@ export interface GoalState {
   target: string;
 }
 
+/** A printed term on one line: a line break and its indentation are one space. */
+const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
+
 export function parseGoal(text: string): GoalState | null {
   // a goal made by `refine ⟨?_, ?_⟩` / `constructor` starts with its tag: `case refine_1`
   const t = text.replace(/\r/g, "").replace(/^case [^\n]*\n/, "");
   const at = t.indexOf("⊢");
   if (at < 0 || t.indexOf("⊢", at + 1) >= 0) return null;
-  const target = t.slice(at + 1).trim();
+  const target = oneLine(t.slice(at + 1));
   const lines: string[] = [];
   for (const raw of t.slice(0, at).split("\n")) {
     if (!raw.trim()) continue;
@@ -36,9 +45,9 @@ export function parseGoal(text: string): GoalState | null {
     const def = splitTopLevel(type, ":=");
     if (def) {
       type = def[0];
-      value = def[1].trim();
+      value = oneLine(def[1]);
     }
-    hyps.push({ names, type: type.trim(), ...(value !== undefined ? { value } : {}) });
+    hyps.push({ names, type: oneLine(type), ...(value !== undefined ? { value } : {}) });
   }
   return { hyps, target };
 }

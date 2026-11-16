@@ -256,6 +256,76 @@ describe("running the stages", () => {
     expect(m.auto.mock.calls[0][0].timeLimitMs).toBeLessThanOrEqual(100_000);
   });
 
+  it("runs one route alone, or every route but one (lean:variants: the recorded route, then the others)", async () => {
+    const alone = await runProverStages(st(EXTREMUM), { only: ["optimize"] });
+    expect(alone.runs.map((x) => `${x.id}:${x.outcome}`)).toEqual(["optimize:failed"]);
+    expect(m.hammerTheorem).not.toHaveBeenCalled();
+    expect(m.ind).not.toHaveBeenCalled();
+    // a route that does not take the statement runs nothing
+    expect((await runProverStages(st(PLAIN), { only: ["geometry"] })).runs).toEqual([]);
+
+    m.opt.mockClear();
+    const others = await runProverStages(st(EXTREMUM), { except: ["optimize"] });
+    expect(others.runs.map((x) => x.id)).toEqual(["hammer", "trivial", "induction", "combinatorics", "auto"]);
+    expect(m.opt).not.toHaveBeenCalled();
+  });
+
+  describe("a statement written another way (the reading form)", () => {
+    const WRITTEN = "(k : ℕ) : ∀ n' : ℕ, n' ≥ 5 + k → 2 ^ n' > n' ^ 2";
+    const READ = "(k : ℕ) : ∀ o : ℕ, 5 + k ≤ o → o ^ 2 < 2 ^ o";
+    const found = { proof: { verification: okVerify, source: `import Mathlib\n\ntheorem t ${READ} := by\n  intro o ho\n  induction o, ho using Nat.le_induction with\n  | base => simp\n  | succ m hm ih => omega\n`, tactics: "intro o ho\ninduction o, ho using Nat.le_induction with\n| base => simp\n| succ m hm ih => omega" }, reason: "" };
+
+    it("the provers read it in one form; the cascade and the single tactics get it as written", async () => {
+      await runProverStages(st(WRITTEN, { expectedSignature: "sig" }));
+      expect(m.hammerTheorem.mock.calls[0][0]).toContain(`theorem t ${WRITTEN} := by`);
+      expect(m.tryTrivialProof.mock.calls[0][2]).toBe(WRITTEN);
+      expect(m.ind.mock.calls[0][0]).toMatchObject({ theoremType: READ, expectedSignature: undefined });
+      expect(m.auto.mock.calls[0][0]).toMatchObject({ theoremType: READ });
+      // a statement already written that way goes through as it is
+      m.ind.mockClear();
+      await runProverStages(st(READ, { expectedSignature: "sig" }));
+      expect(m.ind.mock.calls[0][0]).toMatchObject({ theoremType: READ, expectedSignature: "sig" });
+    });
+
+    it("a proof of the reading form is checked against the statement as written: the same script, the statement's names", async () => {
+      m.ind.mockResolvedValue(found);
+      m.verifyLeanSource.mockResolvedValue(okVerify);
+      const r = await runProverStages(st(WRITTEN, { expectedSignature: "sig" }), { only: ["induction"] });
+      expect(r.proof?.strategy).toBe("induction");
+      expect(r.proof?.source).toBe(`import Mathlib\n\ntheorem t ${WRITTEN} := by\n  intro n' ho\n  induction n', ho using Nat.le_induction with\n  | base => simp\n  | succ m hm ih => omega\n`);
+      expect(r.proof?.tactics).toBe("intro n' ho\ninduction n', ho using Nat.le_induction with\n| base => simp\n| succ m hm ih => omega");
+      expect(m.verifyLeanSource).toHaveBeenCalledTimes(1);
+      expect(m.verifyLeanSource.mock.calls[0][1]).toBe(r.proof?.source);
+      expect(m.verifyLeanSource.mock.calls[0][2]).toEqual({ theoremName: "t", expectedSignature: "sig" });
+    });
+
+    it("when the script does not run there, the reading form is proved inside and the statement concluded from it", async () => {
+      m.ind.mockResolvedValue(found);
+      m.verifyLeanSource.mockResolvedValueOnce({ ok: false, log: "error" }).mockResolvedValue(okVerify);
+      const r = await runProverStages(st(WRITTEN), { only: ["induction"] });
+      expect(r.proof?.tactics).toBe(
+        ["have reading : ∀ (k : ℕ), ∀ n' : ℕ, 5 + k ≤ n' → n' ^ 2 < 2 ^ n' := by", "  intro k", "  intro n' ho", "  induction n', ho using Nat.le_induction with", "  | base => simp", "  | succ m hm ih => omega", "exact reading k"].join("\n"),
+      );
+      expect(r.proof?.source).toContain(`theorem t ${WRITTEN} := by\n  have reading : `);
+      expect(m.verifyLeanSource).toHaveBeenCalledTimes(2);
+    });
+
+    it("a proof that Lean does not accept for the statement as written is no proof: the next stage runs", async () => {
+      m.ind.mockResolvedValue(found);
+      const r = await runProverStages(st(WRITTEN), { phases: ["prover", "fallback"] });
+      expect(r.proof).toBeUndefined();
+      expect(withOutputLocale("zh-CN", () => r.runs.find((x) => x.id === "induction"))).toMatchObject({ outcome: "failed" });
+      expect(r.runs.find((x) => x.id === "induction")?.reason).toMatch(/carry over|搬回/);
+      expect(m.auto).toHaveBeenCalled();
+    });
+
+    it("the order of the stages is decided on what the provers read", () => {
+      // `≥` at the end: the bounded-minimum script reads `649 ≤ m`
+      expect(plan(": ((2025 : ℤ) ∣ ((649 : ℤ)^2 - 1)) ∧ ∀ m' : ℕ, m' > 1 → (2025 : ℤ) ∣ ((m' : ℤ)^2 - 1) → m' ≥ 649")).toContain("bounded");
+      expect(plan(": IsLeast {n : ℕ | n > 0 ∧ (3 : ℕ) ^ 5 ∣ (2 : ℕ) ^ n - 1} 162", { huge: true })).toEqual(["order"]);
+    });
+  });
+
   it("hands on what a prover found against the statement", async () => {
     m.opt.mockResolvedValue({ reason: "9 members", counterexample: "9 > 8: {1}, {2}, …" });
     const r = await runProverStages(st(EXTREMUM));

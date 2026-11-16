@@ -50,10 +50,22 @@ describe("goal states", () => {
   it("splits hypotheses (continued lines, let values) and the target", () => {
     const g = parseGoal("x y : ℝ\nh :\n  √(x ^ 2) =\n    y\nA : ℝ × ℝ := (0, 0)\n⊢ x = y");
     expect(g?.hyps.map((h) => h.names)).toEqual([["x", "y"], ["h"], ["A"]]);
-    expect(g?.hyps[1].type.replace(/\s+/g, " ")).toBe("√(x ^ 2) = y");
+    // a term Lean broke over lines comes back on one
+    expect(g?.hyps[1].type).toBe("√(x ^ 2) = y");
     expect(g?.hyps[2]).toMatchObject({ type: "ℝ × ℝ", value: "(0, 0)" });
     expect(g?.target).toBe("x = y");
     expect(parseGoal("case refine_1\nx : ℝ\n⊢ x = 1")?.hyps).toEqual([{ names: ["x"], type: "ℝ" }]);
+  });
+
+  it("reads a goal the same whatever line Lean broke it at (longer names, the same statement)", () => {
+    const short = parseGoal("d e f : ℝ\nha : 0 < d\nhabc : d * e * f = 1\n⊢ 1 ≤ (d ^ 2 + e ^ 2 + f ^ 2) / (d + e + f) ∧ ((d ^ 2 + e ^ 2 + f ^ 2) / (d + e + f) = 1 ↔ d = 1 ∧ e = 1 ∧ f = 1)")!;
+    const long = parseGoal(
+      "a_1 b_1 c_1 : ℝ\nha : 0 < a_1\nhabc : a_1 * b_1 * c_1 = 1\n⊢ 1 ≤ (a_1 ^ 2 + b_1 ^ 2 + c_1 ^ 2) / (a_1 + b_1 + c_1) ∧\n    ((a_1 ^ 2 + b_1 ^ 2 + c_1 ^ 2) / (a_1 + b_1 + c_1) = 1 ↔ a_1 = 1 ∧ b_1 = 1 ∧ c_1 = 1)",
+    )!;
+    const renamed = (t: string) => t.replace(/a_1/g, "d").replace(/b_1/g, "e").replace(/c_1/g, "f");
+    expect(renamed(long.target)).toBe(short.target);
+    expect(long.target).not.toMatch(/\n| {2}/);
+    expect(parseGoal("s : Finset ℕ :=\n  Finset.filter (fun x => x < 3)\n    (Finset.range 10)\n⊢ s.card = 3")?.hyps[0]).toEqual({ names: ["s"], type: "Finset ℕ", value: "Finset.filter (fun x => x < 3) (Finset.range 10)" });
   });
 });
 

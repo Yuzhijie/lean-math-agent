@@ -23,6 +23,14 @@
  * before the proofs of the scripts, the coordinate and the extremum prover and proved none of
  * those statements, now run after them (on 64 statements).
  *
+ * Reading form. The stages that read the statement — every one but the cascade and the single
+ * tactics — get it in the one way of writing the provers read (lib/lean/reading-form.ts: `≤`/`<`
+ * for `≥`/`>`, bounds in binders written out, bound names without primes and subscripts),
+ * so a prover written on one spelling proves the others; what it proves is then checked by Lean
+ * against the statement as written (inOriginal). A statement already in that form (nearly all:
+ * 166 of the 169 of the regression list) goes through as before, with no second check. Measured
+ * by `npm run lean:variants` (bench/VARIANTS.md).
+ *
  * Budget. Every stage has its own limit, and all of them together have PROVER_STAGES_BUDGET_MS
  * (default 15 minutes): a stage gets the smaller of its limit and what is left, and a stage there
  * is no time left for is recorded as skipped — what was tried and what was not is always said.
@@ -39,6 +47,7 @@ import { hammerTheorem } from "./hammer";
 import { inductionProof, looksInductive } from "./induction";
 import { optimizationFit, optimizationProof } from "./optimize";
 import { boundedMinScripts, orderProofScripts } from "./order-proof";
+import { bridgeBody, originalSource, readingForm, scriptInOriginalNames, unindent, type ReadingForm } from "./reading-form";
 import { verifyLeanSource, type LeanVerifyResult } from "./sandbox";
 import { tryTrivialProof } from "./trivial-proof";
 
@@ -349,9 +358,46 @@ function rank(stage: ProverStage, fit: number): number {
   return fit === 2 && stage.beforeSingleTactics ? 2 : 4;
 }
 
+/** Whether a stage reads the statement (its text, the goals Lean prints): then it gets the reading form. */
+const readsStatement = (stage: ProverStage) => stage.phase !== "cascade" && stage.phase !== "tactics";
+
+/** The statement as the reading stages get it (itself when it is already written that way). */
+function readingStatement(s: StageStatement): { statement: StageStatement; form: ReadingForm } {
+  const form = readingForm(s.theoremType);
+  // the signature Lean prints for the reading form is not the statement's: it is checked when the proof is brought back
+  return { form, statement: form.changed ? { ...s, theoremType: form.type, expectedSignature: undefined } : s };
+}
+
+/**
+ * A proof of the reading form, as a proof of the statement as written: the same script with the
+ * statement's own names; when that does not run (a step matches the reading form's spelling), the
+ * reading form proved inside and the statement concluded from it. Lean checks either.
+ */
+async function inOriginal(s: StageStatement, form: ReadingForm, proof: StageProof): Promise<StageResult> {
+  const check = async (source: string, tactics: string): Promise<StageResult | undefined> => {
+    const v = await verifyLeanSource(s.sessionId, source, { theoremName: s.theoremName, expectedSignature: s.expectedSignature });
+    return v.ok ? { proof: { verification: v, source, tactics, attempts: proof.attempts } } : undefined;
+  };
+  const head = `theorem ${s.theoremName} ${s.theoremType} := by\n`;
+  // as the prover assembled it (its options, its opens); else assembled anew
+  const direct =
+    originalSource(proof.source, s.theoremName, s.theoremType, form) ??
+    (() => {
+      const tactics = scriptInOriginalNames(proof.tactics, form);
+      return { source: assembleLeanSource({ theoremName: s.theoremName, theoremType: s.theoremType, stepCodes: [tactics], useMathlib: s.useMathlib, opens: s.opens }), tactics };
+    })();
+  const ok = await check(direct.source, direct.tactics);
+  if (ok) return ok;
+  const at = direct.source.indexOf(head);
+  const bridged = at < 0 ? undefined : bridgeBody(form, direct.source.slice(at + head.length));
+  const viaReading = bridged ? await check(`${direct.source.slice(0, at)}${head}${bridged}\n`, unindent(bridged)) : undefined;
+  return viaReading ?? { reason: lt("按规范写法证出了，但证明没能搬回原陈述", "proved as the provers read it, but the proof did not carry over to the statement as written") };
+}
+
 /** The stages that would run on a statement, in the order they would run. */
 export function planStages(s: StageStatement, phases?: readonly StagePhase[]): PlannedStage[] {
-  return PROVER_STAGES.map((stage, index) => ({ stage, fit: stage.fit(s), index }))
+  const reading = readingStatement(s).statement;
+  return PROVER_STAGES.map((stage, index) => ({ stage, fit: stage.fit(readsStatement(stage) ? reading : s), index }))
     .filter((x) => x.fit > 0 && (!phases || phases.includes(x.stage.phase)))
     .sort((a, b) => rank(a.stage, a.fit) - rank(b.stage, b.fit) || b.fit - a.fit || a.index - b.index)
     .map(({ stage, fit }) => ({ stage, fit: fit as 1 | 2 }));
@@ -384,6 +430,9 @@ export interface StagesOptions {
   budgetMs?: number;
   /** Only these phases (a sketch hole: the provers and the search — the sketch has run the automation on the hole). */
   phases?: readonly StagePhase[];
+  /** Only these stages / every stage but these (lean:variants: the route a statement is recorded for alone, then the others). */
+  only?: readonly ProgramStrategy[];
+  except?: readonly ProgramStrategy[];
   /** The budget is the only limit: a stage may use all that is left, past its own limit (a sketch hole's share of the sketch's time). */
   budgetOnly?: boolean;
   /** Called before every stage; throws to end the run (a cancelled job). */
@@ -403,7 +452,9 @@ export async function runProverStages(s: StageStatement, opts: StagesOptions = {
   const budgetMs = opts.budgetMs ?? stagesBudgetMs();
   const deadline = Date.now() + budgetMs;
   const runs: StageRun[] = [];
+  const reading = readingStatement(s);
   for (const { stage, fit } of planStages(s, opts.phases)) {
+    if ((opts.only && !opts.only.includes(stage.id)) || opts.except?.includes(stage.id)) continue;
     opts.checkpoint?.();
     const left = deadline - Date.now();
     if (left < stage.minMs) {
@@ -416,7 +467,9 @@ export async function runProverStages(s: StageStatement, opts: StagesOptions = {
     const started = Date.now();
     let r: StageResult;
     try {
-      r = await stage.run(s, stageBudget);
+      const reads = reading.form.changed && readsStatement(stage);
+      r = await stage.run(reads ? reading.statement : s, stageBudget);
+      if (reads && r.proof) r = await inOriginal(s, reading.form, r.proof);
     } catch (e) {
       if (e instanceof CancelledError) throw e;
       r = { reason: (e instanceof Error ? e.message : String(e)).split("\n")[0] };
