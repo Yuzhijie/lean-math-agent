@@ -99,7 +99,7 @@ export type PipelineStage =
  * The routes the program proves by without a model, in the order of the stage table
  * (lib/lean/prover-stages.ts, which refuses to load when its ids are not this list).
  */
-export const PROGRAM_STRATEGIES = ["hammer", "trivial", "order", "bounded", "geometry", "induction", "optimize", "combinatorics", "auto"] as const;
+export const PROGRAM_STRATEGIES = ["hammer", "trivial", "order", "bounded", "geometry", "induction", "optimize", "inequality", "combinatorics", "auto"] as const;
 export type ProgramStrategy = (typeof PROGRAM_STRATEGIES)[number];
 
 // ── Problem Type ─────────────────────────────────────────────────────

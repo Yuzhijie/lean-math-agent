@@ -49,6 +49,9 @@ const SUM = ": ∀ n : ℕ, ∑ i ∈ Finset.range (n + 1), i = n * (n + 1) / 2"
 const COORDS = ": ∀ (A B : ℝ × ℝ), A = (0, 0) → B = (3, 4) → Real.sqrt ((A.1 - B.1) ^ 2 + (A.2 - B.2) ^ 2) = 5";
 const ORDER = ": IsLeast {n : ℕ | 0 < n ∧ (3 : ℕ) ^ 5 ∣ (2 : ℕ) ^ n - 1} 162";
 const PLAIN = "(a b : ℝ) (ha : 0 < a) (hb : 0 < b) : 2 * (a * b) ≤ a ^ 2 + b ^ 2";
+// a session's statement: three positive reals with product 1, a strengthened inequality, the least value and when it is taken
+const SYMMETRIC =
+  ": ∀ (x y z : ℝ), 0 < x → 0 < y → 0 < z → x * y * z = 1 → let S : ℝ := 1 / (1 + x)^2 + 1 / (1 + y)^2 + 1 / (1 + z)^2; let D : ℝ := 2 + x + y + z + x * y + y * z + z * x; (S ≥ 3 / 4 + 8 * (x + y + z - 3) / D^2) ∧ (S ≥ 3 / 4) ∧ (S = 3 / 4 ↔ (x = 1 ∧ y = 1 ∧ z = 1))";
 // the card of a filter: what the kernel decides, given time
 const COUNT = ": (Finset.filter (fun s : Finset ℕ => s ⊆ Finset.Icc 1 12 ∧ s.card = 5 ∧ (∀ a ∈ s, ∀ b ∈ s, a ≠ b → 2 ≤ Nat.dist a b)) (Finset.powerset (Finset.Icc 1 12))).card = 36";
 // a bound and where it is attained, without the word IsLeast
@@ -77,9 +80,9 @@ describe("the stage table", () => {
   });
 
   it("lists the automation, the scripts, the provers, the fallback — each with a limit and its words in both languages", () => {
-    expect(PROVER_STAGES.map((s) => `${s.id}:${s.phase}`)).toEqual(["hammer:cascade", "trivial:tactics", "order:script", "bounded:script", "geometry:prover", "induction:prover", "optimize:prover", "combinatorics:prover", "auto:fallback"]);
+    expect(PROVER_STAGES.map((s) => `${s.id}:${s.phase}`)).toEqual(["hammer:cascade", "trivial:tactics", "order:script", "bounded:script", "geometry:prover", "induction:prover", "optimize:prover", "inequality:prover", "combinatorics:prover", "auto:fallback"]);
     // the stages whose kind of statement the single tactics never prove; a count's prover only where the program has a proof written for that count
-    expect(PROVER_STAGES.filter((s) => s.beforeSingleTactics === true).map((s) => s.id)).toEqual(["order", "bounded", "geometry", "optimize"]);
+    expect(PROVER_STAGES.filter((s) => s.beforeSingleTactics === true).map((s) => s.id)).toEqual(["order", "bounded", "geometry", "optimize", "inequality"]);
     expect(PROVER_STAGES.filter((s) => typeof s.beforeSingleTactics === "function").map((s) => s.id)).toEqual(["combinatorics"]);
     for (const s of PROVER_STAGES) {
       expect(s.limitMs(), s.id).toBeGreaterThan(0);
@@ -124,6 +127,10 @@ describe("the order of the stages on a statement", () => {
     // a count of orbits: the program has its proof written — right after the cascade, before
     // optimization (whose gate its lets pass) and before the single tactics
     expect(plan(ORBITS)).toEqual(["hammer", "combinatorics", "trivial", "optimize", "auto"]);
+    // a symmetric inequality with product 1: its prover right after the cascade — nlinarith, as a
+    // single tactic or in the search, has no hold on it; a plain inequality stays with the search
+    expect(plan(SYMMETRIC)).toEqual(["hammer", "inequality", "trivial", "auto"]);
+    expect(plan(PLAIN)).not.toContain("inequality");
     // so has a count of rows: the single tactics would decide it over all 40 320 permutations
     expect(plan(ROWS)).toEqual(["hammer", "combinatorics", "trivial", "auto"]);
     expect(plan(ROWS.replace("≠ 1", "≥ 2"))).toEqual(["hammer", "combinatorics", "trivial", "auto"]);

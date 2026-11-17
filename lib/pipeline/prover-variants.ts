@@ -20,7 +20,7 @@ import { normalizeTheoremType } from "../llm/autoformalize";
 import { groupOf, type RegressionCase, type RegressionFixture, type Route, type StageTime } from "./prover-regression";
 
 /** The routes written for kinds of statements (and the search): the cascade's and the single tactics' proofs do not read names. */
-export const DEDICATED_ROUTES: readonly Route[] = ["order", "bounded", "geometry", "induction", "optimize", "combinatorics", "auto"];
+export const DEDICATED_ROUTES: readonly Route[] = ["order", "bounded", "geometry", "induction", "optimize", "inequality", "combinatorics", "auto"];
 
 export interface VariantCase {
   /** `<base id>~<kind>` */

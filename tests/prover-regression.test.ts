@@ -11,6 +11,7 @@ import { looksCombinatorial } from "@/lib/lean/combinatorics";
 import { circularShape } from "@/lib/lean/combinatorics/circular";
 import { orbitShape } from "@/lib/lean/combinatorics/orbit";
 import { rowShape } from "@/lib/lean/combinatorics/rows";
+import { looksSymmetricInequality } from "@/lib/lean/inequality";
 import { boundedMinScripts, orderProofScripts } from "@/lib/pipeline/lean-attempt";
 import { readingForm } from "@/lib/lean/reading-form";
 import { normalizeTheoremType } from "@/lib/llm/autoformalize";
@@ -263,7 +264,7 @@ describe("bench/provers.json", () => {
   it("has every prover's statements, each with the route that proves it", () => {
     expect(cases.length).toBeGreaterThan(120);
     const groups = new Set(cases.map(groupOf));
-    for (const g of ["geometry", "induction", "optimize", "combinatorics", "auto", "order", "bounded", "hammer"]) expect(groups, g).toContain(g);
+    for (const g of ["geometry", "induction", "optimize", "inequality", "combinatorics", "auto", "order", "bounded", "hammer"]) expect(groups, g).toContain(g);
     // a statement that must not be proved keeps the harness honest
     expect(cases.some((c) => c.expect === "none")).toBe(true);
     for (const c of cases) if (c.expect && c.expect !== "none") expect(ROUTES, c.id).toContain(c.expect);
@@ -276,6 +277,7 @@ describe("bench/provers.json", () => {
       induction: looksInductive,
       optimize: looksOptimization,
       combinatorics: looksCombinatorial,
+      inequality: looksSymmetricInequality,
       order: (t) => orderProofScripts(t).length > 0,
       bounded: (t) => boundedMinScripts(t).length > 0,
     };
@@ -286,7 +288,7 @@ describe("bench/provers.json", () => {
   });
 
   it("the special routes still recognise the statements they were written for", () => {
-    const shape: Record<string, (t: string) => unknown> = { "optimize/oddtown": oddtownShape, "optimize/process": processShape, "combinatorics/circular": circularShape, "combinatorics/orbit": orbitShape, "combinatorics/rows": rowShape };
+    const shape: Record<string, (t: string) => unknown> = { "optimize/oddtown": oddtownShape, "optimize/process": processShape, "combinatorics/circular": circularShape, "combinatorics/orbit": orbitShape, "combinatorics/rows": rowShape, "inequality/symmetric": looksSymmetricInequality };
     const seen = new Set<string>();
     for (const c of cases) {
       const read = c.for ? shape[c.for] : undefined;

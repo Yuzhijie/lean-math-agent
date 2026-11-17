@@ -146,7 +146,7 @@ describe("the reading form", () => {
     expect(flips).toBeGreaterThan(40);
     expect(primes).toBeGreaterThan(150);
     // the list itself is nearly all written that way already: the reading form changes little that works today
-    expect(fixture.cases.filter((c) => readingForm(normalizeTheoremType(c.type)).changed).map((c) => c.id)).toEqual(["s-hammer-04", "ind-t17", "ind-t19", "comb-rows-7-ge"]);
+    expect(fixture.cases.filter((c) => readingForm(normalizeTheoremType(c.type)).changed).map((c) => c.id)).toEqual(["s-hammer-04", "ind-t17", "ind-t19", "comb-rows-7-ge", "ineq-sym-session"]);
   });
 });
 

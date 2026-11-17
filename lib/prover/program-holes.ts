@@ -14,7 +14,7 @@
 import { planStages, runProverStages, type StagePhase } from "../lean/prover-stages";
 import type { ProgramStrategy } from "../types";
 
-export type HoleProver = Extract<ProgramStrategy, "geometry" | "induction" | "optimize" | "combinatorics" | "auto">;
+export type HoleProver = Extract<ProgramStrategy, "geometry" | "induction" | "optimize" | "inequality" | "combinatorics" | "auto">;
 
 /** The stages a hole goes through. */
 const HOLE_PHASES: readonly StagePhase[] = ["prover", "fallback"];
