@@ -146,15 +146,18 @@ export function compilingPrefix(result: LeanVerifyResult, source: string): strin
 }
 
 /**
- * A proof whose only errors are "no goals" (it was already finished; a tactic came after the
- * last goal closed) with those tactics removed — the reported line and the rest of its block. Undefined when any other error is present or nothing could be placed. The caller verifies
- * the result again: this only proposes it.
+ * A proof with "no goals" errors (a block was already finished; a tactic came after its last goal
+ * closed) with those tactics removed — the reported line and the rest of its block. Such a tactic
+ * has nothing to work on, so the proof without it is the same proof; other errors stay where
+ * they are (Lean stops a block at its first error, so more may show once these are gone).
+ * Undefined when there is no such error or one could not be placed. The caller verifies the
+ * result again: this only proposes it.
  */
 export function dropNoGoalTactics(result: LeanVerifyResult, source: string, tactics: string): string | undefined {
   const layout = proofLayout(source);
   if (!layout) return undefined;
-  const errors = result.messages.filter((m) => m.severity === "error");
-  if (!errors.length || !errors.every((m) => /^no goals( to be (solved|proved))?\b/i.test(m.message.trim()))) return undefined;
+  const errors = result.messages.filter((m) => m.severity === "error" && isNoGoals(m.message));
+  if (!errors.length) return undefined;
   const lines = tactics.split("\n");
   const drop = new Set<number>();
   for (const e of errors) {
@@ -169,6 +172,11 @@ export function dropNoGoalTactics(result: LeanVerifyResult, source: string, tact
   }
   const kept = lines.filter((_, i) => !drop.has(i));
   return kept.some((l) => l.trim()) ? kept.join("\n") : undefined;
+}
+
+/** Lean's "No goals to be solved" / "no goals to be proved" / "no goals". */
+export function isNoGoals(message: string): boolean {
+  return /^no goals( to be (solved|proved))?\b/i.test(message.trim());
 }
 
 // ── helpers ───────────────────────────────────────────────────────────

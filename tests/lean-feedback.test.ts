@@ -131,4 +131,17 @@ describe("a proof that was finished early", () => {
     expect(dropNoGoalTactics(r("No goals to be solved", 4), s2, t2)).toBe("constructor\n· norm_num\n· rfl");
     expect(dropNoGoalTactics(r("unsolved goals", 3), source, tactics)).toBeUndefined();
   });
+
+  it("drops them next to other errors too: a tactic with no goal left is dead whatever else is wrong", async () => {
+    const { dropNoGoalTactics, isNoGoals } = await import("@/lib/lean/feedback");
+    const tactics = "constructor\n· norm_num\n  simp\n· nlinarith [h]\n· rfl";
+    const source = `theorem t : True ∧ True := by\n${tactics.split("\n").map((l) => "  " + l).join("\n")}`;
+    const both = { ok: false, log: "", status: "fail", backend: "repl", messages: [{ severity: "error", line: 4, column: 4, message: "No goals to be solved" }, { severity: "error", line: 5, column: 4, message: "linarith failed to find a contradiction" }], sorries: [], goals: [], infos: [], durationMs: 1 } as never;
+    expect(dropNoGoalTactics(both, source, tactics)).toBe("constructor\n· norm_num\n· nlinarith [h]\n· rfl");
+    // a "no goals" Lean could not place in the proof: nothing is proposed
+    const lost = { ok: false, log: "", status: "fail", backend: "repl", messages: [{ severity: "error", line: 40, column: 0, message: "no goals" }], sorries: [], goals: [], infos: [], durationMs: 1 } as never;
+    expect(dropNoGoalTactics(lost, source, tactics)).toBeUndefined();
+    expect(["No goals to be solved", "no goals to be proved", " no goals", "No goals"].every(isNoGoals)).toBe(true);
+    expect(["unsolved goals", "The rfl tactic failed: no goals were closed"].some(isNoGoals)).toBe(false);
+  });
 });

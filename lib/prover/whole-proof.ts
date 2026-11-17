@@ -29,6 +29,9 @@ import { nativeProverSettings, proverModelName, proverPromptStyle } from "../llm
 import { costCapReached, expectedLatencyMs, scopeCostCap } from "../llm/usage-tracker";
 import { lt } from "../llm/output-locale";
 
+/** How often a candidate's "no goals" tactics are dropped and the rest checked again. */
+const NO_GOAL_PASSES = 3;
+
 // ── Configuration ─────────────────────────────────────────────────────
 
 export interface WholeProofConfig {
@@ -354,16 +357,25 @@ export async function proveWholeTheorem(args: WholeProofArgs): Promise<WholeProo
             }
           }
         }
-        // "No goals": the proof was done before its last tactics — drop them and check again.
-        const trimmed = verification.ok ? undefined : dropNoGoalTactics(verification, source, tactics);
-        if (trimmed) {
+        // "No goals": a block was done before its last tactics — drop them and check again. The
+        // proof without them is the same proof, so it is the candidate from here on, verified or
+        // not: what Lean says about it is what is really missing (a closest proof "stuck at: No
+        // goals to be solved" told the model, and the user, nothing). Again while Lean shows more
+        // of them — it stops a block at its first error.
+        let dropped = 0;
+        for (let pass = 0; pass < NO_GOAL_PASSES && !verification.ok; pass++) {
+          const trimmed = dropNoGoalTactics(verification, source, tactics);
+          if (!trimmed) break;
           const source2 = assemble(trimmed);
           const v2 = await verify(args.sessionId, source2, { theoremName: args.theoremName, expectedSignature: args.expectedSignature });
-          if (v2.ok) {
-            log.push(`round ${round}: a candidate was finished early; its extra tactics were dropped`);
-            return { tactics: trimmed, source: source2, verification: v2 };
-          }
+          // Lean did not get to judge it (no sandbox, a timeout): keep what was judged
+          if (!v2.ok && !v2.messages.some((m) => m.severity === "error")) break;
+          dropped++;
+          tactics = trimmed;
+          source = source2;
+          verification = v2;
         }
+        if (dropped) log.push(`round ${round}: a candidate's tactics after its goals were closed were dropped${verification.ok ? "; verified" : "; what is left still fails"}`);
         return { tactics, source, verification };
       }),
     );

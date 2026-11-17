@@ -306,6 +306,52 @@ describe("a candidate that was finished early", () => {
   });
 });
 
+describe("a candidate that was finished early and is still not a proof", () => {
+  const PROOF = "```lean\ntheorem amgm (x y : ℝ) : x * y ≤ (x ^ 2 + y ^ 2) / 2 := by\n  have h : 0 ≤ (x - y) ^ 2 := by\n    positivity\n    simp\n  have k : 0 ≤ x := by\n    exact le_rfl\n    rfl\n  linarith [h]\n```";
+  const lineOf = (source: string, text: string) => source.split("\n").findIndex((l) => l.trim() === text) + 1;
+  const noGoals = (line: number) => ({ severity: "error" as const, line, column: 4, message: "No goals to be solved" });
+
+  it("is kept without its dead tactics: the closest proof says what is really missing, and the repair round starts from it", async () => {
+    sampleMock.mockResolvedValue([PROOF]);
+    verifyMock.mockImplementation(async (_id: string, source: string) => {
+      // Lean stops a block at its first error: the second "no goals" shows only once the first is gone
+      if (lineOf(source, "simp")) return result({ messages: [noGoals(lineOf(source, "simp"))] });
+      if (lineOf(source, "rfl")) return result({ messages: [noGoals(lineOf(source, "rfl"))] });
+      return result({ messages: [{ severity: "error", line: lineOf(source, "linarith [h]"), column: 2, message: "linarith failed to find a contradiction" }] });
+    });
+    const r = await proveWholeTheorem({ sessionId: "s", theoremName: NAME, theoremType: TYPE, config: { samples: 1, rounds: 0, suggest: false } });
+    expect(r.ok).toBe(false);
+    expect(verifyMock).toHaveBeenCalledTimes(3);
+    expect(r.candidates).toHaveLength(1);
+    expect(r.candidates[0].tactics).toBe("have h : 0 ≤ (x - y) ^ 2 := by\n  positivity\nhave k : 0 ≤ x := by\n  exact le_rfl\nlinarith [h]");
+    expect(r.candidates[0].summary).toMatch(/linarith failed/);
+    expect(r.candidates[0].summary).not.toMatch(/No goals/i);
+    expect(r.log).toContain("tactics after its goals were closed were dropped; what is left still fails");
+  });
+
+  it("is verified when dropping them twice is all it needed", async () => {
+    sampleMock.mockResolvedValue([PROOF]);
+    verifyMock.mockImplementation(async (_id: string, source: string) => {
+      if (lineOf(source, "simp")) return result({ messages: [noGoals(lineOf(source, "simp"))] });
+      if (lineOf(source, "rfl")) return result({ messages: [noGoals(lineOf(source, "rfl"))] });
+      return OK;
+    });
+    const r = await proveWholeTheorem({ sessionId: "s", theoremName: NAME, theoremType: TYPE, expectedSignature: SIG, config: { samples: 1, rounds: 0 } });
+    expect(r.ok).toBe(true);
+    expect(r.tactics).toBe("have h : 0 ≤ (x - y) ^ 2 := by\n  positivity\nhave k : 0 ≤ x := by\n  exact le_rfl\nlinarith [h]");
+    expect(r.log).toContain("were dropped; verified");
+  });
+
+  it("stays as it was when Lean could not judge the shorter proof", async () => {
+    sampleMock.mockResolvedValue([PROOF]);
+    verifyMock.mockImplementationOnce(async (_id: string, source: string) => result({ messages: [noGoals(lineOf(source, "simp"))] }));
+    verifyMock.mockResolvedValue(result({ status: "unavailable", messages: [] }));
+    const r = await proveWholeTheorem({ sessionId: "s", theoremName: NAME, theoremType: TYPE, config: { samples: 1, rounds: 0, suggest: false } });
+    expect(r.ok).toBe(false);
+    expect(r.candidates[0].tactics).toContain("simp");
+  });
+});
+
 describe("unknown names repaired without the model", () => {
   it("replaces a name built the old way (not_mem) and verifies once more before any repair round", async () => {
     sampleMock.mockResolvedValueOnce(["```lean\ntheorem amgm (x y : ℝ) : x * y ≤ (x ^ 2 + y ^ 2) / 2 := by\n  have h := my_not_mem_lemma x\n  nlinarith [sq_nonneg (x - y)]\n```"]);
