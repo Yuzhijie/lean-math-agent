@@ -15,7 +15,7 @@ Solving, question generation and marking for students and teachers, with Lean 4 
 | Layer | Tech |
 |-------|------|
 | Frontend | Next.js 16.4, React 19.3, Tailwind v4, shadcn/ui (Radix), KaTeX 0.19, Lucide icons 1.x (no brand icons) |
-| Backend | Next.js API Routes (TypeScript), Zod 4 validation (`z.record` takes key + value schemas; transforms are `ZodPipe`), Prisma 7 (SQLite via `@prisma/adapter-better-sqlite3`), next-auth v4 (v5 still beta), Stripe 23; Node ≥ 22.12 |
+| Backend | Next.js API Routes (TypeScript; on Next 16.4.6 `next dev` and `next start` gzip a `text/event-stream` route response when the client accepts it and the response does not say `Cache-Control: no-transform` — `next start` on 16.4.2 did not; still flushed frame by frame: solve-stream is compressed, jobs/[id]/events is not; the standalone server compresses neither), Zod 4 validation (`z.record` takes key + value schemas; transforms are `ZodPipe`), Prisma 7 (SQLite via `@prisma/adapter-better-sqlite3`), next-auth v4 (v5 still beta), Stripe 23; Node ≥ 22.12 |
 | LLM | OpenAI-compatible API (configurable via env), role routing (general / prover / planner / vision), image input, sampling, fallback chain, LRU cache, per-run metrics |
 | Lean | Lean 4 + Mathlib v4.33.1 + Batteries + Aesop; verification via persistent `leanprover-community/repl` workers (env reuse, sorry goals, tactic mode, axiom + statement checks), `lake env lean` fallback |
 | Compute | Python SymPy HTTP microservice (9 endpoints) |
