@@ -42,6 +42,9 @@ const plan = (type: string, extra: Partial<StageStatement> = {}) => planStages(s
 const EXTREMUM = ": IsGreatest {t : ℕ | ∃ F : Finset (Finset ℕ), (∀ A ∈ F, A ⊆ Finset.Icc 1 6) ∧ (∀ A ∈ F, ∀ B ∈ F, (A ∩ B).card % 2 = 0) ∧ t = F.card} 8";
 const ORBITS =
   ": let Valid : Finset (Fin 12) → Prop := fun s => s.card = 4 ∧ ∀ i ∈ s, i + 1 ∉ s; let Rot : Fin 12 → Finset (Fin 12) → Finset (Fin 12) := fun k s => s.image (fun i => i + k); let Orbit : Finset (Fin 12) → Set (Finset (Fin 12)) := fun s => {t | Valid t ∧ ∃ k : Fin 12, t = Rot k s}; Set.ncard {O : Set (Finset (Fin 12)) | ∃ s : Finset (Fin 12), Valid s ∧ O = Orbit s} = 10";
+// the rows of 1 … 8 in which no two neighbours differ by 1
+const ROWS =
+  ": let Good : Equiv.Perm (Fin 8) → Prop := fun p => ∀ i : Fin 7, Int.natAbs (((((p ⟨i.val, by omega⟩).val + 1 : ℕ) : ℤ) - (((p ⟨i.val + 1, by omega⟩).val + 1 : ℕ) : ℤ))) ≠ 1; ((Finset.univ : Finset (Equiv.Perm (Fin 8))).filter Good).card = 5242";
 const SUM = ": ∀ n : ℕ, ∑ i ∈ Finset.range (n + 1), i = n * (n + 1) / 2";
 const COORDS = ": ∀ (A B : ℝ × ℝ), A = (0, 0) → B = (3, 4) → Real.sqrt ((A.1 - B.1) ^ 2 + (A.2 - B.2) ^ 2) = 5";
 const ORDER = ": IsLeast {n : ℕ | 0 < n ∧ (3 : ℕ) ^ 5 ∣ (2 : ℕ) ^ n - 1} 162";
@@ -75,8 +78,9 @@ describe("the stage table", () => {
 
   it("lists the automation, the scripts, the provers, the fallback — each with a limit and its words in both languages", () => {
     expect(PROVER_STAGES.map((s) => `${s.id}:${s.phase}`)).toEqual(["hammer:cascade", "trivial:tactics", "order:script", "bounded:script", "geometry:prover", "induction:prover", "optimize:prover", "combinatorics:prover", "auto:fallback"]);
-    // the stages whose kind of statement the single tactics never prove
-    expect(PROVER_STAGES.filter((s) => s.beforeSingleTactics).map((s) => s.id)).toEqual(["order", "bounded", "geometry", "optimize"]);
+    // the stages whose kind of statement the single tactics never prove; a count's prover only where the program has a proof written for that count
+    expect(PROVER_STAGES.filter((s) => s.beforeSingleTactics === true).map((s) => s.id)).toEqual(["order", "bounded", "geometry", "optimize"]);
+    expect(PROVER_STAGES.filter((s) => typeof s.beforeSingleTactics === "function").map((s) => s.id)).toEqual(["combinatorics"]);
     for (const s of PROVER_STAGES) {
       expect(s.limitMs(), s.id).toBeGreaterThan(0);
       expect(s.minMs, s.id).toBeGreaterThan(0);
@@ -117,10 +121,14 @@ describe("the order of the stages on a statement", () => {
     expect(plan(ATTAINED)).toEqual(["hammer", "optimize", "trivial", "induction", "auto"]);
     // coordinates: their prover, then the single tactics, and no tactic search
     expect(plan(COORDS)).toEqual(["hammer", "geometry", "trivial"]);
-    // a count of orbits: combinatorics before optimization (whose gate its lets pass) — after the
-    // single tactics: a long `decide +kernel` is how a count is often proved
-    expect(plan(ORBITS)).toEqual(["hammer", "trivial", "combinatorics", "optimize", "auto"]);
-    // the card of a filter is a count too: combinatorics before induction, whose gate the ∀ and the range pass
+    // a count of orbits: the program has its proof written — right after the cascade, before
+    // optimization (whose gate its lets pass) and before the single tactics
+    expect(plan(ORBITS)).toEqual(["hammer", "combinatorics", "trivial", "optimize", "auto"]);
+    // so has a count of rows: the single tactics would decide it over all 40 320 permutations
+    expect(plan(ROWS)).toEqual(["hammer", "combinatorics", "trivial", "auto"]);
+    expect(plan(ROWS.replace("≠ 1", "≥ 2"))).toEqual(["hammer", "combinatorics", "trivial", "auto"]);
+    // the card of a filter is a count too: combinatorics before induction, whose gate the ∀ and the
+    // range pass — after the single tactics: a long `decide +kernel` is how such a count is often proved
     expect(plan(COUNT)).toEqual(["hammer", "trivial", "combinatorics", "induction", "auto"]);
     expect(planStages(st(COUNT)).map((p) => p.fit)).toEqual([1, 1, 2, 1, 1]);
     // equal fit: the table's order

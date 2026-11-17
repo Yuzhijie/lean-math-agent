@@ -10,7 +10,9 @@ import { processShape } from "@/lib/lean/optimize/process";
 import { looksCombinatorial } from "@/lib/lean/combinatorics";
 import { circularShape } from "@/lib/lean/combinatorics/circular";
 import { orbitShape } from "@/lib/lean/combinatorics/orbit";
+import { rowShape } from "@/lib/lean/combinatorics/rows";
 import { boundedMinScripts, orderProofScripts } from "@/lib/pipeline/lean-attempt";
+import { readingForm } from "@/lib/lean/reading-form";
 import { normalizeTheoremType } from "@/lib/llm/autoformalize";
 import { readRegressionRuns, sandboxVersions } from "@/scripts/provers-regress";
 
@@ -284,10 +286,15 @@ describe("bench/provers.json", () => {
   });
 
   it("the special routes still recognise the statements they were written for", () => {
-    const shape: Record<string, (t: string) => unknown> = { "optimize/oddtown": oddtownShape, "optimize/process": processShape, "combinatorics/circular": circularShape, "combinatorics/orbit": orbitShape };
+    const shape: Record<string, (t: string) => unknown> = { "optimize/oddtown": oddtownShape, "optimize/process": processShape, "combinatorics/circular": circularShape, "combinatorics/orbit": orbitShape, "combinatorics/rows": rowShape };
+    const seen = new Set<string>();
     for (const c of cases) {
       const read = c.for ? shape[c.for] : undefined;
-      if (read && c.expect && c.expect !== "none" && c.expect === c.for!.split("/")[0]) expect(read(normalizeTheoremType(c.type)), c.id).toBeTruthy();
+      if (!(read && c.expect && c.expect !== "none" && c.expect === c.for!.split("/")[0])) continue;
+      // as the prover gets it: in the reading form
+      expect(read(readingForm(normalizeTheoremType(c.type)).type), c.id).toBeTruthy();
+      seen.add(c.for!);
     }
+    expect([...seen].sort()).toEqual(Object.keys(shape).sort());
   });
 });

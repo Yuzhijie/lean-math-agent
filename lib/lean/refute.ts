@@ -206,7 +206,7 @@ export async function refuteStatement(theoremName: string, theoremType: string, 
     }
   }
 
-  // ── count (orbits up to rotation / reflection: Lean counts them itself) ─────
+  // ── count (orbits up to rotation / reflection, arrangements in a row: Lean counts them itself) ─────
   if (probes.includes("count") && useMathlib) {
     try {
       const { countRefute } = await import("./combinatorics");
@@ -217,7 +217,10 @@ export async function refuteStatement(theoremName: string, theoremType: string, 
           verdict: "refuted",
           method: "count",
           counterexample: text,
-          detail: lt(`Lean 自己数出 ${c.counted} 类，陈述说 ${c.stated} 类`, `Lean counts ${c.counted} orbits; the statement says ${c.stated}`),
+          detail:
+            c.kind === "rows"
+              ? lt(`Lean 自己数出 ${c.counted} 种排法，陈述说 ${c.stated} 种`, `Lean counts ${c.counted} arrangements; the statement says ${c.stated}`)
+              : lt(`Lean 自己数出 ${c.counted} 类，陈述说 ${c.stated} 类`, `Lean counts ${c.counted} orbits; the statement says ${c.stated}`),
         });
       }
     } catch (e) {

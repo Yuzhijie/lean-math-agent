@@ -4,6 +4,9 @@
  *  - orbits (orbit.ts) — "how many choices up to rotation / reflection": Lean lists one
  *    representative per orbit (`#eval`, outside the proof), the program writes the proof; when
  *    Lean's count differs from the statement's, the statement is false and that is reported;
+ *  - rows (rows.ts) — "the arrangements of 1, …, n in a row whose neighbours …": the kernel
+ *    builds them place by place (a general lemma, written into the proof, says that this counts
+ *    the permutations); Lean counts first, and another number than the statement's is reported;
  *  - Venn regions (venn.ts) — card facts about A, B, C, …: every expression split into regions,
  *    the region cards solved by omega;
  *  - finite decision (finite.ts) — lets unfolded, lambdas reduced, set cards turned into Finset
@@ -21,9 +24,10 @@ import { closeFinite, introAll } from "./finite";
 import { splitLets, squash, stripParens } from "./lets";
 import { orbitEvalCommand, orbitScript, orbitShape, parseReps } from "./orbit";
 import { circularScript, circularShape } from "./circular";
+import { parseLevels, rowEvalCommand, rowScript, rowShape, type RowShape } from "./rows";
 import { vennScript } from "./venn";
 
-export type CombinatoricsMethod = "orbits" | "circular" | "venn" | "finite";
+export type CombinatoricsMethod = "orbits" | "circular" | "rows" | "venn" | "finite";
 
 export function looksCombinatorial(theoremType: string): boolean {
   if (looksGeometric(theoremType)) return false;
@@ -45,7 +49,17 @@ function assertsCount(theoremType: string): boolean {
  */
 export function combinatorialFit(theoremType: string): 0 | 1 | 2 {
   if (!looksCombinatorial(theoremType)) return 0;
-  return circularShape(theoremType) || orbitShape(theoremType) || assertsCount(theoremType) ? 2 : 1;
+  return writtenCount(theoremType) || assertsCount(theoremType) ? 2 : 1;
+}
+
+/**
+ * A count the program has a proof written for — round a circle, up to rotation / reflection, in
+ * a row: Lean counts first (orbits, rows), then the written proof is checked. On these the
+ * prover runs before the single tactics (prover-stages.ts), which could only decide the count
+ * over every arrangement.
+ */
+export function writtenCount(theoremType: string): boolean {
+  return looksCombinatorial(theoremType) && Boolean(circularShape(theoremType) || orbitShape(theoremType) || rowShape(theoremType));
 }
 
 export interface CombinatoricsProof {
@@ -64,20 +78,42 @@ async function countOrbits(session: { evaluate(c: string, t?: number): Promise<{
   return reps ? { reps } : { error: "no list in Lean's output" };
 }
 
+/** The most rows the kernel is given to build for an arrangement count (all places together); 19 184 for "1 … 8, no neighbours differ by 1". */
+const rowsCap = () => Number(process.env.ROWS_MAX_LISTS ?? 40_000);
+
 /**
- * A wrong count in an orbit-counting statement: Lean lists the orbits itself; undefined when the
- * statement is not of that shape, the count agrees, or nothing could be computed. Never throws
- * except on cancellation.
+ * Lean's own count of the arrangements in a row (rows.ts): `count` of them, and `built`, the rows
+ * the kernel would go through to prove it (the rows after every place together).
  */
-export async function countRefute(args: { theoremName: string; theoremType: string; useMathlib?: boolean }): Promise<{ counted: number; stated: number; reps: number[][] } | undefined> {
+async function countRows(session: { evaluate(c: string, t?: number): Promise<{ severity: string; data: string }[]> }, shape: RowShape) {
+  const msgs = await session.evaluate(rowEvalCommand(shape), Number(process.env.COMBINATORICS_EVAL_TIMEOUT_MS ?? 60_000));
+  const err = msgs.find((m) => m.severity === "error");
+  if (err) return { error: err.data.split("\n")[0] };
+  const levels = msgs.map((m) => parseLevels(m.data)).find((r) => r !== undefined);
+  if (!levels || levels.length !== shape.n) return { error: "no count in Lean's output" };
+  return { count: levels[levels.length - 1], built: levels.reduce((a, b) => a + b, 0) };
+}
+
+/**
+ * A wrong count in a counting statement Lean can count itself — orbits up to rotation / reflection
+ * (orbit.ts), arrangements in a row (rows.ts); undefined when the statement is not of such a
+ * shape, the count agrees, or nothing could be computed. Never throws except on cancellation.
+ */
+export async function countRefute(args: { theoremName: string; theoremType: string; useMathlib?: boolean }): Promise<{ counted: number; stated: number; reps: number[][]; kind: "orbits" | "rows" } | undefined> {
   const shape = orbitShape(args.theoremType);
-  if (!shape) return undefined;
+  const rows = shape ? undefined : rowShape(args.theoremType);
+  if (!shape && !rows) return undefined;
   const opened = await openRunner({ theoremName: args.theoremName, theoremType: args.theoremType, useMathlib: args.useMathlib ?? true, timeLimitMs: 90_000, tacticTimeoutMs: 30_000, label: "combinatorics" });
   if (typeof opened === "string") return undefined;
   try {
+    if (rows) {
+      const r = await countRows(opened.session, rows);
+      return r.count === undefined || r.count === rows.total ? undefined : { counted: r.count, stated: rows.total, reps: [], kind: "rows" };
+    }
+    if (!shape) return undefined;
     const r = await countOrbits(opened.session, shape);
     if (!r.reps || r.reps.length === shape.total) return undefined;
-    return { counted: r.reps.length, stated: shape.total, reps: r.reps };
+    return { counted: r.reps.length, stated: shape.total, reps: r.reps, kind: "orbits" };
   } catch (e) {
     if (e instanceof CancelledError) throw e;
     return undefined;
@@ -148,7 +184,28 @@ export async function combinatoricsProof(args: {
         reasons.push(`orbits: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`);
       }
     }
-    // 2. Venn regions, 3. finite decision — after the intros
+    // 2. arrangements in a row (rows.ts)
+    const rows = rowShape(theoremType);
+    if (rows) {
+      try {
+        const r = await countRows(session, rows);
+        if (r.count === undefined) reasons.push(`rows: Lean did not count the arrangements (${r.error})`);
+        else if (r.count !== rows.total) {
+          return { reason: `Lean counts ${r.count} arrangements, the statement says ${rows.total}`, counterexample: `${r.count} ≠ ${rows.total}` };
+        } else if (r.built > rowsCap()) {
+          // the number is right as Lean computes it, which is not a proof; the permutations themselves —
+          // what the finite route would go through — are no fewer than a third of these rows
+          return { reason: `rows: Lean counts ${r.count} arrangements too, but a proof would have the kernel build ${r.built} rows (ROWS_MAX_LISTS ${rowsCap()})` };
+        } else {
+          const p = await verify(rowScript(rows), "rows");
+          if (p) return { proof: p, reason: "" };
+        }
+      } catch (e) {
+        if (e instanceof CancelledError) throw e;
+        reasons.push(`rows: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`);
+      }
+    }
+    // 3. Venn regions, 4. finite decision — after the intros
     const lets = await introAll(run);
     if (!run.goals().length) {
       const p = await verify(script.join("\n"), "finite");

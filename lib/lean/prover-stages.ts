@@ -10,9 +10,10 @@
  *   1. the automation cascade (seconds when it proves: a fifth of the regression list);
  *   2. the stages whose kind of statement this is (fit 2) and on which the single tactics prove
  *      nothing the cascade did not: the scripts the program writes (multiplicative orders,
- *      bounded minima), coordinates, an extremum;
+ *      bounded minima), coordinates, an extremum, and a count the program has a proof written
+ *      for (round a circle, up to rotation / reflection, in a row: writtenCount);
  *   3. the single tactics — the cascade's tactics as whole proofs with the verifier's longer
- *      limit: what a long `decide +kernel` over a count needs;
+ *      limit: what a long `decide +kernel` over any other count needs;
  *   4. the other provers, best fit first (a count: combinatorics before the rest), the table's
  *      order among equals;
  *   5. the tactic search, the fallback.
@@ -21,14 +22,17 @@
  * had grown in, 28 statements had another prover first: induction before an extremum's or a
  * count's, optimization before a count of orbits); and the single tactics, which cost 9 minutes
  * before the proofs of the scripts, the coordinate and the extremum prover and proved none of
- * those statements, now run after them (on 64 statements).
+ * those statements, now run after them (on 64 statements). The counts with a written proof came
+ * after the single tactics until one of them cost 130 s there before a 36 s proof (the rows of
+ * 1 … 8 whose neighbours never differ by 1: `decide` over 40 320 permutations); on the ten such
+ * counts the list had, the single tactics proved none.
  *
  * Reading form. The stages that read the statement — every one but the cascade and the single
  * tactics — get it in the one way of writing the provers read (lib/lean/reading-form.ts: `≤`/`<`
  * for `≥`/`>`, bounds in binders written out, bound names without primes and subscripts),
  * so a prover written on one spelling proves the others; what it proves is then checked by Lean
  * against the statement as written (inOriginal). A statement already in that form (nearly all:
- * 166 of the 169 of the regression list) goes through as before, with no second check. Measured
+ * 174 of the 178 of the regression list) goes through as before, with no second check. Measured
  * by `npm run lean:variants` (bench/VARIANTS.md).
  *
  * Budget. Every stage has its own limit, and all of them together have PROVER_STAGES_BUDGET_MS
@@ -41,7 +45,7 @@ import { lt } from "../llm/output-locale";
 import { PROGRAM_STRATEGIES, type ProgramStrategy } from "../types";
 import { assembleLeanSource } from "./assemble";
 import { autoProof } from "./auto";
-import { combinatorialFit, combinatoricsProof } from "./combinatorics";
+import { combinatorialFit, combinatoricsProof, writtenCount } from "./combinatorics";
 import { geometryProof, looksGeometric } from "./geometry";
 import { hammerTheorem } from "./hammer";
 import { inductionProof, looksInductive } from "./induction";
@@ -113,10 +117,11 @@ export interface ProverStage {
   /**
    * On its kind of statement (fit 2) it runs before the single tactics: they repeat the cascade's
    * tactics with a longer limit, which proves nothing there (no coordinate, extremum, order or
-   * bounded-minimum statement of the regression list). Not set for counts — a long `decide
-   * +kernel` is how several of those are proved.
+   * bounded-minimum statement of the regression list). For counts only where the program has a
+   * proof written for that very count (the predicate: writtenCount) — a long `decide +kernel` is
+   * how several of the other counts are proved.
    */
-  beforeSingleTactics?: boolean;
+  beforeSingleTactics?: boolean | ((s: StageStatement) => boolean);
   /** The most one attempt may take, ms (the search stops starting work then; a final check may still run). */
   limitMs: () => number;
   /** Not started with less time than this left. */
@@ -300,9 +305,10 @@ export const PROVER_STAGES: readonly ProverStage[] = [
     }),
   },
   {
-    // finite / counting statements: orbit representatives, Venn regions, kernel decision after rewriting
+    // finite / counting statements: a circle, orbit representatives, rows built place by place, Venn regions, kernel decision after rewriting
     id: "combinatorics",
     phase: "prover",
+    beforeSingleTactics: (s) => writtenCount(s.theoremType),
     progress: "combinatorics",
     fit: (s) => (s.huge ? 0 : combinatorialFit(s.theoremType)),
     limitMs: () => env("COMBINATORICS_TIME_LIMIT_MS", 180_000),
@@ -310,7 +316,7 @@ export const PROVER_STAGES: readonly ProverStage[] = [
     run: (s, budgetMs) => proverResult(combinatoricsProof(proverArgs(s, budgetMs))),
     texts: () => ({
       tried: (r) => lt(`程序写的组合证明（${r}）`, `a combinatorial proof the program wrote (${r})`),
-      trying: lt("尝试程序写的组合证明（轨道代表元 / 韦恩图分区 / 有限枚举）", "Trying a combinatorial proof written by the program (orbit representatives / Venn regions / finite enumeration)"),
+      trying: lt("尝试程序写的组合证明（轨道代表元 / 逐位排列 / 韦恩图分区 / 有限枚举）", "Trying a combinatorial proof written by the program (orbit representatives / rows built place by place / Venn regions / finite enumeration)"),
       passed: () => lt("✅ 程序写出的组合证明通过 Lean 检查", "✅ The program's combinatorial proof passed Lean"),
       failed: (r) => lt(`组合证明没有成功：${r}`, `The combinatorial proof did not work: ${r}`),
       title: () => lt("组合计数（程序写的证明）", "Combinatorics (proof written by the program)"),
@@ -351,11 +357,12 @@ export interface PlannedStage {
 }
 
 /** Where a stage that fits stands (see the order at the top of this file). */
-function rank(stage: ProverStage, fit: number): number {
+function rank(stage: ProverStage, fit: number, s: StageStatement): number {
   if (stage.phase === "cascade") return 1;
   if (stage.phase === "fallback") return 5;
   if (stage.phase === "tactics") return 3;
-  return fit === 2 && stage.beforeSingleTactics ? 2 : 4;
+  const before = typeof stage.beforeSingleTactics === "function" ? stage.beforeSingleTactics(s) : stage.beforeSingleTactics;
+  return fit === 2 && before ? 2 : 4;
 }
 
 /** Whether a stage reads the statement (its text, the goals Lean prints): then it gets the reading form. */
@@ -397,9 +404,13 @@ async function inOriginal(s: StageStatement, form: ReadingForm, proof: StageProo
 /** The stages that would run on a statement, in the order they would run. */
 export function planStages(s: StageStatement, phases?: readonly StagePhase[]): PlannedStage[] {
   const reading = readingStatement(s).statement;
-  return PROVER_STAGES.map((stage, index) => ({ stage, fit: stage.fit(readsStatement(stage) ? reading : s), index }))
+  return PROVER_STAGES.map((stage, index) => {
+    const seen = readsStatement(stage) ? reading : s;
+    const fit = stage.fit(seen);
+    return { stage, fit, index, rank: rank(stage, fit, seen) };
+  })
     .filter((x) => x.fit > 0 && (!phases || phases.includes(x.stage.phase)))
-    .sort((a, b) => rank(a.stage, a.fit) - rank(b.stage, b.fit) || b.fit - a.fit || a.index - b.index)
+    .sort((a, b) => a.rank - b.rank || b.fit - a.fit || a.index - b.index)
     .map(({ stage, fit }) => ({ stage, fit: fit as 1 | 2 }));
 }
 
