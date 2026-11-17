@@ -219,10 +219,44 @@ function tryParse<T>(
       }
     }
 
-    return { ok: true, value: schema.parse(json) };
+    const first = schema.safeParse(json);
+    if (first.success) return { ok: true, value: first.data };
+    // `"id": 1` where the schema wants a string, `"confidence": "0.8"` where it wants a number
+    if (!scalarsAsExpected(json, first.error.issues)) return { ok: false, error: first.error.message };
+    const second = schema.safeParse(json);
+    return second.success ? { ok: true, value: second.data } : { ok: false, error: second.error.message };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
+}
+
+/**
+ * A scalar the model wrote as the other kind of scalar, read as what it says: a number where the
+ * schema expects a string becomes its text (`"id": 1` → "1" — three methods numbered 1, 2, 3 once
+ * failed as "Invalid LLM JSON for enumerateResponse", on the retry too), a string that is one plain
+ * number where the schema expects a number becomes that number. For every schema, at exactly the
+ * places the validation names; nothing else is touched (no words to numbers, no objects, no
+ * booleans). Changes `json` in place; true when something was changed.
+ */
+export function scalarsAsExpected(json: unknown, issues: readonly { code?: string; expected?: unknown; path: readonly PropertyKey[] }[]): boolean {
+  let changed = false;
+  for (const issue of issues) {
+    if (issue.code !== "invalid_type" || !issue.path.length) continue;
+    let holder: unknown = json;
+    for (const key of issue.path.slice(0, -1)) holder = holder && typeof holder === "object" ? (holder as Record<PropertyKey, unknown>)[key] : undefined;
+    if (!holder || typeof holder !== "object") continue;
+    const slot = holder as Record<PropertyKey, unknown>;
+    const key = issue.path[issue.path.length - 1];
+    const value = slot[key];
+    if (issue.expected === "string" && typeof value === "number" && Number.isFinite(value)) {
+      slot[key] = String(value);
+      changed = true;
+    } else if (issue.expected === "number" && typeof value === "string" && /^\s*-?\d+(\.\d+)?\s*$/.test(value)) {
+      slot[key] = Number(value);
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 export function extractJson(text: string): unknown {

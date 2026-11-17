@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { z } from "zod";
-import { chatJson, chatText, LlmError } from "@/lib/llm/client";
+import { chatJson, chatText, LlmError, scalarsAsExpected } from "@/lib/llm/client";
+import { enumerateResponseSchema, evaluateResponseSchema } from "@/lib/schemas";
 import { getUsageSummary, resetUsage } from "@/lib/llm/usage-tracker";
 import { resetGlobalCache, LruCache, buildCacheKey } from "@/lib/llm/cache";
 import { loadConfig } from "@/lib/llm/config";
@@ -771,5 +772,84 @@ describe("streaming for long calls", () => {
     fetchMock.mockRejectedValue(err);
     await expect(chatText({ messages: TEST_MESSAGES, timeoutMs: 60_000 })).rejects.toThrow(/fetch failed/);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// ── A scalar written as the other kind of scalar ──────────────────────
+// ══════════════════════════════════════════════════════════════════════
+
+describe("a number where a string is expected, a numeral where a number is", () => {
+  const method = (id: unknown, confidence: unknown = 0.7) => ({
+    id,
+    category: "direct",
+    title: "t",
+    inspiration: "i",
+    pros: "p",
+    cons: "c",
+    lean_sketch: "s",
+    confidence,
+  });
+
+  it("the methods a model numbered 1, 2, 3 are accepted as \"1\", \"2\", \"3\" — without asking again", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const category = enumerateResponseSchema.shape.methods.element.shape.category.options[0];
+    const reply = { comparison_summary: "s", methods: [1, 2, 3].map((id) => ({ ...method(id), category })) };
+    fetchMock.mockResolvedValueOnce(okResponse(JSON.stringify(reply)));
+
+    const result = await chatJson({ system: "s", user: "u", schema: enumerateResponseSchema, schemaName: "enumerateResponse" });
+
+    expect(result.methods.map((m) => m.id)).toEqual(["1", "2", "3"]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("so are the ids an evaluation refers to them by, and a score written in quotes", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const score = { method_id: 2, feasibility: "0.8", elegance: 0.5, lean_difficulty: 0.5, mathlib_coverage: 0.5, pedagogical_value: 0.5, composite: " 0.6 ", rationale: "r" };
+    fetchMock.mockResolvedValueOnce(okResponse(JSON.stringify({ scores: [score], recommended_method_id: 2, comparison: "c" })));
+
+    const result = await chatJson({ system: "s", user: "u", schema: evaluateResponseSchema, schemaName: "evaluateResponse" });
+
+    expect(result.recommended_method_id).toBe("2");
+    expect(result.scores[0]).toMatchObject({ method_id: "2", feasibility: 0.8, composite: 0.6 });
+  });
+
+  it("what the value says is still checked: a number out of range, a word for a number, an empty text stay errors", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const schema = z.object({ name: z.string().min(1), share: z.number().max(1) });
+    const ask = () => chatJson({ system: "s", user: "u", schema, schemaName: "probe", maxRetries: 0 });
+
+    fetchMock.mockResolvedValueOnce(okResponse(JSON.stringify({ name: 7, share: "0.25" })));
+    expect(await ask()).toEqual({ name: "7", share: 0.25 });
+
+    fetchMock.mockResolvedValueOnce(okResponse(JSON.stringify({ name: "a", share: "2" })));
+    await expect(ask()).rejects.toThrow(/Invalid LLM JSON for probe[\s\S]*too_big/);
+
+    fetchMock.mockResolvedValueOnce(okResponse(JSON.stringify({ name: "a", share: "a quarter" })));
+    await expect(ask()).rejects.toThrow(/expected number, received string/);
+
+    fetchMock.mockResolvedValueOnce(okResponse(JSON.stringify({ name: { first: "a" }, share: 0.5 })));
+    await expect(ask()).rejects.toThrow(/expected string, received object/);
+
+    fetchMock.mockResolvedValueOnce(okResponse(JSON.stringify({ name: true, share: 0.5 })));
+    await expect(ask()).rejects.toThrow(/expected string, received boolean/);
+  });
+
+  it("changes exactly the places the validation names", () => {
+    const json = { a: 1, list: [{ id: 3, n: "12" }, { id: "x", n: "1e5" }], keep: 5, deep: { v: "-0.5" } };
+    const issues = [
+      { code: "invalid_type", expected: "string", path: ["a"] },
+      { code: "invalid_type", expected: "string", path: ["list", 0, "id"] },
+      { code: "invalid_type", expected: "number", path: ["list", 0, "n"] },
+      { code: "invalid_type", expected: "number", path: ["list", 1, "n"] }, // not a plain number: left
+      { code: "invalid_type", expected: "number", path: ["deep", "v"] },
+      { code: "invalid_type", expected: "string", path: ["missing", "x"] },
+      { code: "too_small", expected: "string", path: ["keep"] },
+      { code: "invalid_type", expected: "string", path: [] },
+    ];
+    expect(scalarsAsExpected(json, issues)).toBe(true);
+    expect(json).toEqual({ a: "1", list: [{ id: "3", n: 12 }, { id: "x", n: "1e5" }], keep: 5, deep: { v: -0.5 } });
+    expect(scalarsAsExpected({ a: "b" }, [{ code: "invalid_type", expected: "number", path: ["a"] }])).toBe(false);
+    expect(scalarsAsExpected({ a: Number.NaN }, [{ code: "invalid_type", expected: "string", path: ["a"] }])).toBe(false);
   });
 });
