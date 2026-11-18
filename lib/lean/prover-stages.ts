@@ -32,7 +32,7 @@
  * for `≥`/`>`, bounds in binders written out, bound names without primes and subscripts),
  * so a prover written on one spelling proves the others; what it proves is then checked by Lean
  * against the statement as written (inOriginal). A statement already in that form (nearly all:
- * 179 of the 184 of the regression list) goes through as before, with no second check. Measured
+ * 187 of the 193 of the regression list) goes through as before, with no second check. Measured
  * by `npm run lean:variants` (bench/VARIANTS.md).
  *
  * Budget. Every stage has its own limit, and all of them together have PROVER_STAGES_BUDGET_MS
@@ -306,7 +306,8 @@ export const PROVER_STAGES: readonly ProverStage[] = [
     }),
   },
   {
-    // a symmetric inequality in three positive reals with product 1 (and its equality case): the pqr substitution, the algebra by SymPy
+    // an inequality between polynomials or fractions in real variables, with or without its equality case: with x·y·z = 1 the pqr
+    // substitution, else the difference's numerator as squares (AM–GM steps between two monomials); the algebra by SymPy
     id: "inequality",
     phase: "prover",
     beforeSingleTactics: true,
@@ -317,7 +318,10 @@ export const PROVER_STAGES: readonly ProverStage[] = [
     run: (s, budgetMs) => proverResult(inequalityProof(proverArgs(s, budgetMs))),
     texts: () => ({
       tried: (r) => lt(`程序写的不等式证明（${r}）`, `an inequality proof the program wrote (${r})`),
-      trying: lt("尝试程序写的不等式证明（三个正数、乘积为 1 的对称不等式：通分后化成 x+y+z 与 xy+yz+zx 的多项式，逐个因子定号）", "Trying an inequality proof written by the program (a symmetric inequality in three positive numbers with product 1: one fraction, then a polynomial in x+y+z and xy+yz+zx whose factors are signed one by one)"),
+      trying: lt(
+        "尝试程序写的不等式证明（通分后把分子写成若干个带正系数的平方之和；三个正数、乘积为 1 的对称不等式则化成 x+y+z 与 xy+yz+zx 的多项式，逐个因子定号）",
+        "Trying an inequality proof written by the program (one fraction whose numerator is written as squares with positive coefficients; a symmetric inequality in three positive numbers with product 1 as a polynomial in x+y+z and xy+yz+zx whose factors are signed one by one)",
+      ),
       passed: () => lt("✅ 程序写出的不等式证明通过 Lean 检查", "✅ The program's inequality proof passed Lean"),
       failed: (r) => lt(`不等式证明没有成功：${r}`, `The inequality proof did not work: ${r}`),
       title: () => lt("不等式（程序写的证明）", "Inequality (proof written by the program)"),

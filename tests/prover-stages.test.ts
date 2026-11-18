@@ -48,7 +48,11 @@ const ROWS =
 const SUM = ": ∀ n : ℕ, ∑ i ∈ Finset.range (n + 1), i = n * (n + 1) / 2";
 const COORDS = ": ∀ (A B : ℝ × ℝ), A = (0, 0) → B = (3, 4) → Real.sqrt ((A.1 - B.1) ^ 2 + (A.2 - B.2) ^ 2) = 5";
 const ORDER = ": IsLeast {n : ℕ | 0 < n ∧ (3 : ℕ) ^ 5 ∣ (2 : ℕ) ^ n - 1} 162";
-const PLAIN = "(a b : ℝ) (ha : 0 < a) (hb : 0 < b) : 2 * (a * b) ≤ a ^ 2 + b ^ 2";
+// nothing any prover was written for (a strict inequality: not the inequality prover's either)
+const PLAIN = "(a b : ℝ) (ha : 0 < a) (hb : 0 < b) : 0 < a * b + a";
+// a session's statement: positive reals, fractions, a ≤ and when equality holds — no product given
+const CYCLIC =
+  "(a b c : ℝ) (ha : 0 < a) (hb : 0 < b) (hc : 0 < c) : let S : ℝ := a ^ 2 / (a ^ 2 + a * b + b ^ 2) + b ^ 2 / (b ^ 2 + b * c + c ^ 2) + c ^ 2 / (c ^ 2 + c * a + a ^ 2); 1 ≤ S ∧ (S = 1 ↔ a = b ∧ b = c)";
 // a session's statement: three positive reals with product 1, a strengthened inequality, the least value and when it is taken
 const SYMMETRIC =
   ": ∀ (x y z : ℝ), 0 < x → 0 < y → 0 < z → x * y * z = 1 → let S : ℝ := 1 / (1 + x)^2 + 1 / (1 + y)^2 + 1 / (1 + z)^2; let D : ℝ := 2 + x + y + z + x * y + y * z + z * x; (S ≥ 3 / 4 + 8 * (x + y + z - 3) / D^2) ∧ (S ≥ 3 / 4) ∧ (S = 3 / 4 ↔ (x = 1 ∧ y = 1 ∧ z = 1))";
@@ -127,9 +131,13 @@ describe("the order of the stages on a statement", () => {
     // a count of orbits: the program has its proof written — right after the cascade, before
     // optimization (whose gate its lets pass) and before the single tactics
     expect(plan(ORBITS)).toEqual(["hammer", "combinatorics", "trivial", "optimize", "auto"]);
-    // a symmetric inequality with product 1: its prover right after the cascade — nlinarith, as a
-    // single tactic or in the search, has no hold on it; a plain inequality stays with the search
+    // an inequality between fractions of positive reals, with or without a product of 1: its
+    // prover right after the cascade — nlinarith, as a single tactic or in the search, has no hold
+    // on it; without a sign for any variable the automation usually has it, and the prover waits
+    // its turn; a strict inequality is not its kind
     expect(plan(SYMMETRIC)).toEqual(["hammer", "inequality", "trivial", "auto"]);
+    expect(plan(CYCLIC)).toEqual(["hammer", "inequality", "trivial", "auto"]);
+    expect(plan("(a b : ℝ) : 2 * (a * b) ≤ a ^ 2 + b ^ 2")).toEqual(["hammer", "trivial", "inequality", "auto"]);
     expect(plan(PLAIN)).not.toContain("inequality");
     // so has a count of rows: the single tactics would decide it over all 40 320 permutations
     expect(plan(ROWS)).toEqual(["hammer", "combinatorics", "trivial", "auto"]);

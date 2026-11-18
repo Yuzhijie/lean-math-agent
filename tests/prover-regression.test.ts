@@ -11,7 +11,7 @@ import { looksCombinatorial } from "@/lib/lean/combinatorics";
 import { circularShape } from "@/lib/lean/combinatorics/circular";
 import { orbitShape } from "@/lib/lean/combinatorics/orbit";
 import { rowShape } from "@/lib/lean/combinatorics/rows";
-import { looksSymmetricInequality } from "@/lib/lean/inequality";
+import { inequalityFit, looksSymmetricInequality, polynomialInequalityFit } from "@/lib/lean/inequality";
 import { boundedMinScripts, orderProofScripts } from "@/lib/pipeline/lean-attempt";
 import { readingForm } from "@/lib/lean/reading-form";
 import { normalizeTheoremType } from "@/lib/llm/autoformalize";
@@ -277,7 +277,7 @@ describe("bench/provers.json", () => {
       induction: looksInductive,
       optimize: looksOptimization,
       combinatorics: looksCombinatorial,
-      inequality: looksSymmetricInequality,
+      inequality: (t) => inequalityFit(t) > 0,
       order: (t) => orderProofScripts(t).length > 0,
       bounded: (t) => boundedMinScripts(t).length > 0,
     };
@@ -288,7 +288,7 @@ describe("bench/provers.json", () => {
   });
 
   it("the special routes still recognise the statements they were written for", () => {
-    const shape: Record<string, (t: string) => unknown> = { "optimize/oddtown": oddtownShape, "optimize/process": processShape, "combinatorics/circular": circularShape, "combinatorics/orbit": orbitShape, "combinatorics/rows": rowShape, "inequality/symmetric": looksSymmetricInequality };
+    const shape: Record<string, (t: string) => unknown> = { "optimize/oddtown": oddtownShape, "optimize/process": processShape, "combinatorics/circular": circularShape, "combinatorics/orbit": orbitShape, "combinatorics/rows": rowShape, "inequality/symmetric": looksSymmetricInequality, "inequality/squares": (t) => polynomialInequalityFit(t) > 0 };
     const seen = new Set<string>();
     for (const c of cases) {
       const read = c.for ? shape[c.for] : undefined;

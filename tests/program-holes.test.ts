@@ -14,12 +14,14 @@ beforeEach(() => {
 });
 
 describe("program provers on a sketch hole", () => {
-  it("routes a plain inequality to the tactic search only", async () => {
-    const st = "(a b : ℝ) (ha : 0 < a) (hb : 0 < b) : 2 * (a * b) ≤ a ^ 2 + b ^ 2";
+  it("routes a statement no prover was written for to the tactic search only", async () => {
+    const st = "(a b : ℝ) (ha : 0 < a) (hb : 0 < b) : 0 < a * b + a";
     expect(holeProversFor(st)).toEqual(["auto"]);
-    auto.mockResolvedValue({ proof: { tactics: "nlinarith [sq_nonneg (a - b)]" }, reason: "" });
+    // a ≤ between arithmetic of positive reals is the inequality prover's kind: it comes first
+    expect(holeProversFor("(a b : ℝ) (ha : 0 < a) (hb : 0 < b) : 2 * (a * b) ≤ a ^ 2 + b ^ 2")).toEqual(["inequality", "auto"]);
+    auto.mockResolvedValue({ proof: { tactics: "nlinarith [mul_pos ha hb]" }, reason: "" });
     const r = await programHoleProof({ sessionId: "s", theoremName: "t_hole1", statement: st, useMathlib: true, budgetMs: 60_000, opens: ["Real"] });
-    expect(r).toMatchObject({ prover: "auto", tactics: "nlinarith [sq_nonneg (a - b)]" });
+    expect(r).toMatchObject({ prover: "auto", tactics: "nlinarith [mul_pos ha hb]" });
     expect(auto.mock.calls[0][0]).toMatchObject({ theoremName: "t_hole1", theoremType: st, opens: ["Real"] });
     expect(auto.mock.calls[0][0].timeLimitMs).toBeLessThanOrEqual(60_000);
     expect(geo).not.toHaveBeenCalled();

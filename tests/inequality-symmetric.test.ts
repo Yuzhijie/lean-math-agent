@@ -32,7 +32,7 @@ describe("which statements the prover is for", () => {
   });
 
   it("not: no product, another product, a variable that may be negative, another number, no inequality", () => {
-    const no = (t: string) => expect(inequalityFit(t), t).toBe(0);
+    const no = (t: string) => expect(looksSymmetricInequality(t), t).toBe(false);
     no("(a b : ℝ) (ha : 0 < a) (hb : 0 < b) : 2 * (a * b) ≤ a ^ 2 + b ^ 2");
     no("(a b : ℝ) (ha : 0 < a) (hb : 0 < b) (h : a * b = 1) : 2 ≤ a + b");
     no("(a b c : ℝ) (ha : 0 < a) (hb : 0 < b) (habc : a * b * c = 1) : 3 ≤ a + b + c");

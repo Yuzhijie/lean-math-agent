@@ -19,13 +19,12 @@
  * ring` checks the fraction, `linear_combination … * h` the reduction, positivity / nlinarith the
  * signs.
  */
-import { spawn } from "node:child_process";
-import path from "node:path";
 import { isInaccessible, type GoalState } from "../geometry/goal";
 import { parseTerm, ParseError, slice, unwrap, type Node } from "../geometry/expr";
-import { Frac, Poly } from "../geometry/poly";
+import { Poly } from "../geometry/poly";
+import { ID, Unsupported, letsUsed, num, power, runHelper as runScript, toAst, type Ast, type AstContext, type Sparse } from "./shared";
 
-const ID = "[A-Za-z_][\\w'₀-₉]*";
+export { inlineLets, letsUsed } from "./shared";
 
 /** The names the proof introduces itself; a statement that uses one is left to the other routes. */
 const OWN = ["amgm_", "p_", "q_", "hpd_", "hqd_", "hp_", "hq_", "ht1_", "ht2_", "e_", "t_", "hfrac_", "hnum_", "hg_", "hden_", "hdiff_", "heq_", "hzero_", "hp0_", "hq0_", "hsq_", "hxy_", "hyz_"];
@@ -108,84 +107,7 @@ export function readParts(target: string, vars: readonly string[]): Part[] | und
   return parts.length ? parts : undefined;
 }
 
-// ── expressions for the helper ────────────────────────────────────────
-
-type Ast = ["num", string] | ["var", number] | ["neg", Ast] | ["+" | "-" | "*" | "/", Ast, Ast] | ["^", Ast, number] | ["base", number, Ast];
-
-class Unsupported extends Error {}
-
-/** The text with every let replaced by its value (as `simp only [lets]` leaves the goal). */
-export function inlineLets(text: string, lets: ReadonlyMap<string, string>, depth = 0): string {
-  if (depth > 8) throw new Unsupported("lets too deep");
-  return text.replace(new RegExp(`(?<![\\w.'₀-₉])${ID}`, "g"), (name) => (lets.has(name) ? `(${inlineLets(lets.get(name)!, lets, depth + 1)})` : name));
-}
-
-/** The lets a text uses, the lets those use included, in the context's order. */
-export function letsUsed(text: string, lets: ReadonlyMap<string, string>): string[] {
-  const seen = new Set<string>();
-  const visit = (t: string) => {
-    for (const m of t.matchAll(new RegExp(`(?<![\\w.'₀-₉])${ID}`, "g"))) {
-      if (lets.has(m[0]) && !seen.has(m[0])) {
-        seen.add(m[0]);
-        visit(lets.get(m[0])!);
-      }
-    }
-  };
-  visit(text);
-  return [...lets.keys()].filter((n) => seen.has(n));
-}
-
-interface Ctx {
-  setting: SymmetricSetting;
-  /** id → the base's text with the lets written out */
-  bases: string[];
-}
-
-function toAst(src: string, node: Node, ctx: Ctx, depth = 0): Ast {
-  const n = unwrap(node);
-  switch (n.k) {
-    case "num":
-      return ["num", Frac.parse(n.text).toString()];
-    case "ident": {
-      const i = ctx.setting.vars.indexOf(n.name);
-      if (i >= 0) return ["var", i];
-      const value = ctx.setting.lets.get(n.name);
-      if (value === undefined || depth > 8) throw new Unsupported(`name ${n.name}`);
-      return toAst(value, parseTerm(value), ctx, depth + 1);
-    }
-    case "neg":
-      return ["neg", toAst(src, n.a, ctx, depth)];
-    case "bin": {
-      if (n.op === "+" || n.op === "-" || n.op === "*") return [n.op, toAst(src, n.a, ctx, depth), toAst(src, n.b, ctx, depth)];
-      if (n.op === "/") return ["/", toAst(src, n.a, ctx, depth), denominator(src, n.b, ctx, depth)];
-      if (n.op === "^") return ["^", toAst(src, n.a, ctx, depth), exponent(n.b)];
-      throw new Unsupported(`operator ${n.op}`);
-    }
-    default:
-      throw new Unsupported(n.k);
-  }
-}
-
-function exponent(node: Node): number {
-  const e = unwrap(node);
-  if (e.k !== "num" || !/^\d+$/.test(e.text) || Number(e.text) > 12) throw new Unsupported("exponent");
-  return Number(e.text);
-}
-
-/** A denominator: its bases (what stands under a power, or a factor) are numbered for the helper. */
-function denominator(src: string, node: Node, ctx: Ctx, depth: number): Ast {
-  const n = unwrap(node);
-  if (n.k === "num") return toAst(src, n, ctx, depth);
-  if (n.k === "bin" && n.op === "*") return ["*", denominator(src, n.a, ctx, depth), denominator(src, n.b, ctx, depth)];
-  if (n.k === "bin" && n.op === "^") return ["^", denominator(src, n.a, ctx, depth), exponent(n.b)];
-  const id = ctx.bases.length;
-  ctx.bases.push(inlineLets(slice(src, n), ctx.setting.lets));
-  return ["base", id, toAst(src, n, ctx, depth)];
-}
-
 // ── the helper ────────────────────────────────────────────────────────
-
-type Sparse = [string, Record<string, number>][];
 
 interface HelperPart {
   ok: boolean;
@@ -212,41 +134,9 @@ interface HelperAnswer {
   parts: HelperPart[];
 }
 
-function runHelper(body: string, timeoutMs: number): Promise<HelperAnswer | undefined> {
-  return new Promise((resolve) => {
-    let out = "";
-    let done = false;
-    const finish = (a: HelperAnswer | undefined) => {
-      if (!done) {
-        done = true;
-        clearTimeout(timer);
-        resolve(a);
-      }
-    };
-    const child = spawn(process.env.GEOMETRY_PYTHON ?? "python3", [path.join(process.cwd(), "scripts", "sym_inequality.py")], { stdio: ["pipe", "pipe", "ignore"] });
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      finish(undefined);
-    }, timeoutMs);
-    child.on("error", () => finish(undefined));
-    child.stdin.on("error", () => undefined);
-    child.stdout.on("data", (d) => (out += d));
-    child.on("close", () => {
-      try {
-        finish(JSON.parse(out) as HelperAnswer);
-      } catch {
-        finish(undefined);
-      }
-    });
-    child.stdin.end(body);
-  });
-}
+const runHelper = (body: string, timeoutMs: number) => runScript<HelperAnswer>("sym_inequality.py", body, timeoutMs);
 
 // ── the proof ─────────────────────────────────────────────────────────
-
-const num = (q: string) => (q.includes("/") ? `(${q.replace("/", " / ")})` : q);
-
-const power = (base: string, exp: number) => (exp === 1 ? `(${base})` : `(${base}) ^ ${exp}`);
 
 /** What the helper needs to know of one statement, and what came back: the script is written from these. */
 export interface Plan {
@@ -266,7 +156,7 @@ export function request(st: GoalState): { setting: SymmetricSetting; parts: Part
   if (!setting) return "not three positive reals with product 1";
   const parts = readParts(st.target, setting.vars);
   if (!parts) return "a part of the goal is neither an inequality (≤, ≥) nor an equality case";
-  const ctx: Ctx = { setting, bases: [] };
+  const ctx: AstContext = { vars: setting.vars, lets: setting.lets, bases: [] };
   const specs: { lhs: Ast; rhs: Ast }[] = [];
   const specOf: number[][] = [];
   const partBases: number[][] = [];
