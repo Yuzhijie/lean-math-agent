@@ -119,7 +119,7 @@ describe("statement lock in /api/solve", () => {
     const req = new Request("http://localhost/api/solve", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ problem_text: "证明 n + 0 = n", options: { skip_nl_solution: true } }),
+      body: JSON.stringify({ problem_text: "证明 n + 0 = n", options: { skip_nl_solution: true, lean_attempt: true } }),
     });
     const res = await POST(req);
     expect(res.status).toBe(200);

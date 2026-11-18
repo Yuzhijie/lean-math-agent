@@ -1,7 +1,12 @@
 /**
  * Theorem pipeline shared by `/api/solve` and `/api/solve-stream`.
  *
- *   NL solution → autoformalize (statement lock)
+ * A solve stops after the natural-language proof: the formal proof is a run of its own, started
+ * by hand from the Lean tab (/api/lean-attempt) — as for every other kind of problem. The rest
+ * of this pipeline runs in the same call only when it is asked for (`options.lean_attempt:
+ * true`, or a statement the caller brings: `skip_autoformalize`).
+ *
+ *   NL solution → [stop] → autoformalize (statement lock)
  *   → the stages that need no model (lib/lean/prover-stages.ts — the table the Lean attempt
  *     runs too: automation, the program's scripts and provers best fit first, the tactic search)
  *   → memory replay → whole-proof prover loop (sample k, verify, repair with Lean feedback)
@@ -28,6 +33,7 @@ import { CancelledError, throwIfCancelled } from "../jobs";
 import { buildProverContext, rememberVerifiedProof } from "../prover/context";
 import { proveBySketch, sketchEnabled } from "../prover/sketch";
 import { runProverStages, stageOf } from "../lean/prover-stages";
+import { manualLeanAttempt } from "./lean-attempt";
 import { hugePower } from "../compute/nat-expr";
 import { proveWholeTheorem, wholeProofEnabled } from "../prover/whole-proof";
 import { rememberRepair } from "../lean/proof-memory";
@@ -71,21 +77,19 @@ export interface TheoremPipelineOptions {
   /** Search budget preset: low | normal | high (default PROOF_BUDGET, normal). */
   budget?: string;
   /**
-   * Run the formal proof as part of this solve. A geometry proof problem otherwise stops after the
-   * natural-language proof: its Lean proof (minutes) is started by hand from the Lean tab.
+   * Run the formal proof as part of this solve. Otherwise the solve stops after the
+   * natural-language proof and the Lean proof (minutes, up to half an hour) is started by hand
+   * from the Lean tab.
    */
   lean_attempt?: boolean;
 }
 
-/** Strong signs of a plane-geometry problem; a weaker word needs a second one. */
-const GEOMETRY_STRONG = /[∠△⊙▱]|三角形|圆|四边形|平行四边形|梯形|菱形|矩形|正方形|垂足|外心|内心|垂心|重心|triangle|circle|quadrilateral|parallelogram|trapezoid|rhombus|rectangle|circumcent|incent|orthocent|centroid/i;
-const GEOMETRY_WEAK = /垂直|平行|中点|角平分线|切线|弦|线段|直线|延长|交于|共线|共圆|perpendicular|parallel|midpoint|bisector|tangent|chord|segment|collinear|concyclic|extended|intersect/gi;
-
-/** A plane-geometry problem (by its wording): its formal proof is a separate step started by hand. */
-export function looksGeometryProblem(text: string): boolean {
-  if (GEOMETRY_STRONG.test(text)) return true;
-  const weak = new Set((text.match(GEOMETRY_WEAK) ?? []).map((w) => w.toLowerCase()));
-  return weak.size >= 2;
+/**
+ * Whether this call goes on to the formal proof: only when asked (`lean_attempt`), or when the
+ * caller brings the statement to prove (`skip_autoformalize`).
+ */
+export function runsFormalProof(opts: Pick<TheoremPipelineOptions, "lean_attempt" | "skip_autoformalize">): boolean {
+  return opts.lean_attempt === true || opts.skip_autoformalize === true;
 }
 
 export interface TheoremPipelineArgs {
@@ -120,12 +124,22 @@ export async function runTheoremPipeline(args: TheoremPipelineArgs): Promise<The
     }
   }
 
-  // ── Geometry proofs: the natural-language proof is the solve; the Lean proof (formalization,
-  //    the coordinate prover — often minutes) is started by hand from the Lean tab (/api/lean-attempt).
-  if (!opts.skip_autoformalize && opts.lean_attempt !== true && looksGeometryProblem(session.problem_text)) {
-    const manual: LeanProofAttempt = { attempted: false, success: false };
+  // ── The natural-language proof is the solve. The Lean proof — formalization, the program's
+  //    provers, the model — takes minutes (a solve that went on through all of it: 32 minutes and
+  //    50 model calls) and is a run of its own, started by hand from the Lean tab
+  //    (/api/lean-attempt; `proof_problem`: the claim itself is formalized, there is no answer).
+  if (!runsFormalProof(opts)) {
+    const manual = manualLeanAttempt();
     updateSession(session.id, { proof_problem: true, lean_proof_attempt: manual, pipeline_stage: "complete" });
-    emit("complete", lt("几何证明题：自然语言证明已给出；Lean 形式化证明请在 Lean 标签页手动开始", "Geometry proof: the natural-language proof is ready; start the Lean formal proof by hand from the Lean tab"));
+    const byHand = lt("Lean 形式化证明请在 Lean 标签页手动开始", "start the Lean formal proof by hand from the Lean tab");
+    emit(
+      "complete",
+      nlSolution
+        ? lt(`证明题：自然语言证明已给出；${byHand}`, `Proof problem: the natural-language proof is ready; ${byHand}`)
+        : opts.skip_nl_solution
+          ? lt(`证明题：${byHand}`, `Proof problem: ${byHand}`)
+          : lt(`证明题：自然语言证明没有生成（原因见上一行），可以重新求解；${byHand}`, `Proof problem: no natural-language proof was produced (the line above says why) — solve again; ${byHand}`),
+    );
     return {
       status: 200,
       body: { session_id: session.id, problem_type: "theorem", nl_solution: nlSolution, lean_proof_attempt: manual },

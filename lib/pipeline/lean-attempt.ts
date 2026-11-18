@@ -1,11 +1,13 @@
 /**
- * Lean 4 formalization attempt for a solved non-theorem problem
- * (computational, optimization, find-all-values).
+ * Lean 4 formalization attempt for a solved problem: computational, optimization,
+ * find-all-values, or a claim to prove (then without an answer).
  *
  * This is the last step of solving and is started by hand: the solve
  * pipelines return `{ attempted: false }` and the user starts it from the
  * Lean tab (POST /api/lean-attempt). Passing `options.lean_attempt: true`
- * to /api/solve or /api/solve-stream still runs it automatically.
+ * to /api/solve or /api/solve-stream runs the formal proof in the same call
+ * (a computational problem: this attempt; a proof problem: the theorem
+ * pipeline, lib/pipeline/theorem-pipeline.ts).
  *
  * The known answer goes into the formalization, so the statement says "the
  * answer is X". An accepted statement is then really proved: the automation

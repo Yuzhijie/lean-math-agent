@@ -4,7 +4,9 @@ import type { LeanVerifyResult } from "@/lib/lean/sandbox";
 
 // /api/solve and /api/solve-stream through the shared theorem pipeline with
 // every LLM / Lean boundary mocked: whole-proof first, stepwise fallback,
-// optional multi-agent method evaluation, and per-run metrics.
+// optional multi-agent method evaluation, and per-run metrics. The formal proof runs in the
+// same call only when asked for (options.lean_attempt — every solve here; a solve that does
+// not ask stops after the natural-language proof: tests/proof-by-hand.test.ts).
 
 const { TYPE, SIG, wholeMock, orchestratorMock, verifyMock } = vi.hoisted(() => ({
   TYPE: ": ∀ (n : Nat), n + 0 = n",
@@ -121,7 +123,7 @@ async function solve(options: Record<string, unknown> = {}) {
   const req = new Request("http://localhost/api/solve", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ problem_text: "证明 n + 0 = n", options }),
+    body: JSON.stringify({ problem_text: "证明 n + 0 = n", options: { lean_attempt: true, ...options } }),
   });
   const res = await POST(req);
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
@@ -227,7 +229,7 @@ describe("theorem pipeline: multi-agent methods and metrics", () => {
       new Request("http://localhost/api/solve-stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ problem_text: "证明 n + 0 = n" }),
+        body: JSON.stringify({ problem_text: "证明 n + 0 = n", options: { lean_attempt: true } }),
       }),
     );
     expect(res.headers.get("content-type")).toContain("text/event-stream");

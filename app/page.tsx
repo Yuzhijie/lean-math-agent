@@ -817,7 +817,7 @@ export default function Home() {
                     </span>
                   </TooltipTrigger>
                   <TooltipContent side="bottom" className="max-w-xs">
-                    {tr("自动判断题型（计算、证明、最值、求所有解），直接给出一份完整解答；证明题还会尝试用 Lean 形式化验证。", "Works out the kind of problem (computation, proof, optimization, find-all) and gives one complete solution; proofs are also checked formally in Lean.")}
+                    {tr("自动判断题型（计算、证明、最值、求所有解），直接给出一份完整解答。Lean 形式化证明是单独的一步：求解后在 Lean 标签页手动开始。", "Works out the kind of problem (computation, proof, optimization, find-all) and gives one complete solution. The Lean formal proof is a separate step: start it from the Lean tab afterwards.")}
                   </TooltipContent>
                 </Tooltip>
                 <Tooltip>

@@ -9,9 +9,8 @@ import { withRequestEvalMode } from "@/lib/eval-mode";
 
 /**
  * The last solving step, started by hand: Lean 4 formalization of a solved
- * computational / optimization / find-all-values problem, or of a geometry proof problem
- * (proof_problem: the claim itself is formalized, no answer). Other theorem problems are
- * formalized as part of solving and have their own proof steps.
+ * computational / optimization / find-all-values problem (the statement says "the answer is
+ * X"), or of a proof problem (proof_problem: the claim itself is formalized, no answer).
  */
 async function handlePOST(req: Request) {
   const body = (await req.json().catch(() => ({}))) as { session_id?: string };
