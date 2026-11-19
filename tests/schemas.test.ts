@@ -101,6 +101,14 @@ describe("generateProblemResponseSchema leniency", () => {
     expect(parsed.problems[0].diagram_svg).toBe("<svg></svg>");
   });
 
+  it("keeps the technique tags it knows and drops the others instead of failing the batch", () => {
+    // one problem tagged with a technique outside the list had failed every problem of the reply
+    const parsed = generateProblemResponseSchema.parse({
+      problems: [problem(), problem({ suggested_techniques: ["pattern_recognition", "Direct Computation", "case-analysis", "direct_computation", 3] }), problem({ suggested_techniques: ["找规律"] }), problem({ suggested_techniques: null })],
+    });
+    expect(parsed.problems.map((p) => p.suggested_techniques)).toEqual([["algebraic_manipulation"], ["direct_computation", "case_analysis"], [], []]);
+  });
+
   it("still rejects an empty hints array", () => {
     expect(() =>
       generateProblemResponseSchema.parse({

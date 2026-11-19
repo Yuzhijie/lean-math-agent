@@ -7,6 +7,7 @@ import {
   GRADE_LEVELS,
   DIFFICULTY_LEVELS,
   COMPETITION_DOMAINS,
+  type ProofTechnique,
 } from "./types";
 
 // ── Shared ────────────────────────────────────────────────────────────
@@ -166,7 +167,19 @@ export const generatedProblemSchema = z.object({
   grade_level: gradeLevelSchema,
   difficulty: difficultyLevelSchema,
   domain: competitionDomainSchema,
-  suggested_techniques: z.array(proofTechniqueSchema).min(1),
+  // Lenient: one tag outside the list (the list has nothing for "find the rule") made the
+  // whole batch fail. The tags are only shown on the card: the known ones are kept (spelled
+  // with spaces, hyphens or capitals too), the others dropped — none left is fine.
+  suggested_techniques: z
+    .array(z.unknown())
+    .nullish()
+    .transform((arr) => [
+      ...new Set(
+        (arr ?? [])
+          .map((t) => (typeof t === "string" ? t.trim().toLowerCase().replace(/[\s-]+/g, "_") : ""))
+          .filter((t): t is ProofTechnique => (PROOF_TECHNIQUES as readonly string[]).includes(t)),
+      ),
+    ]),
   source_inspiration: z.string().min(1),
   estimated_solve_time: z.string().min(1),
   // Lenient: models often emit null instead of omitting the field
