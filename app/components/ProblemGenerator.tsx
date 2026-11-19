@@ -118,6 +118,7 @@ function getLabels(tr: Tr) {
     logic: tr("逻辑", "Logic"),
     computation: tr("计算", "Computation"),
     word_problem: tr("应用题", "Word problems"),
+    sequence: tr("数列", "Sequences"),
   };
 
   return { GRADE_LABELS, DIFFICULTY_LABELS, DOMAIN_LABELS };

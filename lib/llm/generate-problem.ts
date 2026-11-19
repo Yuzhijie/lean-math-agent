@@ -205,6 +205,7 @@ function getDomainLabel(domain: CompetitionDomain): string {
     logic: "逻辑",
     computation: "计算",
     word_problem: "应用题",
+    sequence: "数列",
   };
   return labels[domain];
 }
