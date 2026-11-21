@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, ClipboardCheck, Copy, FileStack, GraduationCap, Loader2, Plus, RefreshCw, Sparkles, Trash2, UserPlus, Users } from "lucide-react";
+import { ArrowLeft, ClipboardCheck, Copy, FileStack, FileText, GraduationCap, Loader2, Plus, RefreshCw, Sparkles, Target, Trash2, UserPlus, Users } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,7 +39,9 @@ export default function GradingPage() {
  * A whole answered paper (答卷) is split into questions, each marked, then diagnosed (approach,
  * mastery per skill, what to test next with one-click practice).
  * URL: ?member=<id> | ?submission=<id> | ?paper=<id>; a problem to mark can be passed as ?session=<id>,
- * ?bank=<id>&item=<id> or ?problem=<text> (from the solver and the bank).
+ * ?bank=<id>&item=<id> or ?problem=<text> (from the solver and the bank), a generated exam to mark a
+ * whole paper against as ?exam=<id> (from the exam page). Marked work feeds the exam page's plans:
+ * “生成针对性试卷” on a student, “按全班薄弱点出卷”, “据此出下一张” on a paper of an exam.
  */
 function Grading() {
   const { tr } = useI18n();
@@ -48,6 +50,7 @@ function Grading() {
   const memberId = params.get("member");
   const submissionId = params.get("submission");
   const paperId = params.get("paper");
+  const examId = params.get("exam") ?? undefined;
   const prefill = useMemo<ProblemPrefill | undefined>(() => {
     const p: ProblemPrefill = {
       session_id: params.get("session") ?? undefined,
@@ -77,10 +80,11 @@ function Grading() {
     (q: Record<string, string>) => {
       const next = new URLSearchParams(q);
       if (prefill) for (const k of ["session", "bank", "item", "problem"]) if (params.get(k)) next.set(k, params.get(k)!);
+      if (examId && !q.paper && !q.submission) next.set("exam", examId);
       const qs = next.toString();
       router.push(qs ? `/grading?${qs}` : "/grading");
     },
-    [router, params, prefill],
+    [router, params, prefill, examId],
   );
   const refresh = () => setReload((n) => n + 1);
   const opened = !!(memberId || submissionId || paperId);
@@ -101,6 +105,10 @@ function Grading() {
             </div>
             <div className="flex items-center gap-1 sm:gap-3">
               <LocaleSwitcher />
+              <Link href="/exam" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "gap-1.5")} title={tr("组卷出题，按批改结果出针对性试卷", "Make exams, and targeted papers from the marking")}>
+                <FileText className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">{tr("试卷", "Exams")}</span>
+              </Link>
               <Link href="/" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "gap-1.5")}>
                 <ArrowLeft className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">{tr("返回求解", "Back to solver")}</span>
@@ -184,9 +192,9 @@ function Grading() {
           ) : paperId ? (
             <PaperPane key={paperId} id={paperId} onBack={(m) => go({ member: m })} onOpen={(id) => go({ submission: id })} onChanged={refresh} />
           ) : memberId ? (
-            <MemberPane key={memberId} id={memberId} prefill={prefill} onOpen={(id) => go({ submission: id })} onOpenPaper={(id) => go({ paper: id })} onChanged={refresh} onRemoved={() => (refresh(), go({}))} />
+            <MemberPane key={memberId} id={memberId} prefill={prefill} examId={examId} onOpen={(id) => go({ submission: id })} onOpenPaper={(id) => go({ paper: id })} onChanged={refresh} onRemoved={() => (refresh(), go({}))} />
           ) : (
-            <Overview me={me} prefill={prefill} onOpenMember={(id) => go({ member: id })} onOpen={(id) => go({ submission: id })} onOpenPaper={(id) => go({ paper: id })} />
+            <Overview me={me} prefill={prefill} examId={examId} onOpenMember={(id) => go({ member: id })} onOpen={(id) => go({ submission: id })} onOpenPaper={(id) => go({ paper: id })} />
           )}
         </section>
       </main>
@@ -353,19 +361,21 @@ function JoinTeacher({ onJoined }: { onJoined: (memberId: string) => void }) {
 function Overview({
   me,
   prefill,
+  examId,
   onOpenMember,
   onOpen,
   onOpenPaper,
 }: {
   me: MeResponse | null;
   prefill?: ProblemPrefill;
+  examId?: string;
   onOpenMember: (id: string) => void;
   onOpen: (id: string) => void;
   onOpenPaper: (id: string) => void;
 }) {
   const { tr } = useI18n();
   const students = me?.teacher?.students ?? [];
-  const [tab, setTab] = useState<"mark" | "students" | "stats">(prefill || !students.some((s) => s.stats.marked) ? "mark" : "students");
+  const [tab, setTab] = useState<"mark" | "students" | "stats">(prefill || examId || !students.some((s) => s.stats.marked) ? "mark" : "students");
   if (!me) return <Skeleton className="h-64" />;
   // Whom work can be uploaded for: my students, and myself where I joined a teacher.
   const choices = [
@@ -397,9 +407,15 @@ function Overview({
             {label}
           </button>
         ))}
+        {tab !== "mark" && students.some((s) => s.stats.marked) && (
+          <Link href="/exam?class=1" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "mb-1 ml-auto h-7 gap-1.5 text-xs")} title={tr("按全班批改结果里多数学生没掌握的知识点出一张卷", "A paper on the skills most students have not yet mastered, from the marking")}>
+            <Target className="h-3.5 w-3.5" />
+            {tr("按全班薄弱点出卷", "Paper on the class's weak skills")}
+          </Link>
+        )}
       </div>
 
-      {tab === "mark" && <MarkForm students={choices} isTeacher={students.length > 0} prefill={prefill} onDone={onOpen} onPaperDone={onOpenPaper} />}
+      {tab === "mark" && <MarkForm students={choices} isTeacher={students.length > 0} prefill={prefill} examId={examId} onDone={onOpen} onPaperDone={onOpenPaper} />}
 
       {tab === "students" && (
         <div className="overflow-x-auto rounded-md border border-border/60">
@@ -445,6 +461,7 @@ function Overview({
 function MemberPane({
   id,
   prefill,
+  examId,
   onOpen,
   onOpenPaper,
   onChanged,
@@ -452,6 +469,7 @@ function MemberPane({
 }: {
   id: string;
   prefill?: ProblemPrefill;
+  examId?: string;
   onOpen: (id: string) => void;
   onOpenPaper: (id: string) => void;
   onChanged: () => void;
@@ -486,6 +504,16 @@ function MemberPane({
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-lg font-semibold">{d.member.name}</h2>
         {d.role === "student" && <span className="text-sm text-muted-foreground">{tr(`老师：${d.teacher}`, `Teacher: ${d.teacher}`)}</span>}
+        {d.role === "teacher" && d.stats.marked > 0 && (
+          <Link
+            href={`/exam?member=${encodeURIComponent(d.member.id)}`}
+            className={cn(buttonVariants({ size: "sm" }), "h-7 gap-1.5 text-xs")}
+            title={tr("按这名学生批改结果里没掌握的知识点出卷：薄弱的多出、降一级难度、做错的题出变式；掌握的少出、升一级", "A paper from this student's marking: more questions, one step easier and variants of what was got wrong on weak skills; fewer and one step harder on mastered ones")}
+          >
+            <Target className="h-3.5 w-3.5" />
+            {tr("生成针对性试卷", "Targeted paper")}
+          </Link>
+        )}
         {d.role === "teacher" && d.member.linked && (
           <Button
             variant="ghost"
@@ -516,6 +544,7 @@ function MemberPane({
             students={[{ id: d.member.id, label: d.member.name }]}
             isTeacher={d.role === "teacher"}
             prefill={prefill}
+            examId={examId}
             onDone={(sid) => (onChanged(), onOpen(sid))}
             onPaperDone={(pid) => (onChanged(), onOpenPaper(pid))}
           />
@@ -592,17 +621,19 @@ function MarkForm({
   students,
   isTeacher,
   prefill,
+  examId,
   onDone,
   onPaperDone,
 }: {
   students: { id: string; label: string }[];
   isTeacher: boolean;
   prefill?: ProblemPrefill;
+  examId?: string;
   onDone: (submissionId: string) => void;
   onPaperDone: (paperId: string) => void;
 }) {
   const { tr } = useI18n();
-  const [mode, setMode] = useState<"one" | "paper">("one");
+  const [mode, setMode] = useState<"one" | "paper">(examId && isTeacher ? "paper" : "one");
   const [busy, setBusy] = useState(false);
   return (
     <div className="space-y-3">
@@ -621,7 +652,7 @@ function MarkForm({
       {mode === "one" ? (
         <SubmitWork students={students} isTeacher={isTeacher} prefill={prefill} onDone={(s) => onDone(s.id)} />
       ) : (
-        <SubmitPaper students={students} isTeacher={isTeacher} onDone={onPaperDone} onBusy={setBusy} />
+        <SubmitPaper students={students} isTeacher={isTeacher} examId={examId} onDone={onPaperDone} onBusy={setBusy} />
       )}
     </div>
   );
@@ -744,7 +775,32 @@ function PaperPane({ id, onBack, onOpen, onChanged }: { id: string; onBack: (mem
           {d.member.name} · {new Date(p.created_at).toLocaleString()}
         </span>
         {p.status !== "marked" && <Badge variant={p.status === "failed" ? "destructive" : "warning"}>{p.status === "failed" ? tr("批改失败", "Failed") : tr("部分题目未能批改", "Some questions could not be marked")}</Badge>}
+        {d.score && (
+          <span className="rounded-md bg-primary/10 px-2 py-0.5 text-sm font-semibold tabular-nums text-primary" data-testid="paper-score">
+            {tr(`得分 ${d.score.got} / ${d.score.total}`, `Score ${d.score.got} / ${d.score.total}`)}
+          </span>
+        )}
       </div>
+      {d.role === "teacher" && (d.exam || d.score) && (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          {d.exam ? (
+            <Link href={`/exam?id=${encodeURIComponent(d.exam.id)}`} className="inline-flex items-center gap-1.5 text-primary hover:underline">
+              <FileText className="h-3.5 w-3.5" />
+              {tr(`按试卷批改：${d.exam.title}`, `Marked against the exam: ${d.exam.title}`)}
+            </Link>
+          ) : (
+            <span className="text-xs text-muted-foreground">{tr("所用的试卷已删除", "The exam it was marked against was deleted")}</span>
+          )}
+          <Link
+            href={`/exam?member=${encodeURIComponent(d.member.id)}`}
+            className={cn(buttonVariants({ size: "sm", variant: "outline" }), "h-7 gap-1.5 text-xs")}
+            title={tr("用这名学生到现在为止的批改结果（含这张卷和老师的改判）出下一张针对性试卷", "The next targeted paper from this student's marking so far (this paper and your corrections included)")}
+          >
+            <Target className="h-3.5 w-3.5" />
+            {tr("据此出下一张", "Plan the next paper")}
+          </Link>
+        </div>
+      )}
       {p.error && <p className="text-sm text-destructive">{p.error}</p>}
       {p.note && <p className="rounded-md bg-warning/10 px-3 py-2 text-xs">{tr("读卷备注：", "Note from reading: ")}{p.note}</p>}
       <ErrorNote message={error} onDismiss={() => setError(null)} />

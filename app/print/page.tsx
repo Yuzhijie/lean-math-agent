@@ -8,6 +8,8 @@ import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { Candidate, Generation } from "@/lib/bank/types";
 import { answerText, fromCandidates, loadStashedWorksheet, optionColumns, type Worksheet, type WorksheetQuestion } from "@/lib/bank/worksheet";
+import type { Exam } from "@/lib/exam/types";
+import { examWorksheet } from "@/lib/exam/worksheet";
 
 type Scope = "passed" | "all" | "picked";
 type Answers = "end" | "inline" | "none";
@@ -31,10 +33,13 @@ export default function PrintPage() {
   const [solutions, setSolutions] = useState(false);
   const [onePerPage, setOnePerPage] = useState(false);
   const [nameLine, setNameLine] = useState(true);
+  /** A generated exam: the paper's total points (the score line is out of it). */
+  const [examTotal, setExamTotal] = useState<number | null>(null);
 
   useEffect(() => {
     const url = new URL(window.location.href);
     const key = url.searchParams.get("key");
+    const exam = url.searchParams.get("exam");
     const bank = url.searchParams.get("bank");
     const gen = url.searchParams.get("gen");
     const ids = url.searchParams.get("ids")?.split(",").filter(Boolean) ?? null;
@@ -49,6 +54,21 @@ export default function PrintPage() {
           setKind(ws.kind ?? "questions");
         }
       });
+      return;
+    }
+    if (exam) {
+      fetch(`/api/exams/${encodeURIComponent(exam)}`)
+        .then(async (r) => {
+          const d = (await r.json()) as { exam?: Exam; error?: string };
+          if (!r.ok || !d.exam) throw new Error(d.error ?? `HTTP ${r.status}`);
+          const ws = examWorksheet(d.exam, tr);
+          setQuestions(ws.questions);
+          setTitle(ws.title);
+          setExamTotal(ws.total);
+          setScope("all");
+          if (url.searchParams.get("answers") === "end") setAnswers("end");
+        })
+        .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
       return;
     }
     if (!bank || !gen) {
@@ -199,7 +219,7 @@ export default function PrintPage() {
                 <div className="mt-3 flex gap-8 text-sm">
                   <span>{tr("姓名：", "Name: ")}<span className="inline-block w-40 border-b border-neutral-500" /></span>
                   <span>{tr("日期：", "Date: ")}<span className="inline-block w-28 border-b border-neutral-500" /></span>
-                  <span>{tr("得分：", "Score: ")}<span className="inline-block w-16 border-b border-neutral-500" />{` / ${shown.length}`}</span>
+                  <span>{tr("得分：", "Score: ")}<span className="inline-block w-16 border-b border-neutral-500" />{` / ${examTotal ?? shown.length}`}</span>
                 </div>
               )}
             </header>
@@ -207,6 +227,12 @@ export default function PrintPage() {
             <ol className="space-y-7">
               {shown.map((q, i) => (
                 <li key={q.id} className={cn("q-block", onePerPage && i > 0 && "page-break")} data-testid="worksheet-question">
+                  {/* a generated exam's section heading before its first question */}
+                  {q.section && q.section !== shown[i - 1]?.section && (
+                    <h2 className="mb-4 text-base font-bold" data-testid="worksheet-section">
+                      {q.section}
+                    </h2>
+                  )}
                   <QuestionBlock q={q} n={i + 1} answer={answers === "inline"} solution={answers === "inline" && solutions} />
                 </li>
               ))}
@@ -217,7 +243,7 @@ export default function PrintPage() {
                 <ol className="space-y-3 text-sm">
                   {shown.map((q, i) => (
                     <li key={q.id} className="q-block flex gap-2">
-                      <span className="w-7 shrink-0 font-semibold">{i + 1}.</span>
+                      <span className="w-7 shrink-0 font-semibold">{q.no ?? i + 1}.</span>
                       <div className="min-w-0 flex-1">
                         <MathText text={answerText(q)} />
                         {solutions && q.solution && (
@@ -247,9 +273,11 @@ function QuestionBlock({ q, n, answer, solution, bare = false }: { q: WorksheetQ
   const cols = q.options?.length ? optionColumns(q.options) : 1;
   return (
     <div className="flex gap-2 text-[15px] leading-relaxed">
-      {!bare && <span className="w-7 shrink-0 font-semibold">{n}.</span>}
+      {!bare && <span className="w-7 shrink-0 font-semibold">{q.no ?? n}.</span>}
       <div className="min-w-0 flex-1 space-y-2.5">
         <div className="whitespace-pre-line">
+          {/* worked problems and proofs of an exam show their points before the question */}
+          {q.points && (q.kind === "solve" || q.kind === "proof") && <span className="mr-1 text-neutral-600">{tr(`（${q.points} 分）`, `(${q.points} points) `)}</span>}
           <MathText text={q.stem} />
         </div>
         {svg && <div className="[&_svg]:h-auto [&_svg]:max-h-[90mm] [&_svg]:max-w-full" dangerouslySetInnerHTML={{ __html: svg }} />}
@@ -267,7 +295,14 @@ function QuestionBlock({ q, n, answer, solution, bare = false }: { q: WorksheetQ
             ))}
           </ol>
         ) : (
-          !answer && !bare && <div className="pt-6"><span className="inline-block w-48 border-b border-neutral-500" /></div>
+          !answer &&
+          !bare &&
+          (q.kind === "solve" || q.kind === "proof" ? (
+            // room for the working
+            <div className="h-40" data-testid="working-space" />
+          ) : (
+            <div className="pt-6"><span className="inline-block w-48 border-b border-neutral-500" /></div>
+          ))
         )}
         {answer && (
           <div className="rounded border border-neutral-300 bg-neutral-50 px-2.5 py-1.5 text-sm">

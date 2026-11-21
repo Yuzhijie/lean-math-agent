@@ -11,16 +11,31 @@ import { ErrorNote, FieldLabel, NativeSelect } from "../bank/ui";
 
 const MAX_PAGES = 12;
 
-/** Bank and generation ids from a worksheet link (/print?bank=…&gen=…) or the two ids. */
-export function worksheetFromLink(link: string): { bank_id: string; generation_id: string } | null {
+/**
+ * What a printed paper was printed from, read off its link: a bank worksheet (/print?bank=…&gen=…)
+ * or a generated exam (/print?exam=…, /exam?id=…).
+ */
+export function worksheetFromLink(link: string): { bank_id: string; generation_id: string } | { exam_id: string } | null {
   try {
     const u = new URL(link.trim(), "http://x");
+    const exam = u.searchParams.get("exam") ?? (u.pathname.replace(/\/+$/, "").endsWith("/exam") ? u.searchParams.get("id") : null);
+    if (exam) return { exam_id: exam };
     const bank = u.searchParams.get("bank");
     const gen = u.searchParams.get("gen");
     return bank && gen ? { bank_id: bank, generation_id: gen } : null;
   } catch {
     return null;
   }
+}
+
+/** The teacher's exams a paper can be marked against (written, at least in part). */
+interface ExamChoice {
+  id: string;
+  title: string;
+  status: string;
+  questions: number;
+  total: number;
+  created_at: number;
 }
 
 /**
@@ -33,11 +48,14 @@ export function SubmitPaper({
   isTeacher,
   onDone,
   onBusy,
+  examId,
 }: {
   students: { id: string; label: string }[];
   isTeacher: boolean;
   onDone: (paperId: string) => void;
   onBusy?: (busy: boolean) => void;
+  /** Marked against this generated exam (from the exam page's “mark with this paper”). */
+  examId?: string;
 }) {
   const { tr } = useI18n();
   const [picked, setPicked] = useState("");
@@ -45,6 +63,19 @@ export function SubmitPaper({
   const [title, setTitle] = useState("");
   const [key, setKey] = useState("");
   const [sheet, setSheet] = useState("");
+  const [exams, setExams] = useState<ExamChoice[]>([]);
+  const [exam, setExam] = useState(examId ?? "");
+  useEffect(() => {
+    if (!isTeacher) return;
+    let off = false;
+    fetch("/api/exams")
+      .then((r) => (r.ok ? (r.json() as Promise<{ exams: ExamChoice[] }>) : { exams: [] }))
+      .then((r) => !off && setExams(r.exams.filter((e) => e.questions > 0 && (e.status === "ready" || e.status === "partial" || e.status === "cancelled"))))
+      .catch(() => undefined);
+    return () => {
+      off = true;
+    };
+  }, [isTeacher]);
   const [pages, setPages] = useState<{ file: File; url: string }[]>([]);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
@@ -87,13 +118,15 @@ export function SubmitPaper({
     setError(null);
     if (!memberId) return setError(tr("请选择学生", "Choose the student"));
     if (!pages.length) return setError(tr("请上传答卷照片", "Add photos of the paper"));
-    const ws = sheet.trim() ? worksheetFromLink(sheet) : null;
-    if (sheet.trim() && !ws) return setError(tr("练习卷链接不对：应是“导出 PDF”打开的那个地址（含 bank= 和 gen=）", "That worksheet link is not right: use the address “Export PDF” opened (with bank= and gen=)"));
+    const ws = !exam && sheet.trim() ? worksheetFromLink(sheet) : null;
+    if (!exam && sheet.trim() && !ws) return setError(tr("练习卷链接不对：应是“导出 PDF”打开的那个地址（含 bank= 和 gen=，或 exam=）", "That worksheet link is not right: use the address “Export PDF” opened (with bank= and gen=, or exam=)"));
     const fd = new FormData();
     fd.append("member_id", memberId);
     if (title.trim()) fd.append("title", title.trim());
     if (isTeacher && key.trim()) fd.append("answer_key", key.trim());
-    if (isTeacher && ws) {
+    if (isTeacher && exam) fd.append("exam_id", exam);
+    else if (isTeacher && ws && "exam_id" in ws) fd.append("exam_id", ws.exam_id);
+    else if (isTeacher && ws && "bank_id" in ws) {
       fd.append("bank_id", ws.bank_id);
       fd.append("generation_id", ws.generation_id);
     }
@@ -157,7 +190,26 @@ export function SubmitPaper({
         <FieldLabel>{tr("答卷名称（可选）", "Paper title (optional)")}</FieldLabel>
         <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={tr("如：第三单元测验", "e.g. Unit 3 quiz")} />
       </div>
-      {isTeacher && (
+      {isTeacher && (exams.length > 0 || exam) && (
+        <div className="space-y-1">
+          <FieldLabel>{tr("按生成的试卷批改（可选）", "Mark against a generated exam (optional)")}</FieldLabel>
+          <NativeSelect value={exam} onChange={setExam} ariaLabel={tr("试卷", "Exam")}>
+            <option value="">{tr("不是生成的试卷", "Not a generated exam")}</option>
+            {exam && !exams.some((e) => e.id === exam) && <option value={exam}>{tr("所选的试卷", "The chosen exam")}</option>}
+            {exams.map((e) => (
+              <option key={e.id} value={e.id}>
+                {tr(`${e.title}（${e.questions} 题，${e.total} 分）`, `${e.title} (${e.questions} questions, ${e.total} points)`)}
+              </option>
+            ))}
+          </NativeSelect>
+          {exam && (
+            <p className="text-[11px] text-muted-foreground">
+              {tr("按题号对上试卷的答案、知识点和分值：批改结果计入各知识点的掌握情况，下一张针对性试卷就按它来出。", "Questions are matched by number to the exam's answers, skills and points: the results count towards each skill's mastery, and the next targeted paper is planned from them.")}
+            </p>
+          )}
+        </div>
+      )}
+      {isTeacher && !exam && (
         <>
           <div className="space-y-1">
             <FieldLabel>{tr("答案（可选，每行一题）", "Answer key (optional, one per line)")}</FieldLabel>
@@ -165,7 +217,7 @@ export function SubmitPaper({
           </div>
           <div className="space-y-1">
             <FieldLabel>{tr("或：题库练习卷的链接（可选）", "Or: link of the bank worksheet (optional)")}</FieldLabel>
-            <Input value={sheet} onChange={(e) => setSheet(e.target.value)} placeholder="/print?bank=…&gen=…" />
+            <Input value={sheet} onChange={(e) => setSheet(e.target.value)} placeholder="/print?bank=…&gen=… · /print?exam=…" />
             <p className="text-[11px] text-muted-foreground">
               {tr("答卷是从题库“导出 PDF”打印的，就贴那个地址：会按题目对上题库里的答案和解答。都不填时由模型先解题再批改（会标“需确认”）。", "If the paper was printed with “Export PDF” from the bank, paste that address: questions are matched to the bank's answers and solutions. With neither, the model solves each question first (marked “check”).")}
             </p>

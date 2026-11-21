@@ -17,6 +17,7 @@ import { BankError } from "../bank/store";
 import { lt } from "../llm/output-locale";
 import { z } from "zod";
 import { classSchema, diagnosisSchema, memberSchema, paperSchema, submissionSchema, type Diagnosis, type GradingClass, type Member, type Paper, type Submission } from "./types";
+import { examSchema, type Exam } from "../exam/types";
 
 /** A student's latest diagnosis over all their marked work (id = the member id). */
 const memberDiagnosisSchema = z.object({ id: z.string(), diagnosis: diagnosisSchema });
@@ -24,9 +25,9 @@ type MemberDiagnosis = z.infer<typeof memberDiagnosisSchema>;
 
 export { BankError as GradingError };
 
-type Kind = "class" | "member" | "submission" | "paper" | "diagnosis";
-const SCHEMAS = { class: classSchema, member: memberSchema, submission: submissionSchema, paper: paperSchema, diagnosis: memberDiagnosisSchema };
-type Docs = { class: GradingClass; member: Member; submission: Submission; paper: Paper; diagnosis: MemberDiagnosis };
+type Kind = "class" | "member" | "submission" | "paper" | "diagnosis" | "exam";
+const SCHEMAS = { class: classSchema, member: memberSchema, submission: submissionSchema, paper: paperSchema, diagnosis: memberDiagnosisSchema, exam: examSchema };
+type Docs = { class: GradingClass; member: Member; submission: Submission; paper: Paper; diagnosis: MemberDiagnosis; exam: Exam };
 
 export function gradingRoot(): string {
   return process.env.GRADING_STORE_PATH ?? path.join(".data", "grading");
@@ -102,7 +103,7 @@ function db(): Store {
   const root = gradingRoot();
   if (store?.root === root) return store;
   const backend = open(root);
-  const docs = { class: new Map(), member: new Map(), submission: new Map(), paper: new Map(), diagnosis: new Map() } as Store["docs"];
+  const docs = { class: new Map(), member: new Map(), submission: new Map(), paper: new Map(), diagnosis: new Map(), exam: new Map() } as Store["docs"];
   for (const r of backend.all()) {
     const parsed = SCHEMAS[r.kind]?.safeParse(r.data);
     if (parsed?.success) (docs[r.kind] as Map<string, unknown>).set((parsed.data as { id: string }).id, parsed.data);
@@ -136,6 +137,7 @@ const WHAT: Record<string, [string, string]> = {
   student: ["学生", "student"],
   submission: ["作答", "submission"],
   image: ["照片", "photo"],
+  exam: ["试卷", "exam"],
 };
 const notFound = (what: string) => new BankError(lt(`找不到这个${WHAT[what]?.[0] ?? what}`, `${WHAT[what]?.[1] ?? what} not found`), 404);
 
@@ -519,4 +521,31 @@ export function getMemberDiagnosis(memberId: string): Diagnosis | undefined {
 export function putMemberDiagnosis(memberId: string, diagnosis: Diagnosis): Diagnosis | undefined {
   if (!db().docs.member.has(memberId)) return undefined;
   return put("diagnosis", { id: memberId, diagnosis }).diagnosis;
+}
+
+// ── Exams (lib/exam): a teacher's generated papers ───────────────────
+
+export function putExamDoc(e: Exam): Exam {
+  return put("exam", e);
+}
+
+/** The exam if it is this teacher's (another teacher's is not found). */
+export function examOf(owner: string, id: string): Exam {
+  const e = db().docs.exam.get(id);
+  if (!e || e.owner !== owner) throw notFound("exam");
+  return e;
+}
+
+/** The exam as stored, for the generation run (undefined when deleted). */
+export function examDoc(id: string): Exam | undefined {
+  return db().docs.exam.get(id);
+}
+
+export function examsOf(owner: string): Exam[] {
+  return [...db().docs.exam.values()].filter((e) => e.owner === owner).sort((a, b) => b.created_at - a.created_at);
+}
+
+export function deleteExamDoc(owner: string, id: string): void {
+  examOf(owner, id);
+  remove("exam", id);
 }

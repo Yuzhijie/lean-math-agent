@@ -16,7 +16,7 @@ import { listBanks, listItems } from "../bank/store";
 import { COMPETITION_DOMAINS, DIFFICULTY_LEVELS, GRADE_LEVELS, domainAllowed } from "../types";
 import { effectiveVerdict, type Diagnosis, type MasteryLevel, type Submission, type Verdict } from "./types";
 
-const CREDIT: Record<Verdict, number> = { correct: 1, correct_answer_flawed: 0.5, partially_correct: 0.5, incorrect: 0, no_answer: 0, unreadable: 0 };
+export const CREDIT: Record<Verdict, number> = { correct: 1, correct_answer_flawed: 0.5, partially_correct: 0.5, incorrect: 0, no_answer: 0, unreadable: 0 };
 
 /** Fixed rules: ≥ 80 % credit over ≥ 2 attempts = mastered; ≥ 50 % = developing; > 0 = weak; else not yet. */
 export function masteryLevel(credit: number, attempts: number): MasteryLevel {
@@ -71,7 +71,7 @@ export function matchBank(
   return best;
 }
 
-function ownerBanks(owner: string) {
+export function ownerBanks(owner: string) {
   try {
     return listBanks(owner).map((b) => ({ id: b.id, name: b.name, items: listItems(owner, b.id).map((i) => ({ knowledge_points: i.knowledge_points })) }));
   } catch {

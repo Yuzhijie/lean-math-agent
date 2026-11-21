@@ -12,12 +12,51 @@ import { verifyAndFixAnswer } from "./answer-verifier";
 import { lt } from "./output-locale";
 import { failureNote, verifyGenerated } from "./verify-generated";
 import { generationStats, logGeneration, measured, type StageClock } from "../generation-stats";
+import type { ExamKind } from "../exam/types";
+
+/**
+ * What the questions of one part of a paper must be (lib/exam): the kind of question, the skills,
+ * the difficulty on a 1–5 scale, and questions a student got wrong to write variants of.
+ */
+export interface GenerationFocus {
+  kind?: ExamKind;
+  knowledge_points?: string[];
+  /** 1 = basic … 5 = hard. */
+  difficulty?: number;
+  like?: string[];
+}
+
+const KIND_RULES: Record<ExamKind, string> = {
+  choice:
+    "题型：单项选择题。statement 先写题干，然后另起一行列出 4 个选项，每个选项单独一行，依次写成“A. …”“B. …”“C. …”“D. …”；四个选项互不相同、只有一个正确，错误选项来自学生常见的错误；answer 只写正确选项的字母（例如 B）。",
+  blank: "题型：填空题。题干里用“____”标出唯一的一个空；answer 只写应填的内容（一个数、一个式子或一个短语），不写过程。",
+  solve: "题型：解答题。需要写出完整过程的计算题或应用题，有唯一确定的最终答案；answer 写最终答案。",
+  proof: "题型：证明题。题目要求证明一个结论（“求证……”），结论必须为真（先用具体数值和特殊情形检验）；answer 写证明的要点。",
+};
+
+/** The writer's instructions for a focus (empty without one). */
+export function focusPrompt(f: GenerationFocus | undefined): string {
+  if (!f) return "";
+  const lines: string[] = [];
+  if (f.kind) lines.push(KIND_RULES[f.kind]);
+  const kps = (f.knowledge_points ?? []).map((k) => k.trim()).filter(Boolean);
+  if (kps.length) lines.push(`每道题都必须考查这些知识点：${kps.join("、")}。`);
+  if (f.difficulty) lines.push(`难度：${Math.max(1, Math.min(5, Math.round(f.difficulty)))}/5（1 = 基础题，3 = 中等题，5 = 难题）。`);
+  const like = (f.like ?? []).map((t) => t.replace(/\s+/g, " ").trim().slice(0, 600)).filter(Boolean);
+  if (like.length)
+    lines.push(
+      `下面是学生做错的题。请出它们的变式题：考查同一个知识点、同一种题型、相近难度，但换数字和情境；不要照抄，也不要只改一个数：\n${like.map((t, i) => `${i + 1}. ${t}`).join("\n")}`,
+    );
+  return lines.length ? `\n\n${lines.join("\n")}` : "";
+}
 
 export interface GenerateProblemOptions {
   gradeLevel: GradeLevel;
   difficulty: DifficultyLevel;
   domain: CompetitionDomain;
   count: number;
+  /** One part of a paper: kind of question, skills, difficulty, variants of wrong questions. */
+  focus?: GenerationFocus;
   /** Check every problem (independent solve, Lean counterexample search) and write again for the failed ones (default true). */
   verify?: boolean;
   onProgress?: (p: BuiltinProgress) => void;
@@ -60,7 +99,7 @@ async function writeProblems(options: GenerateProblemOptions, count: number, rej
   const feedback = rejected.length
     ? `\n\n下面这些题已被检查否决（答案与独立解答不一致、结论不成立、题目有缺陷或 Lean 陈述有反例），不要再出类似的错误题：\n${rejected.slice(-8).join("\n")}`
     : "";
-  const userPrompt = `请生成 ${count} 道${getGradeLabel(gradeLevel)}${getDifficultyLabel(difficulty)}的${getDomainLabel(domain)}题目。每道题都必须有确定、正确的答案；要证明的结论必须为真（先用具体数值和特殊情形检验）。${feedback}`;
+  const userPrompt = `请生成 ${count} 道${getGradeLabel(gradeLevel)}${getDifficultyLabel(difficulty)}的${getDomainLabel(domain)}题目。每道题都必须有确定、正确的答案；要证明的结论必须为真（先用具体数值和特殊情形检验）。${focusPrompt(options.focus)}${feedback}`;
   const response = await chatJson({
     system: systemPrompt,
     user: userPrompt,

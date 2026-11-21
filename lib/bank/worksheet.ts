@@ -23,6 +23,11 @@ export interface WorksheetQuestion {
   verification?: string;
   /** The solution's figure as shown on screen (dark theme; printed on a dark panel). */
   solutionFigureSvg?: string;
+  /** A question of a generated exam (lib/exam): its number, points, section heading and kind. */
+  no?: string;
+  points?: number;
+  section?: string;
+  kind?: "choice" | "blank" | "solve" | "proof";
 }
 
 export interface SolutionStep {

@@ -5,7 +5,7 @@
  */
 import { lt } from "../llm/output-locale";
 import { diagnose } from "./diagnosis";
-import { markPaperQuestions, parseAnswerKey, readPaper, worksheetQuestions, type WorksheetQuestion } from "./paper";
+import { examSheet, markPaperQuestions, parseAnswerKey, readPaper, worksheetQuestions, type WorksheetQuestion } from "./paper";
 import { getClass, putSubmission, savePaperResult } from "./store";
 import type { Member, Paper, Submission } from "./types";
 
@@ -36,7 +36,16 @@ export async function runPaper(args: {
   }
 
   let sheet: WorksheetQuestion[] | undefined;
-  if (paper.source.bank_id && paper.source.generation_id) {
+  let examTitle: string | undefined;
+  if (paper.source.exam_id) {
+    try {
+      const ex = examSheet(teacher, paper.source.exam_id);
+      sheet = ex.questions;
+      examTitle = ex.title;
+    } catch {
+      sheet = undefined; // the exam was deleted meanwhile: marked against solved answers
+    }
+  } else if (paper.source.bank_id && paper.source.generation_id) {
     try {
       sheet = worksheetQuestions(teacher, paper.source.bank_id, paper.source.generation_id);
     } catch {
@@ -48,6 +57,7 @@ export async function runPaper(args: {
   const marked = await markPaperQuestions(read.questions, {
     answerKey: parseAnswerKey(paper.source.answer_key),
     sheet,
+    sheetIsExam: !!paper.source.exam_id && !!sheet,
     onProgress: (done) => say({ stage: "marking", done, total, message: lt(`已批改 ${done}/${total} 题`, `Marked ${done}/${total}`) }),
   });
 
@@ -64,6 +74,9 @@ export async function runPaper(args: {
     paper_id: paper.id,
     question_no: q.number,
     ...(q.question ? {} : { question_unread: true }),
+    ...(q.points ? { points: q.points } : {}),
+    ...(q.difficulty ? { difficulty: q.difficulty } : {}),
+    ...(q.skills?.length ? { skills: q.skills } : {}),
     created_at: paper.created_at,
   }));
   const failed = subs.filter((s) => s.status === "failed").length;
@@ -74,7 +87,7 @@ export async function runPaper(args: {
 
   paper = {
     ...paper,
-    title: (paper.title || read.title || lt(`答卷（${subs.length} 题）`, `Paper (${subs.length} questions)`)).slice(0, 200),
+    title: (paper.title || examTitle || read.title || lt(`答卷（${subs.length} 题）`, `Paper (${subs.length} questions)`)).slice(0, 200),
     status: failed === subs.length ? "failed" : failed ? "partial" : "marked",
     ...(read.note ? { note: read.note } : {}),
     submission_ids: subs.map((s) => s.id),

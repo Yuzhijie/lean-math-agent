@@ -4,7 +4,7 @@ import { lt } from "@/lib/llm/output-locale";
 import { MarkingError, prepareWorkImages } from "@/lib/grading/mark";
 import { MAX_PAPER_IMAGES } from "@/lib/grading/paper";
 import { runPaper } from "@/lib/grading/paper-run";
-import { accessToMember, discardPaperDraft, newPaperId, savePaperImages } from "@/lib/grading/store";
+import { accessToMember, discardPaperDraft, examOf, newPaperId, savePaperImages } from "@/lib/grading/store";
 import type { Paper } from "@/lib/grading/types";
 import { publicPaper } from "@/lib/grading/view";
 
@@ -18,8 +18,9 @@ const field = (form: FormData, k: string) => {
 /**
  * POST multipart/form-data — mark a whole answered paper:
  *   member_id, images (1–12 page photos, in order), title,
- *   answer_key ("1. 3\n2. C …") and bank_id + generation_id (the printed bank worksheet) — the
- *   teacher's only; a student's paper is marked against answers solved by the model.
+ *   answer_key ("1. 3\n2. C …"), exam_id (a generated exam: its answers, skills and points) and
+ *   bank_id + generation_id (the printed bank worksheet) — the teacher's only; a student's paper
+ *   is marked against answers solved by the model.
  * Streams NDJSON: {type:"progress", stage, done?, total?, message} … then {type:"result", paper} or {type:"error"}.
  */
 export const POST = bankRoute(
@@ -42,6 +43,8 @@ export const POST = bankRoute(
       throw e;
     }
     const teacher = role === "teacher";
+    const examId = teacher ? field(form, "exam_id") : undefined;
+    if (examId) examOf(owner, examId); // the teacher's own exam, else 404
     const id = newPaperId();
     const paper: Paper = {
       id,
@@ -51,6 +54,7 @@ export const POST = bankRoute(
       title: (field(form, "title") ?? "").slice(0, 200),
       images: savePaperImages(id, prepared.files),
       source: {
+        ...(examId ? { exam_id: examId } : {}),
         ...(teacher && field(form, "answer_key") ? { answer_key: field(form, "answer_key")!.slice(0, 5000) } : {}),
         ...(teacher && field(form, "bank_id") && field(form, "generation_id") ? { bank_id: field(form, "bank_id"), generation_id: field(form, "generation_id") } : {}),
       },

@@ -54,6 +54,8 @@ export function referenceSourceLabel(s: string, tr: Tr): string {
       return tr("老师给的答案", "teacher's answer");
     case "bank":
       return tr("题库答案", "bank answer");
+    case "exam":
+      return tr("试卷答案", "the exam's answer");
     case "session":
       return tr("求解结果", "solver's answer");
     case "model":

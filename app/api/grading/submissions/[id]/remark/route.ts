@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { bankRoute } from "@/lib/bank/http";
 import { lt } from "@/lib/llm/output-locale";
 import { judgeWork, markWork, solveReference } from "@/lib/grading/mark";
-import { withFigure } from "@/lib/grading/paper";
+import { withFigure, withSkills } from "@/lib/grading/paper";
 import { BankError } from "@/lib/bank/store";
 import { readSubmissionImage, saveMarkingResult, visibleSubmission } from "@/lib/grading/store";
 import { publicSubmission } from "@/lib/grading/view";
@@ -40,7 +40,8 @@ export const POST = bankRoute<P>(
                 const solved = await solveReference(withFigure(submission.problem.text, submission.problem.figure)).catch(() => undefined);
                 if (solved?.answer) ref = { ...solved, source: "model" as const };
               }
-              return { reading: submission.reading!, reference: ref, marking: await judgeWork({ problem: submission.problem.text, figure: submission.problem.figure, reference: ref, reading: submission.reading! }) };
+              const judged = await judgeWork({ problem: submission.problem.text, figure: submission.problem.figure, reference: ref, reading: submission.reading! });
+              return { reading: submission.reading!, reference: ref, marking: withSkills(judged, submission.skills) };
             })()
           : await markWork({ problem: submission.problem.text, figure: submission.problem.figure, imageUrls: urls, reference });
       const saved = saveMarkingResult(submission, { reference: r.reference, reading: r.reading, marking: r.marking, status: "marked", error: undefined });

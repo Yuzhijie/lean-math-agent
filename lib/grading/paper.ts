@@ -7,6 +7,7 @@
 import { z } from "zod";
 import { chatJson } from "../llm/client";
 import { getGeneration } from "../bank/store";
+import { examOf } from "./store";
 import { stemSimilarity } from "../bank/similarity";
 import { bankProblemText } from "./reference";
 import { compareAnswers, judgeWork, solveReference } from "./mark";
@@ -98,6 +99,10 @@ export interface WorksheetQuestion {
   answer: string;
   solution?: string;
   knowledge_points: string[];
+  /** A generated exam's question: its printed number, points and difficulty. */
+  no?: string;
+  points?: number;
+  difficulty?: number;
 }
 
 /** The questions of a printed bank worksheet (a generation), as the solver sees them. */
@@ -106,8 +111,34 @@ export function worksheetQuestions(owner: string, bankId: string, generationId: 
   return g.candidates.map((c) => ({ text: bankProblemText(c), answer: c.answer, ...(c.solution ? { solution: c.solution } : {}), knowledge_points: c.knowledge_points }));
 }
 
-/** The worksheet question a read question is (same text, or the same position when the text was not readable). */
+const OPTION_LETTERS = "ABCDEFGH";
+
+/** The questions of a generated exam as printed (options as "A. …" lines, choice answers as the letter). */
+export function examSheet(owner: string, examId: string): { title: string; questions: WorksheetQuestion[] } {
+  const e = examOf(owner, examId);
+  return {
+    title: e.title,
+    questions: e.questions.map((q) => ({
+      text: q.options?.length ? `${q.stem}\n${q.options.map((o, i) => `${OPTION_LETTERS[i]}. ${o}`).join("\n")}` : q.stem,
+      answer: q.answer,
+      ...(q.solution ? { solution: q.solution } : {}),
+      knowledge_points: q.knowledge_points,
+      no: q.no,
+      points: q.points,
+      difficulty: q.difficulty,
+    })),
+  };
+}
+
+/**
+ * The worksheet question a read question is: on a generated exam the printed number decides;
+ * otherwise the same text, else the number, else the position.
+ */
 export function matchWorksheet(q: { number: string; question: string }, index: number, sheet: WorksheetQuestion[]): WorksheetQuestion | undefined {
+  if (sheet.some((w) => w.no)) {
+    const byNo = sheet.find((w) => w.no && normNo(w.no) === normNo(q.number));
+    if (byNo) return byNo;
+  }
   if (q.question) {
     let best: { w: WorksheetQuestion; s: number } | undefined;
     for (const w of sheet) {
@@ -128,12 +159,28 @@ export interface MarkedQuestion extends PaperQuestion {
   reference: Reference;
   marking?: Marking;
   error?: string;
+  /** The exam question it was matched to: points, difficulty and skills on the paper. */
+  points?: number;
+  difficulty?: number;
+  skills?: string[];
+}
+
+/** A marking counted under the given skills (an exam question's), else as the marker named them. */
+export function withSkills(m: Marking, skills: string[] | undefined): Marking {
+  return skills?.length ? { ...m, knowledge_points: skills } : m;
 }
 
 /** Marks every question: reference (key > worksheet > solved), then judged, `concurrency` at a time. */
 export async function markPaperQuestions(
   questions: PaperQuestion[],
-  opts: { answerKey?: Map<string, string>; sheet?: WorksheetQuestion[]; concurrency?: number; onProgress?: (done: number, total: number) => void },
+  opts: {
+    answerKey?: Map<string, string>;
+    sheet?: WorksheetQuestion[];
+    /** The sheet is a generated exam: its answers are the reference ("exam") and its skills are the question's. */
+    sheetIsExam?: boolean;
+    concurrency?: number;
+    onProgress?: (done: number, total: number) => void;
+  },
 ): Promise<MarkedQuestion[]> {
   const out: MarkedQuestion[] = new Array(questions.length);
   let next = 0;
@@ -145,23 +192,33 @@ export async function markPaperQuestions(
       const q = questions[i];
       const keyed = opts.answerKey?.get(normNo(q.number));
       const fromSheet = opts.sheet?.length ? matchWorksheet(q, i, opts.sheet) : undefined;
-      const problem = q.question || fromSheet?.text || "";
+      // a generated exam's question is known as printed; the reading may have garbled its formulas
+      const problem = (opts.sheetIsExam && fromSheet?.text) || q.question || fromSheet?.text || "";
       let reference: Reference = keyed
         ? // The worksheet's solution only when it is the same question (its answer agrees with the key).
           { answer: keyed, source: "teacher", ...(fromSheet?.solution && compareAnswers(keyed, fromSheet.answer) === true ? { solution: fromSheet.solution } : {}) }
         : fromSheet
-          ? { answer: fromSheet.answer, ...(fromSheet.solution ? { solution: fromSheet.solution } : {}), source: "bank" }
+          ? { answer: fromSheet.answer, ...(fromSheet.solution ? { solution: fromSheet.solution } : {}), source: opts.sheetIsExam ? "exam" : "bank" }
           : { source: "none" };
+      const onPaper =
+        opts.sheetIsExam && fromSheet
+          ? {
+              ...(fromSheet.points ? { points: fromSheet.points } : {}),
+              ...(fromSheet.difficulty ? { difficulty: fromSheet.difficulty } : {}),
+              ...(fromSheet.knowledge_points.length ? { skills: fromSheet.knowledge_points.slice(0, 3) } : {}),
+            }
+          : {};
       try {
         if (!problem) throw new Error("the question could not be read");
         if (!reference.answer) {
           const solved = await solveReference(withFigure(problem, q.figure)).catch(() => undefined);
           if (solved?.answer) reference = { ...solved, source: "model" };
         }
-        const marking = await judgeWork({ problem, figure: q.figure, reference, reading: q.reading });
-        out[i] = { ...q, question: problem, reference, marking };
+        // an exam question is counted under the skills it was written for (the next paper is planned from them)
+        const marking = withSkills(await judgeWork({ problem, figure: q.figure, reference, reading: q.reading }), onPaper.skills);
+        out[i] = { ...q, question: problem, reference, marking, ...onPaper };
       } catch (e) {
-        out[i] = { ...q, question: problem, reference, error: e instanceof Error ? e.message : String(e) };
+        out[i] = { ...q, question: problem, reference, error: e instanceof Error ? e.message : String(e), ...onPaper };
       }
       opts.onProgress?.(++done, questions.length);
     }

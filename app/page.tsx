@@ -56,6 +56,7 @@ import {
   PanelLeftClose,
   FileDown,
   ClipboardCheck,
+  FileText,
 } from "lucide-react";
 import { generationPrintHref, stashWorksheet } from "@/lib/bank/worksheet";
 import { ProblemExamples } from "./components/ProblemExamples";
@@ -527,6 +528,10 @@ export default function Home() {
                 <Link href="/bank" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "gap-1.5")}>
                   <Library className="h-3.5 w-3.5" />
                   <span className="hidden sm:inline">{tr("题库", "Bank")}</span>
+                </Link>
+                <Link href="/exam" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "gap-1.5")} title={tr("整张试卷：多种题型组卷，按批改结果出针对性试卷", "Whole exams: several kinds of question, and targeted papers from the marking")}>
+                  <FileText className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">{tr("试卷", "Exams")}</span>
                 </Link>
                 <Link href="/grading" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "gap-1.5")}>
                   <ClipboardCheck className="h-3.5 w-3.5" />

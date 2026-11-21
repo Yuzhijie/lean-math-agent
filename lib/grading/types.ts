@@ -73,8 +73,8 @@ export type Marking = z.infer<typeof markingSchema>;
 export const referenceSchema = z.object({
   answer: z.string().optional(),
   solution: z.string().optional(),
-  /** Where the reference came from; "model" = solved independently for the marking (less trusted). */
-  source: z.enum(["teacher", "session", "bank", "model", "none"]),
+  /** Where the reference came from; "exam" = the teacher's generated paper (lib/exam); "model" = solved independently for the marking (less trusted). */
+  source: z.enum(["teacher", "session", "bank", "exam", "model", "none"]),
 });
 export type Reference = z.infer<typeof referenceSchema>;
 
@@ -104,6 +104,11 @@ export const submissionSchema = z.object({
   question_no: z.string().optional(),
   /** The printed question could not be read from the paper (the problem text is a placeholder). */
   question_unread: z.boolean().optional(),
+  /** A question of a generated exam: its points on the paper and its difficulty (1–5) — what the next paper is planned from. */
+  points: z.number().int().min(1).max(50).optional(),
+  difficulty: z.number().int().min(1).max(5).optional(),
+  /** The skills the exam question was written for: the marking counts the work under these (not the marker's own names). */
+  skills: z.array(z.string()).max(3).optional(),
   created_at: z.number(),
 });
 export type Submission = z.infer<typeof submissionSchema>;
@@ -150,8 +155,8 @@ export const paperSchema = z.object({
   submitted_by: z.string(),
   title: z.string().max(200),
   images: z.array(z.string()),
-  /** Where the questions and answers came from: a printed bank worksheet, a typed answer key, or neither. */
-  source: z.object({ bank_id: z.string().optional(), generation_id: z.string().optional(), answer_key: z.string().max(5000).optional() }),
+  /** Where the questions and answers came from: a generated exam, a printed bank worksheet, a typed answer key, or neither. */
+  source: z.object({ exam_id: z.string().optional(), bank_id: z.string().optional(), generation_id: z.string().optional(), answer_key: z.string().max(5000).optional() }),
   status: z.enum(["marked", "partial", "failed"]),
   error: z.string().optional(),
   note: z.string().optional(),

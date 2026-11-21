@@ -51,7 +51,11 @@ export interface PaperDetail {
   own: boolean;
   member: { id: string; name: string };
   paper: Omit<Paper, "submitted_by">;
-  questions: (SubmissionSummary & { question_no: string | null; reference_source: string })[];
+  questions: (SubmissionSummary & { question_no: string | null; reference_source: string; points: number | null })[];
+  /** A paper of a generated exam: the score out of its points. */
+  score: { got: number; total: number } | null;
+  /** The exam it was marked against (teacher). */
+  exam: { id: string; title: string } | null;
 }
 
 export const paperImageUrl = (paperId: string, name: string) => `/api/grading/papers/${encodeURIComponent(paperId)}/images/${encodeURIComponent(name)}`;
