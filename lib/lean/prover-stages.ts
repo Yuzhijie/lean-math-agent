@@ -52,7 +52,7 @@ import { hammerTheorem } from "./hammer";
 import { rejectedTactics } from "./rejected-tactics";
 import { inductionProof, looksInductive } from "./induction";
 import { optimizationFit, optimizationProof } from "./optimize";
-import { boundedMinScripts, orderProofScripts } from "./order-proof";
+import { BOUNDED_CHUNKED_HEARTBEATS, boundedIsChunked, boundedMinScripts, orderProofScripts, orderRefutation, productBoundedScripts } from "./order-proof";
 import { bridgeBody, originalSource, readingForm, scriptInOriginalNames, unindent, type ReadingForm } from "./reading-form";
 import { verifyLeanSource, type LeanVerifyResult } from "./sandbox";
 import { tryTrivialProof } from "./trivial-proof";
@@ -88,6 +88,8 @@ export interface StageResult {
   reason?: string;
   /** What the prover found against the statement (a larger family, another count), when it says so. */
   counterexample?: string;
+  /** Lean proved the statement's negation: no later stage is run. */
+  refuted?: boolean;
 }
 
 /**
@@ -142,11 +144,11 @@ const env = (name: string, fallback: number) => {
 };
 
 /** One script after the other, each verified as a whole, until one goes through or the time is up. */
-async function verifyScripts(s: StageStatement, scripts: string[], budgetMs: number): Promise<StageResult> {
+async function verifyScripts(s: StageStatement, scripts: string[], budgetMs: number, maxHeartbeats?: number): Promise<StageResult> {
   const deadline = Date.now() + budgetMs;
   for (const [i, tactics] of scripts.entries()) {
     if (i > 0 && Date.now() > deadline) break;
-    const source = assembleLeanSource({ theoremName: s.theoremName, theoremType: s.theoremType, stepCodes: [tactics], useMathlib: s.useMathlib });
+    const source = assembleLeanSource({ theoremName: s.theoremName, theoremType: s.theoremType, stepCodes: [tactics], useMathlib: s.useMathlib, ...(maxHeartbeats ? { maxHeartbeats } : {}) });
     const v = await verifyLeanSource(s.sessionId, source, { theoremName: s.theoremName, expectedSignature: s.expectedSignature });
     if (v.ok) return { proof: { verification: v, source, tactics, attempts: i + 1 } };
   }
@@ -234,12 +236,23 @@ export const PROVER_STAGES: readonly ProverStage[] = [
     fit: (s) => (orderProofScripts(s.theoremType).length ? 2 : 0),
     limitMs: () => Number.POSITIVE_INFINITY,
     minMs: 1_000,
-    run: (s, budgetMs) => verifyScripts(s, orderProofScripts(s.theoremType), budgetMs),
+    run: async (s, budgetMs) => {
+      const r = await verifyScripts(s, orderProofScripts(s.theoremType), budgetMs);
+      if (r.proof) return r;
+      // the bound is not the least common multiple of the orders: Lean is asked for the statement's negation
+      const no = orderRefutation(s.theoremType);
+      if (!no) return r;
+      const name = `${s.theoremName}_refuted`;
+      const v = await verifyLeanSource(s.sessionId, assembleLeanSource({ theoremName: name, theoremType: no.type, stepCodes: [no.script], useMathlib: s.useMathlib }), { theoremName: name });
+      if (!v.ok) return r;
+      const text = `n = ${no.n} < ${no.bound}`;
+      return { reason: lt(`陈述不成立：${text} 已满足全部条件（Lean 证出了陈述的否定）`, `the statement is false: ${text} already meets every condition (Lean proved the statement's negation)`), counterexample: text, refuted: true };
+    },
     texts: () => ({
-      tried: () => lt("按乘法阶由程序写出的证明", "a proof the program wrote from the multiplicative orders"),
+      tried: (reason) => lt(`按乘法阶由程序写出的证明${reason ? `（${reason}）` : ""}`, `a proof the program wrote from the multiplicative orders${reason ? ` (${reason})` : ""}`),
       trying: lt("尝试按乘法阶由程序写证明", "Trying a proof the program writes from the multiplicative orders"),
       passed: () => lt("✅ 程序按乘法阶写出的证明通过 Lean 检查", "✅ The program's proof from the multiplicative orders passed Lean"),
-      failed: () => lt("按乘法阶写出的证明没有通过", "The proof from the multiplicative orders did not pass"),
+      failed: (reason) => lt(`按乘法阶写出的证明没有通过${reason ? `：${reason}` : ""}`, `The proof from the multiplicative orders did not pass${reason ? `: ${reason}` : ""}`),
       title: () => lt("乘法阶（程序写的证明）", "Multiplicative orders (proof written by the program)"),
       done: lt("✅ 完全形式化验证通过（乘法阶）", "✅ Fully formally verified (multiplicative orders)"),
     }),
@@ -250,11 +263,11 @@ export const PROVER_STAGES: readonly ProverStage[] = [
     phase: "script",
     beforeSingleTactics: true,
     progress: "bounded",
-    fit: (s) => (!s.huge && boundedMinScripts(s.theoremType).length ? 2 : 0),
+    fit: (s) => (!s.huge && (boundedMinScripts(s.theoremType).length || productBoundedScripts(s.theoremType).length) ? 2 : 0),
     limitMs: () => Number.POSITIVE_INFINITY,
     minMs: 1_000,
     run: async (s, budgetMs) => {
-      const r = await verifyScripts(s, boundedMinScripts(s.theoremType), budgetMs);
+      const r = await verifyScripts(s, [...boundedMinScripts(s.theoremType), ...productBoundedScripts(s.theoremType)], budgetMs, boundedIsChunked(s.theoremType) ? BOUNDED_CHUNKED_HEARTBEATS : undefined);
       return r.proof ? { proof: { ...r.proof, attempts: 1 } } : r;
     },
     texts: () => ({
@@ -469,6 +482,8 @@ export interface StageRun {
   outcome: "proved" | "failed" | "skipped";
   reason?: string;
   counterexample?: string;
+  /** Lean proved the statement's negation (the counterexample is checked, not only found). */
+  refuted?: boolean;
 }
 
 export type StageEvent =
@@ -532,8 +547,9 @@ export async function runProverStages(s: StageStatement, opts: StagesOptions = {
       opts.onStage?.({ type: "proved", stage, proof: r.proof, ms });
       return { proof: { ...r.proof, strategy: stage.id }, runs, budgetMs };
     }
-    runs.push({ id: stage.id, fit, ms, outcome: "failed", ...(r.reason ? { reason: r.reason } : {}), ...(r.counterexample ? { counterexample: r.counterexample } : {}) });
+    runs.push({ id: stage.id, fit, ms, outcome: "failed", ...(r.reason ? { reason: r.reason } : {}), ...(r.counterexample ? { counterexample: r.counterexample } : {}), ...(r.refuted ? { refuted: true } : {}) });
     opts.onStage?.({ type: "failed", stage, reason: r.reason, ms });
+    if (r.refuted) break;
   }
   return { runs, budgetMs };
 }

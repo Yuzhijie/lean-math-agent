@@ -29,6 +29,8 @@ export function assembleLeanSource(opts: {
   sorryLabels?: SorryLabel[];
   /** Namespaces to open for the declaration (`open A B in` right before `theorem`). */
   opens?: string[];
+  /** `set_option maxHeartbeats N in` for the declaration: a proof whose kernel checks add up past Lean's default (a tactic-level `set_option … in` does not raise this limit). */
+  maxHeartbeats?: number;
 }): string {
   // Resolve imports: explicit > useMathlib default > none
   const resolvedImports =
@@ -68,7 +70,8 @@ export function assembleLeanSource(opts: {
   // Use `fail` so lake rejects empty assemblies; repair path uses appendSorry.
   const tacticBody = body || (opts.appendSorry ? "sorry" : "fail");
   const openLine = opts.opens && opts.opens.length > 0 ? `open ${opts.opens.join(" ")} in\n` : "";
-  return `${LEAN_HEADER}${importLines}${openLine}theorem ${opts.theoremName} ${opts.theoremType} := by
+  const beats = opts.maxHeartbeats && opts.maxHeartbeats > 0 ? `set_option maxHeartbeats ${Math.round(opts.maxHeartbeats)} in\n` : "";
+  return `${LEAN_HEADER}${importLines}${beats}${openLine}theorem ${opts.theoremName} ${opts.theoremType} := by
 ${indent(tacticBody)}
 `;
 }

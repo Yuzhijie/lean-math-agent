@@ -342,7 +342,7 @@ export function boundedMinScripts(theoremType: string): string[] {
   // the kernel walks m < B by recursion: it stops with "deep recursion detected" between 2500 and
   // 3000 (Lean 4.33.1), so B stays at 2000 or below
   const cap = 2000;
-  if (!Number.isSafeInteger(B) || B < 1 || B > cap || hugePower(t)) return [];
+  if (!Number.isSafeInteger(B) || B < 1 || B > BOUNDED_CHUNKED_MAX || hugePower(t)) return [];
   let depth = 0;
   for (const c of body) {
     if ("([{⟨".includes(c)) depth++;
@@ -354,6 +354,7 @@ export function boundedMinScripts(theoremType: string): string[] {
     const xs = ["a", "b", "c", "d"].slice(0, k).join(" ");
     return `exact fun ${xs} => (this ${xs}).elim`;
   });
+  if (B > cap) return lets.length ? [] : [chunkedScript(v, body, B)];
   return [
     [
       ...(lets.length ? [`intro ${lets.join(" ")}`] : []),
@@ -404,4 +405,133 @@ export function orderHint(orders: OrderCondition[]): string {
     "```",
     "Do not finish with `omega` or `simp_all` while `let` definitions about these huge powers are in context: they unfold them and run out of heartbeats.",
   ].join("\n");
+}
+
+/** Largest bound the kernel checks number by number, in pieces (boundedMinScripts). */
+const BOUNDED_CHUNKED_MAX = 100_000;
+/** The kernel's work counts against the declaration's heartbeats (nine lemmas of 8000 numbers were past the default 200000): the limit a chunked proof is checked under. */
+export const BOUNDED_CHUNKED_HEARTBEATS = 20_000_000;
+/** Whether boundedMinScripts' proof for this statement is the chunked one. */
+export const boundedIsChunked = (theoremType: string): boolean => /^have key0 : ∀ k__/.test(boundedMinScripts(theoremType)[0] ?? "");
+const CHUNK_ROW = 1000;
+const CHUNK_ROWS = 8;
+
+/**
+ * The same check for a bound above the kernel's recursion limit: m = 1000 · (k + 8j) + r with
+ * k < 8, r < 1000, one lemma per j — the recursion is 8 and 1000 deep, and the kernel's memory is
+ * given back between the lemmas (all of 64 × 1024 in one `decide` ran the 7 GB sandbox out of
+ * memory; 8000 numbers with 2 ^ m % M take 12 s). 2¹² · 7 · 13 ∣ n − 2ⁿ: the smallest n is 65536.
+ */
+function chunkedScript(v: string, body: string, B: number): string {
+  const per = CHUNK_ROW * CHUNK_ROWS;
+  const pieces = Math.ceil(B / per);
+  const at = (j: number) => `(${CHUNK_ROW} * (k__ + ${CHUNK_ROWS * j}) + r__)`;
+  const sub = (j: number) => body.replace(new RegExp(`(?<![\\w'.₀-₉])${v}(?![\\w'₀-₉])`, "g"), at(j));
+  const lines: string[] = [];
+  for (let j = 0; j < pieces; j++) {
+    lines.push(`have key${j} : ∀ k__ : ℕ, k__ < ${CHUNK_ROWS} → ∀ r__ : ℕ, r__ < ${CHUNK_ROW} → ${at(j)} < ${B} → (${sub(j)} → False) := by decide +kernel`);
+  }
+  lines.push("and_intros", "all_goals try decide +kernel", `intro ${v}`, `by_cases hlt : ${v} < ${B}`);
+  lines.push(`· have fin : ${body} → False := by`);
+  for (let j = 0; j < pieces; j++) {
+    const use = [
+      `have h__ := key${j} (${v} / ${CHUNK_ROW} - ${CHUNK_ROWS * j}) (by omega) (${v} % ${CHUNK_ROW}) (Nat.mod_lt _ (by norm_num))`,
+      `rw [show ${CHUNK_ROW} * (${v} / ${CHUNK_ROW} - ${CHUNK_ROWS * j} + ${CHUNK_ROWS * j}) + ${v} % ${CHUNK_ROW} = ${v} by omega] at h__`,
+      "exact h__ hlt",
+    ];
+    if (j < pieces - 1) {
+      lines.push(`    rcases Nat.lt_or_ge ${v} ${per * (j + 1)} with hc${j} | hc${j}`);
+      lines.push(...use.map((l, i) => `    ${i ? "  " : "· "}${l}`));
+    } else lines.push(...use.map((l) => `    ${l}`));
+  }
+  const close = [1, 2, 3, 4].map((n) => {
+    const xs = ["a", "b", "c", "d"].slice(0, n).join(" ");
+    return `exact fun ${xs} => (fin ${xs}).elim`;
+  });
+  lines.push(`  first | ${close.join(" | ")}`, "· intros", "  exact Nat.le_of_not_lt hlt");
+  return lines.join("\n");
+}
+
+/**
+ * "No n below B that is a product of two primes has C": `… ∧ ∀ n p q : ℕ, 0 < n → n < B → n = p * q →
+ * H… → ¬ C n` with `Nat.Prime p` and `Nat.Prime q` among the hypotheses (the smallest pseudoprime
+ * 341 = 11 · 31: no smaller product of two distinct odd primes divides 2 ^ (n − 1) − 1). A product
+ * of two primes is neither ≤ 1 nor prime, so it is enough that every n < B with C n is: one pass of
+ * the kernel over n < B (the pairs p, q < B with all the hypotheses were more than it could hold —
+ * 341² cases ran the sandbox out of memory — and their Decidable instance was not found).
+ * B ≤ 2000; checked in Lean 4.33.1 + Mathlib (B = 341: 6 s).
+ */
+export function productBoundedScripts(theoremType: string): string[] {
+  const t = theoremType.replace(/^\s*:\s*/, "").trim();
+  const ID = String.raw`[a-z][\w']*`;
+  const m = new RegExp(String.raw`∀\s*(${ID})\s+(${ID})\s+(${ID})\s*:\s*(?:ℕ|Nat)\s*,\s*0\s*<\s*\1\s*→\s*\1\s*<\s*(\d+)\s*→\s*\1\s*=\s*\2\s*\*\s*\3\s*→([\s\S]*)$`).exec(t);
+  if (!m || hugePower(t) || /(?:^|;\s*|\(\s*)let\s/.test(t)) return [];
+  const [, n, p, q, bound, rawRest] = m;
+  const B = Number(bound);
+  if (!Number.isSafeInteger(B) || B < 2 || B > 2000) return [];
+  // the hypotheses and the conclusion, split at the top-level arrows; parentheses opened before the ∀ are dropped
+  const parts: string[] = [];
+  let depth = 0;
+  let from = 0;
+  let end = rawRest.length;
+  for (let i = 0; i < rawRest.length; i++) {
+    const c = rawRest[i];
+    if ("([{⟨".includes(c)) depth++;
+    else if (")]}⟩".includes(c) && --depth < 0) {
+      if (!/^[)\s]*$/.test(rawRest.slice(i))) return [];
+      end = i;
+      break;
+    } else if (c === "→" && depth === 0) {
+      parts.push(rawRest.slice(from, i).trim());
+      from = i + 1;
+    }
+  }
+  parts.push(rawRest.slice(from, end).trim());
+  const concl = parts.pop()!;
+  const neg = /^¬\s*([\s\S]+)$/.exec(concl);
+  const prime = (v: string) => parts.some((h) => new RegExp(`^(?:Nat\\.Prime\\s+${v}|${v}\\.Prime)$`).test(h));
+  const mentions = (text: string, v: string) => new RegExp(`(?<![\\w'.₀-₉])${v}(?![\\w'₀-₉])`).test(text);
+  if (!neg || !prime(p) || !prime(q) || parts.some((h) => !h)) return [];
+  const C = neg[1].trim().replace(/^\(([\s\S]*)\)$/, "$1");
+  if (mentions(C, p) || mentions(C, q) || !mentions(C, n)) return [];
+  return [
+    [
+      `have key : ∀ ${n} : ℕ, ${n} < ${B} → (${C} → ${n} ≤ 1 ∨ Nat.Prime ${n}) := by decide +kernel`,
+      "and_intros",
+      "all_goals try decide +kernel",
+      `intro ${n} ${p} ${q} hn__ hlt__ he__ ${parts.map((_, i) => `hh${i}__`).join(" ")} hC__`,
+      `have hp__ : Nat.Prime ${p} := by assumption`,
+      `have hq__ : Nat.Prime ${q} := by assumption`,
+      `rcases key ${n} hlt__ hC__ with h1__ | h1__`,
+      "· have := hp__.two_le",
+      "  have := hq__.two_le",
+      "  subst he__",
+      "  nlinarith",
+      "· subst he__",
+      "  exact Nat.not_prime_mul hp__.one_lt.ne' hq__.one_lt.ne' h1__",
+    ].join("\n"),
+  ];
+}
+
+/**
+ * A statement "the smallest n with m ∣ a ^ n − 1 … is B" whose B is not the least common multiple of
+ * the orders: n = lcm satisfies the conditions the orders were read from and is below B. Returned as
+ * a Lean proof of the statement's negation, so that Lean — not this reading of the statement — says
+ * that lcm really meets every hypothesis (a statement with one more condition on n is not refuted).
+ * 2ⁿ ≡ 1 (mod 3⁵·5³), 3ⁿ ≡ 1 (mod 2⁸·7²): orders 162, 100, 64, 42, lcm 907200 — a session had 1814400.
+ */
+export function orderRefutation(theoremType: string): { type: string; script: string; n: number; bound: number } | undefined {
+  if (!/^\s*:/.test(theoremType)) return undefined;
+  const t = theoremType.replace(/^\s*:\s*/, "").trim();
+  const orders = orderConditions(t);
+  const b = /→\s*(\d+)\s*≤\s*[a-z]\w*\s*\)*\s*$/.exec(t);
+  if (!orders?.length || !b || /(?:^|;\s*|\(\s*)let\s/.test(t) || !bigExponents(t)) return undefined;
+  const g = (x: number, y: number): number => (y ? g(y, x % y) : x);
+  const l = orders.reduce((acc, o) => (acc / g(acc, o.order)) * o.order, 1);
+  const bound = Number(b[1]);
+  // the kernel computes a ^ lcm: below Lean's limit for a power
+  if (!Number.isSafeInteger(bound) || l >= bound || l > 1 << 24) return undefined;
+  const closed = "(by first | decide +kernel | (and_intros <;> decide +kernel))";
+  const alternatives = ["", ".2", ".2.2", ".2.2.2", ".2.2.2.2"].flatMap((path) => [1, 2, 3, 4].map((k) => `exact absurd (h${path} ${l} (by norm_num) ${Array(k).fill(closed).join(" ")}) (by norm_num)`));
+  return { type: `: ¬ (${t})`, script: ["intro h", `first | ${alternatives.join(" | ")}`].join("\n"), n: l, bound };
 }

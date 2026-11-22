@@ -562,6 +562,21 @@ async function attemptLean(problemText: string, ctx: LeanAttemptContext, mark: {
     const tried = auto.tried;
     if (auto.proof) return done(auto.proof.verification, auto.proof.source, { strategy: auto.proof.strategy, attempts: auto.proof.attempts }, auto.proof.tactics);
 
+    // Lean proved the statement's negation (the smallest n is not the claimed one): nothing to search for
+    const refuted = auto.stages.find((x) => x.refuted);
+    if (refuted) {
+      return {
+        attempted: true,
+        success: false,
+        formal_statement,
+        failure_reason: lt(
+          `陈述不成立：${refuted.counterexample ?? ""}，Lean 证出了它的否定。若形式化忠实于题意，说明解答的答案有误`,
+          `The statement is false: ${refuted.counterexample ?? ""}; Lean proved its negation. If the formalization is faithful, the solution's answer is wrong`,
+        ),
+        limitations: [...notes, lt(`已尝试：${tried.join("；")}`, `Tried: ${tried.join("; ")}`)],
+      };
+    }
+
     // Proof memory: verified proofs of similar statements, tried verbatim first (no model call),
     // then given to the prover as worked examples together with the retrieved Mathlib lemmas.
     const proverContext = await buildProverContext({ theoremType, problemText, useMathlib });

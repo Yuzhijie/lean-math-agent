@@ -13,6 +13,7 @@ import { orbitShape } from "@/lib/lean/combinatorics/orbit";
 import { rowShape } from "@/lib/lean/combinatorics/rows";
 import { inequalityFit, looksSymmetricInequality, polynomialInequalityFit } from "@/lib/lean/inequality";
 import { boundedMinScripts, orderProofScripts } from "@/lib/pipeline/lean-attempt";
+import { productBoundedScripts } from "@/lib/lean/order-proof";
 import { readingForm } from "@/lib/lean/reading-form";
 import { normalizeTheoremType } from "@/lib/llm/autoformalize";
 import { readRegressionRuns, sandboxVersions } from "@/scripts/provers-regress";
@@ -279,7 +280,7 @@ describe("bench/provers.json", () => {
       combinatorics: looksCombinatorial,
       inequality: (t) => inequalityFit(t) > 0,
       order: (t) => orderProofScripts(t).length > 0,
-      bounded: (t) => boundedMinScripts(t).length > 0,
+      bounded: (t) => boundedMinScripts(t).length > 0 || productBoundedScripts(t).length > 0,
     };
     for (const c of cases) {
       const check = c.expect ? gate[c.expect] : undefined;

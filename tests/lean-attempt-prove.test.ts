@@ -354,7 +354,9 @@ describe("hints for the prover and the sorry report", () => {
     const B1 = boundedMinScripts(": ((2025 : ℤ) ∣ ((649 : ℤ)^2 - 1)) ∧ ∀ m : ℕ, 1 < m → (2025 : ℤ) ∣ ((m : ℤ)^2 - 1) → 649 ≤ m");
     expect(B1).toHaveLength(1);
     expect(B1[0]).toContain("have key : ∀ m : ℕ, m < 649 → (1 < m → (2025 : ℤ) ∣ ((m : ℤ)^2 - 1) → False) := by decide +kernel");
-    expect(boundedMinScripts(": 7 ∣ 2 ^ 3780 - 1 ∧ ∀ n : ℕ, 0 < n → 257175 ∣ 2 ^ n - 1 → 3780 ≤ n")).toEqual([]); // above 2000: deep recursion
+    // above 2000 (deep recursion in one pass): in pieces of 8 × 1000 numbers, one lemma each
+    expect(boundedMinScripts(": 7 ∣ 2 ^ 3780 - 1 ∧ ∀ n : ℕ, 0 < n → 257175 ∣ 2 ^ n - 1 → 3780 ≤ n")[0]).toMatch(/^have key0 : ∀ k__ : ℕ, k__ < 8 → ∀ r__ : ℕ, r__ < 1000 → /);
+    expect(boundedMinScripts(": ∀ n : ℕ, 0 < n → 257175 ∣ 2 ^ n - 1 → 378000 ≤ n")).toEqual([]); // above 100000
     expect(boundedMinScripts(": ∀ n : ℕ, n + 0 = n")).toEqual([]);
     expect(multiplicativeOrder(2, 243)).toBe(162);
     expect(multiplicativeOrder(2, 6)).toBeUndefined();

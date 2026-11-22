@@ -361,6 +361,23 @@ describe("running the stages", () => {
     });
   });
 
+  it("stops when Lean proves the statement's negation: a smallest n that is not the least common multiple of the orders", async () => {
+    const WRONG = ": ∀ n : ℕ, 0 < n → ((2 ^ n : ℕ) % (3 ^ 5 * 5 ^ 3) = 1 % (3 ^ 5 * 5 ^ 3) ∧ (3 ^ n : ℕ) % (2 ^ 8 * 7 ^ 2) = 1 % (2 ^ 8 * 7 ^ 2)) → 1814400 ≤ n";
+    // the program's proof fails; the negation is accepted
+    m.verifyLeanSource.mockImplementation(async (_id: string, source: string) => (source.includes("theorem t_refuted : ¬ (") ? okVerify : { ok: false, log: "error" }));
+    const r = await runProverStages(st(WRONG));
+    expect(r.proof).toBeUndefined();
+    expect(r.runs.map((x) => `${x.id}:${x.outcome}`)).toEqual(["hammer:failed", "order:failed"]);
+    expect(r.runs[1]).toMatchObject({ counterexample: "n = 907200 < 1814400", refuted: true });
+    expect(m.tryTrivialProof).not.toHaveBeenCalled();
+    expect(m.auto).not.toHaveBeenCalled();
+    // not accepted by Lean (one more condition on n, say): nothing is claimed and the other stages run
+    m.verifyLeanSource.mockResolvedValue({ ok: false, log: "error" });
+    const r2 = await runProverStages(st(WRONG));
+    expect(r2.runs.find((x) => x.id === "order")?.counterexample).toBeUndefined();
+    expect(m.auto).toHaveBeenCalled();
+  });
+
   it("hands on what a prover found against the statement", async () => {
     m.opt.mockResolvedValue({ reason: "9 members", counterexample: "9 > 8: {1}, {2}, …" });
     const r = await runProverStages(st(EXTREMUM));
