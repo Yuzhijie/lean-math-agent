@@ -190,7 +190,7 @@ async function main(): Promise<void> {
   }
   if (!flag("no-report")) {
     const report = arg("out") ?? path.join("bench", "PROVERS.md");
-    writeFileSync(report, regressionReport(current, readRegressionRuns(dir), { now: new Date() }));
+    writeFileSync(report, regressionReport(current, readRegressionRuns(dir), { now: new Date(), file: file.split(path.sep).join("/") }));
     console.log(`Report: ${report}`);
   }
   process.exit(bad.length && !flag("accept") ? 1 : 0);

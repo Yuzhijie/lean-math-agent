@@ -382,7 +382,8 @@ export const PROVER_STAGES: readonly ProverStage[] = [
     id: "auto",
     phase: "fallback",
     progress: "auto",
-    fit: (s) => (!s.huge && !looksGeometric(s.theoremType) ? 1 : 0),
+    // not for coordinates or arccos angles (their own prover's); a statement that is "geometric" only for a square root — a root 1 ± √2, a sum of surds, sin 60° = √3 / 2 — is the search's too
+    fit: (s) => (!s.huge && !(looksGeometric(s.theoremType) && /ℝ\s*×\s*ℝ|Real\.arccos/.test(s.theoremType)) ? 1 : 0),
     limitMs: () => env("AUTO_TIME_LIMIT_MS", 60_000),
     minMs: 5_000,
     run: (s, budgetMs) => proverResult(autoProof({ ...proverArgs(s, budgetMs), opens: s.opens })),

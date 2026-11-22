@@ -233,7 +233,11 @@ export function slower(now: number, before: number): boolean {
 }
 
 /** bench/PROVERS.md: every run in one line, the latest in detail, and what changed since the run before it. */
-export function regressionReport(fixture: RegressionFixture, runs: RegressionRun[], opts: { now?: Date } = {}): string {
+export function regressionReport(fixture: RegressionFixture, allRuns: RegressionRun[], opts: { now?: Date; file?: string } = {}): string {
+  // the results directory holds the runs of every list (bench/provers.json, bench/school.json): only this list's
+  const runs = allRuns.filter((r) => r.meta.fixture === fixture.name);
+  const file = opts.file ?? "bench/provers.json";
+  const own = fixture.name.startsWith("provers");
   const cases = new Map(fixture.cases.map((c) => [c.id, c]));
   const byTime = [...runs].filter((r) => r.rows.length).sort((a, b) => a.meta.at.localeCompare(b.meta.at));
   // The latest run is read against the fixture as it is now (after `--accept`, the run that was
@@ -246,9 +250,9 @@ export function regressionReport(fixture: RegressionFixture, runs: RegressionRun
     return c.expect ? { ...rest, expect: c.expect } : rest;
   };
   const sorted: RegressionRun[] = byTime.map((r, i) => (i < byTime.length - 1 ? r : { ...r, rows: r.rows.map(now) }));
-  const out: string[] = ["# 证明器回归（真实 Lean，不调模型）", ""];
+  const out: string[] = [own ? "# 证明器回归（真实 Lean，不调模型）" : `# ${file} 的回归（真实 Lean，不调模型）`, ""];
   out.push(
-    `由 \`npm run lean:regress\` 生成${opts.now ? `（${opts.now.toISOString().slice(0, 16).replace("T", " ")} UTC）` : ""}。清单 \`bench/provers.json\`（${fixture.name}）里有 ${fixture.cases.length} 条陈述：各个程序证明器开发时验证过的陈述，以及过去的求解里由程序证出的陈述。每条都记着“由哪条路线证出”。脚本用产品自己的不调模型的流程（自动化 → 乘法阶 → 逐个检查 → 几何 → 归纳 → 优化 → 组合 → 策略搜索）在真实的 Lean 里重跑一遍。`,
+    `由 \`npm run lean:regress\` 生成${opts.now ? `（${opts.now.toISOString().slice(0, 16).replace("T", " ")} UTC）` : ""}。清单 \`${file}\`（${fixture.name}）里有 ${fixture.cases.length} 条陈述：${own || !fixture.description ? "各个程序证明器开发时验证过的陈述，以及过去的求解里由程序证出的陈述。每条都记着“由哪条路线证出”。" : `${fixture.description} `}脚本用产品自己的不调模型的流程（自动化 → 乘法阶 → 逐个检查 → 几何 → 归纳 → 优化 → 组合 → 策略搜索）在真实的 Lean 里重跑一遍。`,
     "",
     "- **通过** = 仍由记录的那条路线证出。**换了路线** = 证出了，但不是原来那条（通常是前面的路线变强了；也可能是原来的证明器坏了、后面的路线接住了，值得看一眼）。**没证出** = 退化。",
     "- 什么时候跑：升级沙箱的 Mathlib 之前和之后各一次；改动某个证明器之后（`--only geometry`）。日常用 `--quick`（跳过要几分钟的用例）。",

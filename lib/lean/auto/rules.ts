@@ -24,6 +24,7 @@ import { doubleCountFinishers } from "./doublecount";
 import { polySquareFinishers } from "./polyfunc";
 import { extremumScripts } from "./realopt";
 import { amgmFinishers } from "./amgm";
+import { absIntervalFinishers, instanceFinishers, modCasesFinishers, pigeonholeFinishers, rootCheckFinishers, rootsFinishers, solutionPairsFinishers, setRootsStep, specialAnglesStep, vertexFinishers } from "./school";
 import { boundedVars, defInstances, denominators, firstAbs, gcdLcm, goalText, hypNames, isNumType, MAX_INTERVAL, NUMBERS, sqrtArgs } from "./helpers";
 import { learnedScore } from "./stats";
 import { learnedTactics } from "./learned";
@@ -119,6 +120,15 @@ export const BUILTIN_RULES: Rule[] = [
     if (!lets.length || g.target === "False" || !g.rel || !/^[≤<≥>]$/.test(g.rel) || !lets.some((v) => new RegExp(`(^|[^\\w'])${esc(v)}($|[^\\w'])`).test(g.target))) return [];
     return [`(simp only [${lets.join(", ")}]; gcongr)`, `(simp only [${lets.join(", ")}]; gcongr <;> linarith)`];
   }),
+  // ── school statements (school.ts): each fires only on its own shape ──
+  fin("roots", "an equation in x ⊢ x = r₁ ∨ x = r₂ …: the product of the (x − rᵢ) is 0 (school.ts)", (g) => rootsFinishers(g.st)),
+  fin("solution-pairs", "⊢ (x = a ∧ y = b) ∨ (x = c ∧ y = d): the first unknown's values as roots, the others by linarith (school.ts)", (g) => solutionPairsFinishers(g.st)),
+  fin("root-check", "a hypothesis x = r₁ ∨ x = r₂: each root put in (school.ts)", (g) => rootCheckFinishers(g.st)),
+  fin("instances", "a hypothesis ∀ x : ℝ, A = B: its instances at 0, 1, −1, 2 (school.ts)", (g) => instanceFinishers(g.st)),
+  fin("abs-interval", "⊢ |E| < c ↔ a < x ∧ x < b (school.ts)", (g) => absIntervalFinishers(g.st)),
+  fin("vertex", "⊢ IsLeast / IsGreatest {y | ∃ x, y = a x² + b x + c} m: the vertex (school.ts)", (g) => vertexFinishers(g.st)),
+  fin("mod-cases", "⊢ d ∣ P n, Even / Odd (P n) for one integer variable: n mod d case by case (school.ts)", (g) => modCasesFinishers(g.st)),
+  fin("pigeonhole", "⊢ ∃ i j, i ≠ j ∧ f i = f j (school.ts)", (g) => pigeonholeFinishers(g.st)),
   fin("am-gm", "positive x₁ … xₙ with x₁ ⋯ xₙ = mⁿ: n·m ≤ x₁ + … + xₙ first, then nlinarith (amgm.ts)", (g) => (g.rel !== "∣" && !/^∀|^∃/.test(g.target) ? amgmFinishers(g.st) : [])),
   fin("divides", "⊢ a ∣ b", (g) => (g.target !== "False" && g.rel === "∣" ? ["decide", "norm_num", "omega", "simp_all", "(norm_num [Nat.dvd_iff_mod_eq_zero])", "decide +kernel"] : [])),
   fin("not-equal", "⊢ a ≠ b", (g) => (g.target !== "False" && g.rel === "≠" ? ["norm_num", "simp", "omega", "decide", "positivity", "simp_all", "(intro h; simp_all)", "(intro h; nlinarith)"] : [])),
@@ -176,6 +186,14 @@ export const BUILTIN_RULES: Rule[] = [
   fin("aesop", "aesop, last", () => ["aesop"]),
 
   // ── splitters ──
+  split("set-roots", "⊢ {x | P x} = {a, b}: membership on both sides (school.ts)", (g) => {
+    const t = setRootsStep(g.st);
+    return t ? [{ tactic: t, kind: "rewrite" }] : [];
+  }),
+  split("special-angles", "sin / cos / tan of multiples of 30° and 45° replaced by their values (school.ts)", (g) => {
+    const t = specialAnglesStep(g.st);
+    return t ? [{ tactic: t, kind: "rewrite" }] : [];
+  }),
   split("intro", "binders and hypotheses of the target", (g, fresh) => {
     const out: Omit<Splitter, "rule">[] = [];
     const t = g.target;
