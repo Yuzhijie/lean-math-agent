@@ -62,8 +62,22 @@ export async function autoSearch(run: TacticRunner, opts: AutoOptions): Promise<
     const st = parseGoal(g);
     if (!st) return false;
     const n0 = run.goals().length;
+    // an equation that follows from the equation hypotheses: the coefficients computed exactly. Tried
+    // once per goal — before the first nlinarith (it proves inequalities; on an equation it runs to the
+    // tactic time limit, twice 10 s and a new worker each time, and the search's minute was over before
+    // the certificate's turn), else after the finishers
+    let certTried = false;
+    const certificate = async (): Promise<boolean> => {
+      certTried = true;
+      const cert = Date.now() < opts.deadline ? await certificateTactic(st, 8).catch(() => undefined) : undefined;
+      if (!cert || !(await apply(bullet(cert), "certificate")) || run.goals().length !== n0 - 1) return false;
+      tally.worked("certificate");
+      used.push("certificate");
+      return true;
+    };
     for (const f of finisherEntries(st, { opens: opts.opens })) {
       if (triedAtRoot.has(`${key}\u0000${f.tactic}`)) continue;
+      if (!certTried && /nlinarith/.test(f.tactic) && (await certificate())) return true;
       if ((await apply(bullet(f.tactic), f.rule)) && run.goals().length === n0 - 1) {
         tally.worked(f.rule);
         used.push(f.rule);
@@ -82,13 +96,7 @@ export async function autoSearch(run: TacticRunner, opts: AutoOptions): Promise<
         }
       }
     }
-    // an equation that follows from the equation hypotheses: the coefficients computed exactly
-    const cert = Date.now() < opts.deadline ? await certificateTactic(st, 8).catch(() => undefined) : undefined;
-    if (cert && (await apply(bullet(cert), "certificate")) && run.goals().length === n0 - 1) {
-      tally.worked("certificate");
-      used.push("certificate");
-      return true;
-    }
+    if (!certTried && (await certificate())) return true;
     if (depth < maxDepth) {
       const path = new Set(seen).add(key);
       const lin = linearValuesTactic(st, run.fresh);

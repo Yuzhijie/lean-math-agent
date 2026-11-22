@@ -112,8 +112,13 @@ export const BUILTIN_RULES: Rule[] = [
       : [],
   ),
   fin("inequality", "⊢ a ≤ b, a < b: linear and nonlinear arithmetic, positivity", (g) =>
-    g.target !== "False" && g.rel && /^[≤<≥>]$/.test(g.rel) ? ["norm_num", "linarith", "positivity", "omega", "simp_all", g.nl, "(norm_num at *; linarith)", "(field_simp; nlinarith)", "nlinarith"] : [],
+    g.target !== "False" && g.rel && /^[≤<≥>]$/.test(g.rel) ? ["norm_num", "linarith", "positivity", "omega", "simp_all", "gcongr", "(gcongr <;> linarith)", g.nl, "(norm_num at *; linarith)", "(field_simp; nlinarith)", "nlinarith"] : [],
   ),
+  fin("monotone", "⊢ f a < f b with f a `let` of the statement: unfolded, then gcongr (the same expression on both sides, larger arguments)", (g) => {
+    const lets = g.st.hyps.filter((h) => h.value !== undefined).flatMap((h) => h.names).filter((v) => !isInaccessible(v));
+    if (!lets.length || g.target === "False" || !g.rel || !/^[≤<≥>]$/.test(g.rel) || !lets.some((v) => new RegExp(`(^|[^\\w'])${esc(v)}($|[^\\w'])`).test(g.target))) return [];
+    return [`(simp only [${lets.join(", ")}]; gcongr)`, `(simp only [${lets.join(", ")}]; gcongr <;> linarith)`];
+  }),
   fin("am-gm", "positive x₁ … xₙ with x₁ ⋯ xₙ = mⁿ: n·m ≤ x₁ + … + xₙ first, then nlinarith (amgm.ts)", (g) => (g.rel !== "∣" && !/^∀|^∃/.test(g.target) ? amgmFinishers(g.st) : [])),
   fin("divides", "⊢ a ∣ b", (g) => (g.target !== "False" && g.rel === "∣" ? ["decide", "norm_num", "omega", "simp_all", "(norm_num [Nat.dvd_iff_mod_eq_zero])", "decide +kernel"] : [])),
   fin("not-equal", "⊢ a ≠ b", (g) => (g.target !== "False" && g.rel === "≠" ? ["norm_num", "simp", "omega", "decide", "positivity", "simp_all", "(intro h; simp_all)", "(intro h; nlinarith)"] : [])),
@@ -177,6 +182,9 @@ export const BUILTIN_RULES: Rule[] = [
     if (/^∀/.test(t) || topIndex(t, "→") >= 0 || /^¬/.test(t)) out.push({ tactic: `intro ${fresh("h")}`, kind: "intro" });
     const m = /^∀ \(?([A-Za-z_][\w'₀-₉]*)/.exec(t);
     if (m && !hypNames(g.st).includes(m[1])) out.unshift({ tactic: `intro ${m[1]}`, kind: "intro" });
+    // `let f := …; body`: f into the context under its own name (the "monotone" finisher unfolds it)
+    const l = /^let ([A-Za-z_][\w'₀-₉]*) /.exec(t);
+    if (l) out.unshift({ tactic: `intro ${hypNames(g.st).includes(l[1]) ? fresh("h") : l[1]}`, kind: "intro" });
     return out;
   }),
   split("destruct", "∃ / ∧ (every conjunct at once) / ↔ hypotheses taken apart", (g, fresh) => {

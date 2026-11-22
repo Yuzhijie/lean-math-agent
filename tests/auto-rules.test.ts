@@ -162,3 +162,15 @@ describe("hit rates", () => {
     expect(JSON.parse(readFileSync(process.env.AUTO_RULE_STATS_PATH!, "utf8")).searches).toBe(9);
   });
 });
+
+describe("a let of the statement", () => {
+  it("is taken into the context under its name, and an inequality between its values is unfolded for gcongr", () => {
+    let k = 0;
+    const sp = splitterEntries(parseGoal("rA rB : ℝ\nh : rB < rA\n⊢ let volume := fun r => 4 / 3 * Real.pi * r ^ 3; volume rB < volume rA")!, (b) => `${b}${++k}`);
+    expect(sp[0]).toMatchObject({ tactic: "intro volume", rule: "intro" });
+    const fs = finisherEntries(parseGoal("rA rB : ℝ\nh : rB < rA\nvolume : ℝ → ℝ := fun r => 4 / 3 * Real.pi * r ^ 3\n⊢ volume rB < volume rA")!);
+    expect(fs.filter((f) => f.rule === "monotone").map((f) => f.tactic)).toEqual(["(simp only [volume]; gcongr)", "(simp only [volume]; gcongr <;> linarith)"]);
+    // no let in the goal: nothing to unfold
+    expect(finisherEntries(parseGoal("rA rB : ℝ\nh : rB < rA\nvolume : ℝ → ℝ := fun r => r\n⊢ rB < rA")!).some((f) => f.rule === "monotone")).toBe(false);
+  });
+});
