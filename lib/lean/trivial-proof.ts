@@ -74,6 +74,8 @@ export interface TrivialProofOptions {
   expectedSignature?: string;
   /** No further tactic is started after this time (ms since the epoch): eleven verifications at two minutes each are otherwise 22 minutes. */
   deadline?: number;
+  /** Tactics not to try: the cascade has just had them rejected on this very goal (hammer.ts rejectedTactics). */
+  skip?: ReadonlySet<string>;
 }
 
 /**
@@ -97,6 +99,7 @@ export async function tryTrivialProof(
   options: TrivialProofOptions = {},
 ): Promise<{ tactic: string; source: string; log: string; verification: LeanVerifyResult } | null> {
   for (const [i, tactic] of TRIVIAL_TACTICS.entries()) {
+    if (options.skip?.has(tactic)) continue;
     if (i > 0 && options.deadline !== undefined && Date.now() > options.deadline) return null;
     const source = assembleLeanSource({
       theoremName,

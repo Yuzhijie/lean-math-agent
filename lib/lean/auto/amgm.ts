@@ -78,7 +78,28 @@ export function amgmFinishers(st: GoalState): string[] {
   // take longer than the search's 10 s per tactic)
   const lean = ["hamgm", ...diffs, ...shifted].join(", ");
   const close = parts > 1 ? `refine ⟨${Array(parts).fill("?_").join(", ")}⟩ <;> nlinarith [${lean}]` : `nlinarith [${hints("hamgm")}]`;
-  return [`(${have}; ${close})`, `(${have}; field_simp at *; ${close})`];
+  return [...equalityCase(st.target, c, diffs, prods), `(${have}; ${close})`, `(${have}; field_simp at *; ${close})`];
+}
+
+/**
+ * The equality case `x₁ = m ∧ … ∧ xₙ = m` under whatever hypothesis forces it (the sum is n · m, the
+ * sum of the squares is the sum …): the squares of the differences add up to 0, so the variables are
+ * equal, and one variable is left. 2 s where three nlinarith calls on the parts took 11 s — past the
+ * search's 10 s per tactic on a slow machine (abc = 8, a + b + c = 6 ⇒ a = b = c = 2).
+ */
+function equalityCase(target: string, c: ProductConstraint, diffs: string[], prods: string[]): string[] {
+  const { vars, mean } = c;
+  const parts = conjuncts(target).map((p) => p.trim().replace(/^\((.*)\)$/, "$1").trim());
+  const bare = mean.replace(/^\((.*)\)$/, "$1");
+  if (parts.length !== vars.length || !vars.every((v) => parts.some((p) => p === `${v} = ${mean}` || p === `${v} = ${bare}`))) return [];
+  const [first, ...rest] = vars;
+  const squares = diffs.map((d) => d.replace(/^sq_nonneg (\(.*\))$/, "$1 ^ 2"));
+  const zero = `have hsq : ${squares.join(" + ")} = 0 := (by nlinarith [${[c.hyp, ...diffs, ...prods].join(", ")}])`;
+  const equal = rest.map(
+    (v, i) => `have heq${i} : ${first} = ${v} := sub_eq_zero.mp (pow_eq_zero_iff two_ne_zero |>.mp (by nlinarith only [${["hsq", ...diffs].join(", ")}] : (${first} - ${v}) ^ 2 = 0))`,
+  );
+  const last = `refine ⟨${vars.map(() => "?_").join(", ")}⟩ <;> nlinarith [${c.hyp}, sq_nonneg (${first} - ${mean}), sq_nonneg (${first} + ${mean})]`;
+  return [`(${[zero, ...equal, `subst ${rest.map((_, i) => `heq${i}`).join(" ")}`, last].join("; ")})`];
 }
 
 /** The top-level parts of P ∧ Q ∧ R. */

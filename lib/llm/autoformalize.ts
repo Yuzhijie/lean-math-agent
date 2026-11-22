@@ -243,8 +243,24 @@ export async function autoformalize(args: {
       };
     }
 
+    // The model's layers (2–5) do not depend on each other: started together (once Lean has found
+    // no counterexample — a refuted statement costs no model call), a statement that passes waits
+    // for the slowest check instead of their sum (five model calls in a row were minutes before
+    // any proof is tried). They are read in the old order, so the verdict and the layers reported
+    // are the same; the price is the later layers' calls for a statement layer 2 or 3 rejects.
+    // AUTOFORMALIZE_PARALLEL=0 checks one after the other again.
+    const quiet = <T>(p: Promise<T>): Promise<T> => (p.catch(() => undefined), p);
+    const together = !args.light && process.env.AUTOFORMALIZE_PARALLEL !== "0";
+    const early = together
+      ? {
+          l2: quiet(layerNonTriviality(formal, args.problemText)),
+          l3: quiet(layerBackTranslation(args.problemText, formalStatement, threshold)),
+          l4: quiet(layerNumericalVerification(formal)),
+          l5: quiet(layerHypothesisRelevance(formal, args.problemText)),
+        }
+      : undefined;
     // Layer 2: Non-triviality — is it a tautology or vacuous?
-    const l2 = await layerNonTriviality(formal, args.problemText);
+    const l2 = await (early?.l2 ?? layerNonTriviality(formal, args.problemText));
     results.push(l2);
     if (!l2.pass) {
       lastResult = {
@@ -262,11 +278,7 @@ export async function autoformalize(args: {
     }
 
     // Layer 3: Back-translation — Lean → NL → compare
-    const l3 = await layerBackTranslation(
-      args.problemText,
-      formalStatement,
-      threshold,
-    );
+    const l3 = await (early?.l3 ?? layerBackTranslation(args.problemText, formalStatement, threshold));
     results.push(l3);
     if (!l3.pass) {
       lastResult = {
@@ -284,11 +296,11 @@ export async function autoformalize(args: {
     }
 
     // Layer 4: Numerical instance verification (best-effort)
-    const l4 = await layerNumericalVerification(formal);
+    const l4 = await (early?.l4 ?? layerNumericalVerification(formal));
     results.push(l4);
 
     // Layer 5: Hypothesis relevance check
-    const l5 = await layerHypothesisRelevance(formal, args.problemText);
+    const l5 = await (early?.l5 ?? layerHypothesisRelevance(formal, args.problemText));
     results.push(l5);
 
     const accepted = results.every((r) => r.pass);

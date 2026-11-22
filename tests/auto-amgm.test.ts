@@ -22,7 +22,15 @@ describe("AM–GM under a product constraint", () => {
     expect(plain).toContain("have hamgm : (3 : ℝ) * 1 ≤ a + b + c := (by nlinarith only [habc, ha, hb, hc, sq_nonneg (a - b)");
     expect(plain).toContain("nlinarith [hamgm, sq_nonneg (a - b)");
     const both = amgmFinishers(goal([...ABC, "h : (a ^ 2 + b ^ 2 + c ^ 2) / (a + b + c) = 1"], "a = 1 ∧ b = 1 ∧ c = 1"));
-    expect(both[1]).toContain("field_simp at *; refine ⟨?_, ?_, ?_⟩ <;> nlinarith [hamgm, sq_nonneg (a - b), sq_nonneg (a - c), sq_nonneg (b - c), sq_nonneg (a - 1), sq_nonneg (b - 1), sq_nonneg (c - 1)]");
+    expect(both[2]).toContain("field_simp at *; refine ⟨?_, ?_, ?_⟩ <;> nlinarith [hamgm, sq_nonneg (a - b), sq_nonneg (a - c), sq_nonneg (b - c), sq_nonneg (a - 1), sq_nonneg (b - 1), sq_nonneg (c - 1)]");
+    // the equality case first: the squares of the differences are 0, so one variable is left
+    expect(both[0]).toBe(
+      "(have hsq : (a - b) ^ 2 + (a - c) ^ 2 + (b - c) ^ 2 = 0 := (by nlinarith [habc, sq_nonneg (a - b), sq_nonneg (a - c), sq_nonneg (b - c), mul_pos ha hb, mul_pos ha hc, mul_pos hb hc]); " +
+        "have heq0 : a = b := sub_eq_zero.mp (pow_eq_zero_iff two_ne_zero |>.mp (by nlinarith only [hsq, sq_nonneg (a - b), sq_nonneg (a - c), sq_nonneg (b - c)] : (a - b) ^ 2 = 0)); " +
+        "have heq1 : a = c := sub_eq_zero.mp (pow_eq_zero_iff two_ne_zero |>.mp (by nlinarith only [hsq, sq_nonneg (a - b), sq_nonneg (a - c), sq_nonneg (b - c)] : (a - c) ^ 2 = 0)); " +
+        "subst heq0 heq1; refine ⟨?_, ?_, ?_⟩ <;> nlinarith [habc, sq_nonneg (a - 1), sq_nonneg (a + 1)])",
+    );
+    expect(amgmFinishers(goal(ABC, "a = 1 ∧ b = 1"))).toHaveLength(2);
     // an ↔ goal is not split
     expect(amgmFinishers(goal(ABC, "a = 1 ↔ b = 1 ∧ c = 1"))[0]).not.toContain("refine ⟨");
     expect(amgmFinishers(goal(["a : ℝ", "ha : 0 < a"], "0 ≤ a"))).toEqual([]);

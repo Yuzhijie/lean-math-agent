@@ -49,6 +49,7 @@ import { combinatorialFit, combinatoricsProof, writtenCount } from "./combinator
 import { inequalityFit, inequalityProof } from "./inequality";
 import { geometryProof, looksGeometric } from "./geometry";
 import { hammerTheorem } from "./hammer";
+import { rejectedTactics } from "./rejected-tactics";
 import { inductionProof, looksInductive } from "./induction";
 import { optimizationFit, optimizationProof } from "./optimize";
 import { boundedMinScripts, orderProofScripts } from "./order-proof";
@@ -67,6 +68,10 @@ export interface StageStatement {
   huge?: boolean;
   /** Namespaces the statement is written under (the tactic search opens them). */
   opens?: string[];
+  /** Written by the cascade for the single tactics of the same run: the tactics Lean rejected outright on the goal. */
+  rejected?: ReadonlySet<string>;
+  /** Written by the cascade: its two searching tactics (aesop, exact?) were left for the single tactics' turn. */
+  searchLeft?: boolean;
 }
 
 export interface StageProof {
@@ -183,7 +188,12 @@ export const PROVER_STAGES: readonly ProverStage[] = [
     minMs: 1_000,
     run: async (s, budgetMs) => {
       const root = assembleLeanSource({ theoremName: s.theoremName, theoremType: s.theoremType, stepCodes: ["sorry"], useMathlib: s.useMathlib });
-      const hit = await hammerTheorem(root, { useMathlib: s.useMathlib, budgetMs });
+      // A prover written for this kind of statement runs next: the cascade's two searching tactics
+      // (aesop, exact? — most of the cascade's time where it proves nothing) wait until that prover
+      // has had its turn, and run at the start of the single tactics.
+      const plan = planStages(s).map((x) => x.stage.id);
+      s.searchLeft = plan.indexOf("trivial") > plan.indexOf("hammer") + 1;
+      const hit = await hammerTheorem(root, { useMathlib: s.useMathlib, budgetMs, ...(s.searchLeft ? { part: "quick" as const } : {}), onAttempts: (a) => (s.rejected = rejectedTactics(a)) });
       return hit ? verifyScripts(s, [hit.tactic], budgetMs) : {};
     },
     texts: () => ({
@@ -200,7 +210,14 @@ export const PROVER_STAGES: readonly ProverStage[] = [
     limitMs: () => env("TRIVIAL_TIME_LIMIT_MS", 300_000),
     minMs: 1_000,
     run: async (s, budgetMs) => {
-      const hit = await tryTrivialProof(s.sessionId, s.theoremName, s.theoremType, s.useMathlib, { expectedSignature: s.expectedSignature, deadline: Date.now() + budgetMs });
+      if (s.searchLeft && process.env.LEAN_SERVER_MODE !== "spawn") {
+        s.searchLeft = false;
+        const root = assembleLeanSource({ theoremName: s.theoremName, theoremType: s.theoremType, stepCodes: ["sorry"], useMathlib: s.useMathlib });
+        const found = await hammerTheorem(root, { useMathlib: s.useMathlib, budgetMs: Math.min(budgetMs, env("LEAN_HAMMER_BUDGET_MS", 30_000)), part: "search", onAttempts: (a) => (s.rejected = new Set([...(s.rejected ?? []), ...rejectedTactics(a)])) });
+        const r = found ? await verifyScripts(s, [found.tactic], budgetMs) : {};
+        if (r.proof) return r;
+      }
+      const hit = await tryTrivialProof(s.sessionId, s.theoremName, s.theoremType, s.useMathlib, { expectedSignature: s.expectedSignature, deadline: Date.now() + budgetMs, ...(s.rejected ? { skip: s.rejected } : {}) });
       return hit ? { proof: { verification: hit.verification, source: hit.source, tactics: hit.tactic, attempts: 1 } } : {};
     },
     texts: () => ({

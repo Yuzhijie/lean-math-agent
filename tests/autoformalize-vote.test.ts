@@ -194,3 +194,48 @@ describe("autoformalize: an earlier statement and what was wrong with it", () =>
     expect(first.user).toContain("Write a statement that does not repeat this.");
   });
 });
+
+describe("autoformalize: the model's checks run together", () => {
+  const layers = ["nonTrivialityCheck", "backTranslation", "numericalVerification", "hypothesisRelevance"];
+  /** The most layer checks in flight at once, and the order they finished being asked. */
+  async function inFlight(): Promise<number> {
+    llmAnswers([B]);
+    const answer = chatJson.getMockImplementation()!;
+    let now = 0;
+    let most = 0;
+    chatJson.mockImplementation(async (args: { schemaName: string }) => {
+      if (!layers.includes(args.schemaName)) return answer(args);
+      most = Math.max(most, ++now);
+      await new Promise((r) => setTimeout(r, 5));
+      now--;
+      return answer(args);
+    });
+    const r = await autoformalize({ problemText: "对正整数 n，n-1+1=n", maxRetries: 0 });
+    expect(r.accepted).toBe(true);
+    expect(r.validation_results.map((v) => v.layer)).toEqual([1, 2, 3, 4, 5, 6]);
+    return most;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    leanAnswers();
+    delete process.env.AUTOFORMALIZE_PARALLEL;
+  });
+
+  it("layers 2–5 are asked at once: a statement that passes waits for the slowest, not the sum", async () => {
+    expect(await inFlight()).toBeGreaterThanOrEqual(3); // the numerical layer asks only when Lean has instances to check
+  });
+
+  it("AUTOFORMALIZE_PARALLEL=0: one after the other", async () => {
+    process.env.AUTOFORMALIZE_PARALLEL = "0";
+    expect(await inFlight()).toBe(1);
+    delete process.env.AUTOFORMALIZE_PARALLEL;
+  });
+
+  it("a refuted statement asks no check of the model", async () => {
+    llmAnswers([A]);
+    const r = await autoformalize({ problemText: "对所有自然数 n，n-1+1=n", maxRetries: 0 });
+    expect(r.accepted).toBe(false);
+    expect(chatJson.mock.calls.map((c) => c[0].schemaName).filter((n: string) => layers.includes(n))).toEqual([]);
+  });
+});

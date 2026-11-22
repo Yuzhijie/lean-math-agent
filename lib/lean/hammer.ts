@@ -22,6 +22,15 @@ export interface HammerOptions {
   budgetMs?: number;
   /** Override the tactic list (hint generation still applies to `nlinarith`). */
   tactics?: string[];
+  /**
+   * Which of the cascade's tactics: "quick" leaves out the two that search (`aesop`, `exact?`),
+   * "search" is those two alone; default all. On the statements of the regression list the cascade
+   * does not prove, these two were 72 % of its time (289 of 402 s over 133 statements; `exact?`
+   * timed out on three, which also costs the worker), and 4 of 165 statements need them.
+   */
+  part?: "quick" | "search";
+  /** hammerTheorem: every attempt on the root goal, also when nothing closed it (see rejectedTactics). */
+  onAttempts?: (attempts: HammerAttempt[]) => void;
 }
 
 export interface HammerAttempt {
@@ -164,6 +173,9 @@ export function hammerCandidates(goal: string, useMathlib: boolean): string[] {
   return out;
 }
 
+/** The cascade's tactics that search (a rule set, the library) rather than decide. */
+const searches = (tactic: string) => /^(\(intros; )?aesop\)?$/.test(tactic) || tactic === "exact?";
+
 /**
  * Try the cascade on `state`. Stops at the first tactic that closes every
  * goal; otherwise reports the attempt that left the fewest goals.
@@ -173,7 +185,7 @@ export async function hammer(session: ProofSession, state: number, opts: HammerO
   const budget = opts.budgetMs ?? Number(process.env.LEAN_HAMMER_BUDGET_MS ?? 30_000);
   const goals = session.goals(state);
   const first = goals[0] ?? "";
-  const candidates = opts.tactics ?? hammerCandidates(first, opts.useMathlib);
+  const candidates = opts.tactics ?? hammerCandidates(first, opts.useMathlib).filter((t) => !opts.part || searches(t) === (opts.part === "search"));
   const attempts: HammerAttempt[] = [];
   let progressed: HammerOutcome["progressed"];
 
@@ -210,8 +222,9 @@ async function resolveSuggestion(
 
 /**
  * Whole-theorem entry point: open `theorem name type := by sorry`, run the
- * cascade on the root goal and, on success, return the closing tactic. The
- * caller assembles and strictly verifies the result. Undefined when Lean /
+ * cascade on the root goal and, on success, return the closing tactic (every
+ * attempt goes to `onAttempts` either way).
+ * The caller assembles and strictly verifies the result. Undefined when Lean /
  * the REPL is unavailable or the statement does not elaborate.
  */
 export async function hammerTheorem(
@@ -232,6 +245,7 @@ export async function hammerTheorem(
   const { session, root } = opened;
   try {
     const out = await hammer(session, root.state, opts);
+    opts.onAttempts?.(out.attempts);
     return out.solved && out.tactic ? { tactic: out.tactic, attempts: out.attempts, durationMs: out.durationMs } : undefined;
   } finally {
     session.close();

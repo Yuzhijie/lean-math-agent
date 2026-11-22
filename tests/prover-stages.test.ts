@@ -206,7 +206,7 @@ describe("running the stages", () => {
     expect(r.proof).toMatchObject({ strategy: "hammer", tactics: "omega", attempts: 1 });
     expect(m.verifyLeanSource.mock.calls[0][1]).toContain("omega");
     expect(m.verifyLeanSource.mock.calls[0][2]).toEqual({ theoremName: "t", expectedSignature: "2 + 2 = 4" });
-    expect(m.hammerTheorem.mock.calls[0][1]).toEqual({ useMathlib: true, budgetMs: 30_000 });
+    expect(m.hammerTheorem.mock.calls[0][1]).toMatchObject({ useMathlib: true, budgetMs: 30_000 });
 
     // a tactic that closed the goal in tactic mode but fails as a whole proof is no proof: the single tactics run next
     m.verifyLeanSource.mockReset().mockResolvedValue({ ok: false, log: "error" });
@@ -214,6 +214,18 @@ describe("running the stages", () => {
     const again = await runProverStages(st(": (2 : ℕ) + 2 = 4"));
     expect(again.proof).toMatchObject({ strategy: "trivial", tactics: "decide" });
     expect(m.tryTrivialProof.mock.calls[0][4]).toMatchObject({ deadline: expect.any(Number) });
+
+    // what Lean rejected outright in the cascade is not tried again as a whole proof
+    m.tryTrivialProof.mockClear();
+    m.hammerTheorem.mockImplementation(async (_src: string, o: { onAttempts?: (a: unknown[]) => void }) => {
+      o.onAttempts?.([
+        { tactic: "rfl", ok: false, solved: false, goalsLeft: -1, error: "Tactic `rfl` failed", ms: 1 },
+        { tactic: "decide +kernel", ok: false, solved: false, goalsLeft: -1, error: "tactic timed out after 60000ms", ms: 60000 },
+      ]);
+      return undefined;
+    });
+    await runProverStages(st(": (2 : ℕ) + 2 = 4"));
+    expect([...(m.tryTrivialProof.mock.calls[0][4] as { skip: Set<string> }).skip]).toEqual(["rfl"]);
 
     // the order script: each candidate verified until one passes
     m.tryTrivialProof.mockResolvedValue(null);
