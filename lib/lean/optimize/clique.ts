@@ -20,7 +20,7 @@
  *
  * Checked in Lean 4.33.1 + Mathlib: the statement above in 66 s standalone.
  */
-import type { FamilyGraph, FamilyStatement } from "./family";
+import { unaryArg, type FamilyGraph, type FamilyStatement } from "./family";
 
 /** More nodes than this and the search is not given to the kernel. */
 export const CLIQUE_MAX_NODES = Number(process.env.CLIQUE_MAX_NODES ?? 60_000);
@@ -187,7 +187,7 @@ export function cliqueScript(st: FamilyStatement, g: FamilyGraph, t: CliqueTable
   const hyp = (i: number) => `hc${i}`;
   const SL = `(List.range ${n}).filter (fun i => decide (SL.getD i ∅ ∈ ${st.family}))`;
   // every condition on one subset: the unary ones, and each pairwise one with itself
-  const single = [...st.unary.map((u) => ({ prop: `(fun (${u.v} : ${T}) => ${u.body}) A`, arg: `(${hyp(u.index)} A hA)` })), ...st.pairwise.map((p) => ({ prop: `(fun (${p.a} ${p.b} : ${T}) => ${p.body}) A A`, arg: `(${hyp(p.index)} A hA A hA)` }))];
+  const single = [...st.unary.map((u) => ({ prop: `(fun (${u.v} : ${T}) => ${u.body}) A`, arg: unaryArg(u, hyp(u.index)) })), ...st.pairwise.map((p) => ({ prop: `(fun (${p.a} ${p.b} : ${T}) => ${p.body}) A A`, arg: `(${hyp(p.index)} A hA A hA)` }))];
   const pairs = st.pairwise.flatMap((p) => {
     const f = `(fun (${p.a} ${p.b} : ${T}) => ${p.body})`;
     const h = hyp(p.index);
@@ -224,12 +224,16 @@ export function cliqueScript(st: FamilyStatement, g: FamilyGraph, t: CliqueTable
     `refine ⟨⟨{${witness.map((i) => setText(g.sets[t.verts[i]])).join(", ")}}, ?_⟩, ?_⟩`,
     `· decide +kernel`,
     `· rintro t ⟨${st.family}, ${Array.from({ length: st.items }, (_, i) => hyp(i)).join(", ")}, rfl⟩`,
-    `  have hcover : ∀ x : Fin ${N}, ∃ A ∈ ${st.family}, x ∈ A := by`,
-    `    intro x`,
-    `    have hx : x ∈ ${cover.union} := by`,
-    `      rw [${cover.reversed ? "← " : ""}${hyp(cover.index)}]`,
-    `      exact Finset.mem_univ x`,
-    `    simpa [Finset.mem_biUnion, Finset.mem_sup] using hx`,
+    ...(cover.pointwise
+      ? [`  have hcover : ∀ x : Fin ${N}, ∃ A ∈ ${st.family}, x ∈ A := ${hyp(cover.index)}`]
+      : [
+          `  have hcover : ∀ x : Fin ${N}, ∃ A ∈ ${st.family}, x ∈ A := by`,
+          `    intro x`,
+          `    have hx : x ∈ ${cover.union} := by`,
+          `      rw [${cover.reversed ? "← " : ""}${hyp(cover.index)}]`,
+          `      exact Finset.mem_univ x`,
+          `    simpa [Finset.mem_biUnion, Finset.mem_sup] using hx`,
+        ]),
     `  by_contra hgt`,
     `  have hF : ${st.M + 1} ≤ ${st.family}.card := by omega`,
     `  have hl_sub : (${SL}).Sublist (List.range ${n}) := List.filter_sublist`,

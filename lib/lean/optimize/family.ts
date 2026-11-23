@@ -25,10 +25,10 @@ export interface FamilyStatement {
   /** how the domain condition is written: `∀ A ∈ F, A ⊆ D` (item index) or `F ⊆ D.powerset` */
   domainItem: { index: number; kind: "subset" | "powerset" | "univ"; /** `.1` / `.2.1` … when `A ⊆ D` is one part of a conjunction */ proj?: string };
   /** `∀ A ∈ F, P A` (binder name, body) and `∀ A ∈ F, ∀ B ∈ F, Q A B` */
-  unary: { index: number; v: string; body: string }[];
+  unary: { index: number; v: string; body: string; /** the condition is written on the family: `F ⊆ Finset.univ.filter (fun A => P A)`, `F ⊆ Finset.powersetCard k Finset.univ` — P A for a member through that lemma */ via?: "filter" | "powersetCard" }[];
   pairwise: { index: number; a: string; b: string; body: string }[];
   /** "the family covers the ground set": `F.biUnion (fun A => A) = Finset.univ` (also `F.biUnion id`, `F.sup id`, either way round) — only read for members `Finset (Fin n)`; the bound is then a search (clique.ts), not a colouring */
-  cover?: { index: number; union: string; reversed: boolean };
+  cover?: { index: number; union: string; reversed: boolean; /** written point by point: `∀ x : Fin n, ∃ A ∈ F, x ∈ A` */ pointwise?: boolean };
   /** number of conjuncts before `t = F.card` */
   items: number;
   M: number;
@@ -97,6 +97,30 @@ export function parseFamily(theoremType: string): FamilyStatement | undefined {
     if (pw && st.domainItem.index < 0) {
       st.domain = stripParens(pw[1]);
       st.domainItem = { index, kind: "powerset" };
+      return;
+    }
+    // the members' condition written on the family: F ⊆ the subsets with P (only over a whole type)
+    const UNIVF = String.raw`\(?Finset\.univ(?: : Finset \(Finset \(?Fin \d+\)?\))?\)?`;
+    const filt =
+      new RegExp(`^${F} ⊆ \\(?${UNIVF}\\.filter \\(fun (${NAME})(?: : [^=]+?)? => ([\\s\\S]+)\\)\\)?$`).exec(it) ??
+      new RegExp(`^${F} ⊆ \\(?Finset\\.filter \\(fun (${NAME})(?: : [^=]+?)? => ([\\s\\S]+)\\) ${UNIVF}\\)?$`).exec(it);
+    if (filt && /^Finset \(?Fin \d+\)?$/.test(st.memberType)) {
+      // the pattern's last bracket is optional: a closing bracket too many belongs to the filter, not to the condition
+      let cond = filt[2].trim();
+      const depth = (t: string) => [...t].reduce((d, ch) => d + (ch === "(" ? 1 : ch === ")" ? -1 : 0), 0);
+      while (cond.endsWith(")") && depth(cond) < 0) cond = cond.slice(0, -1).trim();
+      st.unary.push({ index, v: filt[1], body: cond, via: "filter" });
+      return;
+    }
+    const pc = new RegExp(`^${F} ⊆ \\(?Finset\\.powersetCard (\\d+) \\(?Finset\\.univ(?: : Finset \\(?Fin \\d+\\)?)?\\)?\\)?$`).exec(it) ?? new RegExp(`^${F} ⊆ \\(?\\(?Finset\\.univ(?: : Finset \\(?Fin \\d+\\)?)?\\)?\\.powersetCard (\\d+)\\)?$`).exec(it);
+    if (pc && /^Finset \(?Fin \d+\)?$/.test(st.memberType)) {
+      st.unary.push({ index, v: "A", body: `A.card = ${pc[1]}`, via: "powersetCard" });
+      return;
+    }
+    // the family covers everything, said point by point
+    const pt = new RegExp(`^∀ \\(?(${NAME})(?: : Fin \\d+)?\\)?, ∃ (${NAME}) ∈ ${F}, \\1 ∈ \\2$`).exec(it);
+    if (pt && !st.cover && /^Finset \(?Fin \d+\)?$/.test(st.memberType)) {
+      st.cover = { index, union: "", reversed: false, pointwise: true };
       return;
     }
     // the family covers everything: its union is the whole type
@@ -223,6 +247,13 @@ export function colourFamily(g: FamilyGraph, k: number, deadline = Date.now() + 
   return g.sets.map((_, i) => col.get(i) ?? 0);
 }
 
+/** `P A` for a member A (`hA : A ∈ F`) from the family's hypothesis `h`. */
+export function unaryArg(u: FamilyStatement["unary"][number], h: string, A = "A", hA = "hA"): string {
+  if (u.via === "filter") return `(Finset.mem_filter.mp (${h} ${hA})).2`;
+  if (u.via === "powersetCard") return `(Finset.mem_powersetCard.mp (${h} ${hA})).2`;
+  return `(${h} ${A} ${hA})`;
+}
+
 const setText = (s: number[]) => (s.length ? `{${s.join(", ")}}` : "∅");
 
 /** The whole tactic script (after the statement), or a reason. */
@@ -238,7 +269,7 @@ export function familyScript(st: FamilyStatement, g: FamilyGraph, witness: numbe
   const args: string[] = [];
   for (const u of st.unary) {
     premises.push(`(fun (${u.v} : ${T}) => ${u.body}) A`, `(fun (${u.v} : ${T}) => ${u.body}) B`);
-    args.push(`(${hyp(u.index)} A hA)`, `(${hyp(u.index)} B hB)`);
+    args.push(unaryArg(u, hyp(u.index)), unaryArg(u, hyp(u.index), "B", "hB"));
   }
   for (const p of st.pairwise) {
     const f = `(fun (${p.a} ${p.b} : ${T}) => ${p.body})`;

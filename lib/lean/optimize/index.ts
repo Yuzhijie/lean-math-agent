@@ -192,6 +192,7 @@ export async function optimizationProof(args: {
     }
     // "largest family of subsets": a colouring the kernel checks (family.ts), before the generic search
     const fam = parseFamily(theoremType);
+    let familyNote = "";
     if (fam) {
       const ekr = await ekrProof(session, fam);
       if (ekr?.tactics) {
@@ -208,9 +209,13 @@ export async function optimizationProof(args: {
         const source = scriptSource({ theoremName, theoremType, tactics: f.tactics, useMathlib, heartbeats });
         const verification = await session.verify(sessionId, source, { theoremName, expectedSignature, timeoutMs: Number(process.env.OPTIMIZE_VERIFY_TIMEOUT_MS ?? 300_000) });
         if (verification.ok) return { proof: { verification, source, tactics: f.tactics }, reason: "" };
+        familyNote = `the family proof did not verify: ${summarizeFailure(verification, 160)}`;
         if (process.env.OPTIMIZE_DEBUG) console.error(`[optimize] family proof did not verify:\n${source}\n${verification.log}`);
       } else if (f.counterexample) return { reason: f.reason, counterexample: f.counterexample };
-      else if (process.env.OPTIMIZE_DEBUG) console.error(`[optimize] family: ${f.reason}`);
+      else {
+        familyNote = `family: ${f.reason}`;
+        if (process.env.OPTIMIZE_DEBUG) console.error(`[optimize] family: ${f.reason}`);
+      }
     }
     // card conditions on a few sets (Venn regions): region sizes as witness, regions + omega as bound
     if (!fam && /∃ (?:[^\s(),:]+ )+: Finset /.test(theoremType) && /\.card\b/.test(theoremType)) {
@@ -227,7 +232,8 @@ export async function optimizationProof(args: {
       run.restore(mark);
     }
     const r = await proveOptimization(run, session);
-    if (!r.ok) return { reason: r.reason ?? "not proved" };
+    // a family statement: why its own route did not get there says more than the general loop's reason
+    if (!r.ok) return { reason: familyNote ? `${familyNote}; ${r.reason ?? "not proved"}` : (r.reason ?? "not proved") };
     const tactics = script.join("\n");
     const source = scriptSource({ theoremName, theoremType, tactics, useMathlib, heartbeats });
     const verification = await session.verify(sessionId, source, { theoremName, expectedSignature, timeoutMs: Number(process.env.OPTIMIZE_VERIFY_TIMEOUT_MS ?? 300_000) });

@@ -24,6 +24,24 @@ describe("a family that must cover the ground set", () => {
     expect(parseFamily(": IsGreatest {t | ∃ G : Finset (Finset (Fin 6)), (∀ X ∈ G, ∀ Y ∈ G, (X ∩ Y).Nonempty) ∧ t = G.card} 32")?.cover).toBeUndefined();
   });
 
+  it("is read when the members' condition is written on the family and the cover point by point", () => {
+    const st = parseFamily(
+      ": IsGreatest {n : ℕ | ∃ F : Finset (Finset (Fin 7)), F ⊆ ((Finset.univ : Finset (Finset (Fin 7))).filter (fun A => A.card = 4)) ∧ (∀ A ∈ F, ∀ B ∈ F, A ≠ B → 2 ≤ (A ∩ B).card) ∧ (∀ x : Fin 7, ∃ A ∈ F, x ∈ A) ∧ n = F.card} 13",
+    )!;
+    expect(st.unary).toEqual([{ index: 0, v: "A", body: "A.card = 4", via: "filter" }]);
+    expect(st.cover).toMatchObject({ index: 2, pointwise: true });
+    const g = graph(7, 4, 2);
+    const t = cliqueTable(g, 7);
+    const script = cliqueScript(st, g, t, maxCoverFamily(t, 14));
+    expect(script).toContain("  have hcover : ∀ x : Fin 7, ∃ A ∈ F, x ∈ A := hc2");
+    expect(script).toContain("obtain ⟨i, hi, rfl⟩ := hidx A (Finset.mem_filter.mp (hc0 hA)).2 (hc1 A hA A hA)");
+    // the other spellings
+    expect(parseFamily(": IsGreatest {n | ∃ F : Finset (Finset (Fin 6)), F ⊆ Finset.univ.filter (fun S => S.card = 3) ∧ (∀ A ∈ F, ∀ B ∈ F, (A ∩ B).Nonempty) ∧ n = F.card} 10")?.unary).toEqual([{ index: 0, v: "S", body: "S.card = 3", via: "filter" }]);
+    expect(parseFamily(": IsGreatest {n | ∃ F : Finset (Finset (Fin 6)), F ⊆ Finset.powersetCard 3 Finset.univ ∧ (∀ A ∈ F, ∀ B ∈ F, (A ∩ B).Nonempty) ∧ (∀ x, ∃ A ∈ F, x ∈ A) ∧ n = F.card} 10")).toMatchObject({ unary: [{ body: "A.card = 3", via: "powersetCard" }], cover: { pointwise: true } });
+    // a point that some member must miss is another condition
+    expect(parseFamily(": IsGreatest {n | ∃ F : Finset (Finset (Fin 6)), (∀ A ∈ F, ∀ B ∈ F, (A ∩ B).Nonempty) ∧ (∀ x : Fin 6, ∃ A ∈ F, x ∉ A) ∧ n = F.card} 10")).toBeUndefined();
+  });
+
   it("4-subsets of 7 points meeting in two: 13 when they cover, by a search of some 16 000 nodes", () => {
     const t = cliqueTable(graph(7, 4, 2), 7);
     expect(t.verts).toHaveLength(35);
