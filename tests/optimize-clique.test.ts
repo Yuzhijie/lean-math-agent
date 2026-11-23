@@ -42,6 +42,29 @@ describe("a family that must cover the ground set", () => {
     expect(parseFamily(": IsGreatest {n | ∃ F : Finset (Finset (Fin 6)), (∀ A ∈ F, ∀ B ∈ F, (A ∩ B).Nonempty) ∧ (∀ x : Fin 6, ∃ A ∈ F, x ∉ A) ∧ n = F.card} 10")).toBeUndefined();
   });
 
+  it("is read through helper lets and typed binders, and shows Lean the statement as it read it", () => {
+    const st = parseFamily(
+      ": let Four : Finset (Finset (Fin 7)) := (Finset.univ : Finset (Finset (Fin 7))).filter (fun A : Finset (Fin 7) => A.card = 4); let Good : Finset (Finset (Fin 7)) → Prop := fun F => F ⊆ Four ∧ (∀ A : Finset (Fin 7), A ∈ F → ∀ B : Finset (Fin 7), B ∈ F → A ≠ B → 2 ≤ (A ∩ B).card) ∧ (∀ x : Fin 7, ∃ A : Finset (Fin 7), A ∈ F ∧ x ∈ A); IsGreatest {n : ℕ | ∃ F : Finset (Finset (Fin 7)), Good F ∧ n = F.card} 13",
+    )!;
+    expect(st).toMatchObject({ lets: [], items: 3, pattern: "⟨hc0, hc1, hc2⟩", unary: [{ index: 0, body: "A.card = 4", via: "filter" }], pairwise: [{ index: 1, body: "A ≠ B → 2 ≤ (A ∩ B).card" }], cover: { index: 2, pointwise: true } });
+    expect(st.shown).toEqual({
+      intro: ["Four", "Good"],
+      goal: "IsGreatest {n : ℕ | ∃ F : Finset (Finset (Fin 7)), (F ⊆ ((Finset.univ : Finset (Finset (Fin 7))).filter (fun A : Finset (Fin 7) => A.card = 4)) ∧ (∀ A ∈ F, ∀ B ∈ F, A ≠ B → 2 ≤ (A ∩ B).card) ∧ (∀ x : Fin 7, ∃ A ∈ F, x ∈ A)) ∧ n = F.card} 13",
+    });
+    const g = graph(7, 4, 2);
+    const t = cliqueTable(g, 7);
+    const lines = cliqueScript(st, g, t, maxCoverFamily(t, 14)).split("\n");
+    expect(lines[0]).toBe("intro Four Good");
+    expect(lines[1]).toBe(`show ${st.shown!.goal}`);
+    expect(lines).toContain("· rintro t ⟨F, ⟨hc0, hc1, hc2⟩, rfl⟩");
+    // a statement read as written is not shown again, and its lets stay lets
+    const plain = parseFamily(HM7)!;
+    expect(plain.shown).toBeUndefined();
+    expect(plain.pattern).toBeUndefined();
+    // a helper used in a way that cannot be written out: not read
+    expect(parseFamily(": let Good : Finset (Finset (Fin 7)) → Prop := fun F => ∀ A ∈ F, ∀ B ∈ F, (A ∩ B).Nonempty; IsGreatest {n : ℕ | ∃ F : Finset (Finset (Fin 7)), Good (F.image id) ∧ n = F.card} 13")).toBeUndefined();
+  });
+
   it("4-subsets of 7 points meeting in two: 13 when they cover, by a search of some 16 000 nodes", () => {
     const t = cliqueTable(graph(7, 4, 2), 7);
     expect(t.verts).toHaveLength(35);

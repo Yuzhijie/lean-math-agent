@@ -20,7 +20,7 @@
  *
  * Checked in Lean 4.33.1 + Mathlib: the statement above in 66 s standalone.
  */
-import { unaryArg, type FamilyGraph, type FamilyStatement } from "./family";
+import { hypPattern, opening, unaryArg, type FamilyGraph, type FamilyStatement } from "./family";
 
 /** More nodes than this and the search is not given to the kernel. */
 export const CLIQUE_MAX_NODES = Number(process.env.CLIQUE_MAX_NODES ?? 60_000);
@@ -208,7 +208,7 @@ export function cliqueScript(st: FamilyStatement, g: FamilyGraph, t: CliqueTable
   ].join("\n");
   const root = `(${st.M + 1}, List.range ${n}, 0)`;
   return [
-    ...(st.lets.length ? [`intro ${st.lets.map((l) => l.name).join(" ")}`] : []),
+    ...opening(st),
     CLIQUE_LEMMA,
     `let SL : List (${T}) := [${t.verts.map((v) => setText(g.sets[v])).join(", ")}]`,
     `let CL : List ℕ := [${t.codes.join(", ")}]`,
@@ -223,7 +223,7 @@ export function cliqueScript(st: FamilyStatement, g: FamilyGraph, t: CliqueTable
     `  decide +kernel`,
     `refine ⟨⟨{${witness.map((i) => setText(g.sets[t.verts[i]])).join(", ")}}, ?_⟩, ?_⟩`,
     `· decide +kernel`,
-    `· rintro t ⟨${st.family}, ${Array.from({ length: st.items }, (_, i) => hyp(i)).join(", ")}, rfl⟩`,
+    `· rintro t ⟨${st.family}, ${hypPattern(st)}, rfl⟩`,
     ...(cover.pointwise
       ? [`  have hcover : ∀ x : Fin ${N}, ∃ A ∈ ${st.family}, x ∈ A := ${hyp(cover.index)}`]
       : [

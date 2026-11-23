@@ -29,6 +29,10 @@ export interface FamilyStatement {
   pairwise: { index: number; a: string; b: string; body: string }[];
   /** "the family covers the ground set": `F.biUnion (fun A => A) = Finset.univ` (also `F.biUnion id`, `F.sup id`, either way round) — only read for members `Finset (Fin n)`; the bound is then a search (clique.ts), not a colouring */
   cover?: { index: number; union: string; reversed: boolean; /** written point by point: `∀ x : Fin n, ∃ A ∈ F, x ∈ A` */ pointwise?: boolean };
+  /** the statement was rewritten before it was read (lets written out, typed binders as `∀ A ∈ F`): the names to `intro` and the goal to `show` — Lean accepts it by unfolding — before the proof */
+  shown?: { intro: string[]; goal: string };
+  /** the `rintro` pattern of the conditions when they are grouped (`⟨hc0, hc1, hc2⟩`); else `hc0, hc1, …` */
+  pattern?: string;
   /** number of conjuncts before `t = F.card` */
   items: number;
   M: number;
@@ -59,6 +63,65 @@ export function parseFamily(theoremType: string): FamilyStatement | undefined {
   let body = split ? split.body : t0.startsWith(":") ? stripParens(t0.slice(1)) : undefined;
   if (!body) return undefined;
   body = stripParens(body);
+  const direct = readFamily(lets, body);
+  if (direct) return direct;
+  // the same statement written with helper lets (`let Good := fun F => …; … Good F …`) or with typed
+  // binders (`∀ A : T, A ∈ F → …`, `∃ A : T, A ∈ F ∧ …`): written out, read again, and shown to Lean first
+  const plain = plainForm(lets, body);
+  if (!plain || plain === body) return undefined;
+  const st = readFamily([], plain);
+  if (!st) return undefined;
+  st.shown = { intro: lets.map((l) => l.name), goal: plain };
+  return st;
+}
+
+const esc = (v: string) => v.replace(/[.*+?^${}()|[\]\\']/g, "\\$&");
+const word = (v: string) => new RegExp(`(?<![\\w'.₀-₉])${esc(v)}(?![\\w'₀-₉])`, "g");
+
+/** The statement's body with its lets written out and membership binders in their short form; undefined when a let cannot be written out. */
+function plainForm(lets: FamilyStatement["lets"], body: string): string | undefined {
+  let t = body;
+  // later lets may use earlier ones: from the last to the first
+  for (let k = lets.length - 1; k >= 0; k--) {
+    const l = lets[k];
+    const fn = new RegExp(`^fun \\(?(${NAME})(?: : [^=]+?)?\\)? => ([\\s\\S]+)$`).exec(stripParens(l.value));
+    const into = (text: string): string | undefined => {
+      if (!fn) return text.replace(word(l.name), `(${l.value})`);
+      // a predicate: every use must be an application to a name
+      const applied = new RegExp(`(?<![\\w'.₀-₉])${esc(l.name)} (${NAME})(?![\\w'₀-₉])`, "g");
+      const out = text.replace(applied, (_, arg: string) => `(${fn[2].replace(word(fn[1]), arg)})`);
+      return word(l.name).test(out) ? undefined : out;
+    };
+    const next = into(t);
+    if (next === undefined) return undefined;
+    t = next;
+  }
+  // a let used inside an earlier-inlined let's value has been written out with it (values are inlined after their users)
+  if (lets.some((l) => word(l.name).test(t))) return undefined;
+  return t
+    .replace(new RegExp(`∀ \\(?(${NAME}) : [^,()]*(?:\\([^()]*(?:\\([^()]*\\))?[^()]*\\))?[^,()]*\\)?, \\1 ∈ (${NAME}) → `, "g"), "∀ $1 ∈ $2, ")
+    .replace(new RegExp(`∃ \\(?(${NAME}) : [^,()]*(?:\\([^()]*(?:\\([^()]*\\))?[^()]*\\))?[^,()]*\\)?, \\1 ∈ (${NAME}) ∧ `, "g"), "∃ $1 ∈ $2, ");
+}
+
+/** The conditions of a (possibly grouped) conjunction, flat, with the `rintro` pattern that takes them apart. */
+function flatten(items: string[], start: number): { flat: string[]; pattern: string } {
+  const flat: string[] = [];
+  const names: string[] = [];
+  for (const it of items) {
+    // a group in brackets — not a quantified condition, whose body may hold an ∧ of its own
+    if (!/^[∀∃¬]/.test(it) && topIndex(it, "∧") >= 0) {
+      const inner = flatten(conjuncts(it), start + flat.length);
+      flat.push(...inner.flat);
+      names.push(`⟨${inner.pattern}⟩`);
+    } else {
+      names.push(`hc${start + flat.length}`);
+      flat.push(it);
+    }
+  }
+  return { flat, pattern: names.join(", ") };
+}
+
+function readFamily(lets: FamilyStatement["lets"], body: string): FamilyStatement | undefined {
   const m = new RegExp(`^IsGreatest\\s*\\{\\s*(${NAME})\\s*(?::\\s*ℕ)?\\s*\\|\\s*([\\s\\S]+)\\}\\s*(\\d+)$`).exec(body);
   if (!m) return undefined;
   const [, tv, inner, Mtext] = m;
@@ -69,10 +132,12 @@ export function parseFamily(theoremType: string): FamilyStatement | undefined {
   const mt = famType && /^Finset \((Finset (?:ℕ|\(Fin \d+\)|Fin \d+))\)$/.exec(famType);
   if (!mt) return undefined;
   const F = fam.name;
-  const items = conjuncts(ex.body);
-  const last = items.pop()!;
+  const top = conjuncts(ex.body);
+  const last = top.pop()!;
   if (!new RegExp(`^(${tv} = ${F}\\.card|${F}\\.card = ${tv}|${tv} = Finset\\.card ${F})$`).test(last)) return undefined;
+  const { flat: items, pattern } = flatten(top, 0);
   const st: FamilyStatement = { lets, family: F, memberType: mt[1], domain: "", domainItem: { index: -1, kind: "subset" }, unary: [], pairwise: [], items: items.length, M: Number(Mtext) };
+  if (items.length !== top.length) st.pattern = pattern;
   items.forEach((it, index) => {
     const pair = new RegExp(`^∀ (${NAME}) ∈ ${F}, ∀ (${NAME}) ∈ ${F}, ([\\s\\S]+)$`).exec(it);
     if (pair) {
@@ -247,6 +312,15 @@ export function colourFamily(g: FamilyGraph, k: number, deadline = Date.now() + 
   return g.sets.map((_, i) => col.get(i) ?? 0);
 }
 
+/** The first lines of a proof: the lets introduced, and the statement as it was read when it was rewritten. */
+export function opening(st: FamilyStatement): string[] {
+  const names = st.shown ? st.shown.intro : st.lets.map((l) => l.name);
+  return [...(names.length ? [`intro ${names.join(" ")}`] : []), ...(st.shown ? [`show ${st.shown.goal}`] : [])];
+}
+
+/** The `rintro` pattern for the conditions before `t = F.card`. */
+export const hypPattern = (st: FamilyStatement): string => st.pattern ?? Array.from({ length: st.items }, (_, i) => `hc${i}`).join(", ");
+
 /** `P A` for a member A (`hA : A ∈ F`) from the family's hypothesis `h`. */
 export function unaryArg(u: FamilyStatement["unary"][number], h: string, A = "A", hA = "hA"): string {
   if (u.via === "filter") return `(Finset.mem_filter.mp (${h} ${hA})).2`;
@@ -279,7 +353,7 @@ export function familyScript(st: FamilyStatement, g: FamilyGraph, witness: numbe
   }
   const dom = st.domainItem.kind === "univ" ? `fun A _ => Finset.mem_powerset.mpr (Finset.subset_univ A)` : st.domainItem.kind === "subset" ? `fun A hA => Finset.mem_powerset.mpr (${hyp(st.domainItem.index)} A hA)${st.domainItem.proj ?? ""}` : `fun A hA => ${hyp(st.domainItem.index)} hA`;
   return [
-    ...(st.lets.length ? [`intro ${st.lets.map((l) => l.name).join(" ")}`] : []),
+    ...opening(st),
     `let code : ${T} → ℕ := fun A => A.sum (fun i => 2 ^ (i : ℕ))`,
     `let color : ${T} → ℕ := fun A => ((([${table}] : List (ℕ × ℕ)).lookup (code A)).getD 0)`,
     `have key : ∀ A ∈ (${D}).powerset, ∀ B ∈ (${D}).powerset, A ≠ B → ${premises.map((p) => `${p} → `).join("")}color A ≠ color B := by`,
@@ -288,7 +362,7 @@ export function familyScript(st: FamilyStatement, g: FamilyGraph, witness: numbe
     `  decide +kernel`,
     `refine ⟨⟨${famLit}, ?_⟩, ?_⟩`,
     `· decide +kernel`,
-    `· rintro t ⟨F, ${Array.from({ length: n }, (_, i) => hyp(i)).join(", ")}, rfl⟩`,
+    `· rintro t ⟨F, ${hypPattern(st)}, rfl⟩`,
     `  have hD : ∀ A ∈ F, A ∈ (${D}).powerset := ${dom}`,
     `  calc F.card ≤ (Finset.range ${st.M}).card := by`,
     `        refine Finset.card_le_card_of_injOn color (fun A hA => Finset.mem_range.mpr (hcol A (hD A hA))) ?_`,

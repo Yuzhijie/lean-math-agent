@@ -193,7 +193,8 @@ export async function optimizationProof(args: {
     // "largest family of subsets": a colouring the kernel checks (family.ts), before the generic search
     const fam = parseFamily(theoremType);
     let familyNote = "";
-    if (fam) {
+    // (the Erdős–Ko–Rado route writes its own opening: not for a statement that was rewritten before it was read)
+    if (fam && !fam.shown && !fam.pattern) {
       const ekr = await ekrProof(session, fam);
       if (ekr?.tactics) {
         const source = scriptSource({ theoremName, theoremType, tactics: ekr.tactics, useMathlib, heartbeats });
