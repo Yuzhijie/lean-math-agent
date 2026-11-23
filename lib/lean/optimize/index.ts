@@ -13,6 +13,7 @@ import type { LeanVerifyResult } from "../sandbox";
 import { splitTopLevelColon } from "../statement-prop";
 import { openRunner, scriptSource } from "../tactic-runner";
 import { proveOptimization } from "./prove";
+import { CLIQUE_MAX_NODES, cliqueScript, cliqueSearch, cliqueTable, maxCoverFamily } from "./clique";
 import { colourFamily, familyEvalCommand, familyScript, maxFamily, parseFamily, readFamilyGraph } from "./family";
 import type { ProofSession } from "../proof-state";
 import { ekrScript, ekrShape, groundEvalCommand, readGround } from "./ekr";
@@ -72,6 +73,18 @@ async function familyProof(session: ProofSession, fam: NonNullable<ReturnType<ty
   const g = msgs.map((m) => readFamilyGraph(m.data)).find((x) => x);
   if (!g) return { reason: "no subset table from Lean" };
   if (g.sets.length > 128) return { reason: "more than 7 elements in the ground set" };
+  if (fam.cover) {
+    // the family must cover the ground set: a search the kernel runs (clique.ts)
+    const points = Number(/Fin (\d+)/.exec(fam.memberType)![1]);
+    const table = cliqueTable(g, points);
+    const text = (ids: number[]) => ids.map((i) => `{${g.sets[table.verts[i]].join(", ")}}`).join(", ");
+    const top = maxCoverFamily(table, fam.M + 1);
+    if (top.length > fam.M) return { reason: `a covering family of ${top.length} members fits: ${text(top)}`, counterexample: `${top.length} > ${fam.M}: ${text(top)}` };
+    if (top.length < fam.M) return { reason: `the largest covering family found has ${top.length} members, not ${fam.M}` };
+    const search = cliqueSearch(table, fam.M + 1);
+    if (!search.empty) return { reason: `the search for a covering family of ${fam.M + 1} members takes more than ${CLIQUE_MAX_NODES} nodes: not given to the kernel` };
+    return { tactics: cliqueScript(fam, g, table, top), reason: "" };
+  }
   const best = maxFamily(g, fam.M + 1);
   if (best.length > fam.M) {
     const text = best.map((i) => `{${g.sets[i].join(", ")}}`).join(", ");

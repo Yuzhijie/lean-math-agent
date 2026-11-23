@@ -27,6 +27,8 @@ export interface FamilyStatement {
   /** `∀ A ∈ F, P A` (binder name, body) and `∀ A ∈ F, ∀ B ∈ F, Q A B` */
   unary: { index: number; v: string; body: string }[];
   pairwise: { index: number; a: string; b: string; body: string }[];
+  /** "the family covers the ground set": `F.biUnion (fun A => A) = Finset.univ` (also `F.biUnion id`, `F.sup id`, either way round) — only read for members `Finset (Fin n)`; the bound is then a search (clique.ts), not a colouring */
+  cover?: { index: number; union: string; reversed: boolean };
   /** number of conjuncts before `t = F.card` */
   items: number;
   M: number;
@@ -97,6 +99,15 @@ export function parseFamily(theoremType: string): FamilyStatement | undefined {
       st.domainItem = { index, kind: "powerset" };
       return;
     }
+    // the family covers everything: its union is the whole type
+    const UNIV = String.raw`\(?Finset\.univ(?: : Finset \(?Fin \d+\)?)?\)?`;
+    const UNION = `${F}\\.biUnion \\(fun (?<v>${NAME}) => \\k<v>\\)|${F}\\.biUnion id|${F}\\.sup id`;
+    const cov = new RegExp(`^(${UNION}) = ${UNIV}$`).exec(it);
+    const voc = cov ? null : new RegExp(`^${UNIV} = (${UNION})$`).exec(it);
+    if ((cov || voc) && !st.cover && /^Finset \(?Fin \d+\)?$/.test(st.memberType)) {
+      st.cover = { index, union: (cov ?? voc)![1], reversed: !cov };
+      return;
+    }
     st.domainItem.index = -2; // a condition of another kind: not taken
   });
   // no ground-set condition: the members' type is the ground set (`Finset (Finset (Fin 6))`)
@@ -105,6 +116,8 @@ export function parseFamily(theoremType: string): FamilyStatement | undefined {
     st.domain = `(Finset.univ : Finset (Fin ${fin[1]}))`;
     st.domainItem = { index: -1, kind: "univ" };
   }
+  // a cover is read against the whole type: not with a ground set of its own
+  if (st.cover && st.domainItem.kind !== "univ") return undefined;
   if ((st.domainItem.index < 0 && st.domainItem.kind !== "univ") || !st.pairwise.length || !Number.isInteger(st.M) || st.M < 1) return undefined;
   return st;
 }
