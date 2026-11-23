@@ -108,6 +108,18 @@ describe("attemptLeanFormalization", () => {
     expect(m.proveWholeTheorem).not.toHaveBeenCalled();
   });
 
+  it("gives the formalizer the answer in one format and says so", async () => {
+    m.hammerTheorem.mockResolvedValue({ tactic: "decide +kernel", attempts: [], durationMs: 5 });
+    const a = await attemptLeanFormalization("求 2^2024+1 与 2^3036-1 的最大公因数。", { answer: "$$\\boxed{\\dfrac{2}{2}}$$ 个" });
+    const sent = m.autoformalize.mock.calls[0][0].problemText as string;
+    expect(sent).toContain("The answer found by solving is: 2/2\n(its unit is 个; the statement is about the number)\n(as the solution wrote it: $$\\boxed{\\dfrac{2}{2}}$$ 个)");
+    expect((a.limitations ?? []).join("\n")).toMatch(/答案按统一格式写入陈述：.* → 2\/2（单位 个）|one format: .* → 2\/2 \(unit 个\)/);
+    // an answer already in that format: no note
+    m.autoformalize.mockClear();
+    const b = await attemptLeanFormalization("求 2^2024+1 与 2^3036-1 的最大公因数。", { answer: "1" });
+    expect((b.limitations ?? []).join("\n")).not.toMatch(/统一格式|one format/);
+  });
+
   it("says what a proved statement does not cover: a figure the model read, a computation on numbers worked out while solving", async () => {
     m.hammerTheorem.mockResolvedValue({ tactic: "norm_num", attempts: [], durationMs: 5 });
     // a computation the problem itself asks for: nothing to add

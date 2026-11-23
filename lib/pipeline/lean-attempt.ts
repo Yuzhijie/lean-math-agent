@@ -80,9 +80,9 @@ export function answerCandidates(s: {
   const computed = plainAnswer(s.computation_result?.answer);
   const written = plainAnswer(s.nl_solution?.final_answer);
   const order = s.computation_result?.cross_validated ? [computed, written] : [written, computed];
-  const key = (x: string) => x.replace(/\s+/g, "");
+  // the same answer written two ways (`\frac{1}{2}` and `1/2`) is one candidate
   const out: string[] = [];
-  for (const a of order) if (a && !out.some((b) => key(b) === key(a))) out.push(a);
+  for (const a of order) if (a && !out.some((b) => sameAnswer(a, b))) out.push(a);
   return out;
 }
 
@@ -90,7 +90,8 @@ export function answerCandidates(s: {
 export function problemWithAnswer(problemText: string, answer?: string): string {
   const a = answer?.trim();
   if (!a) return problemText;
-  return `${problemText}\n\nThe answer found by solving is: ${a}\nState the theorem so that it asserts exactly this answer (for example \`expression = value\`, or the set of all solutions equals the given set).`;
+  // the answer in one format (lib/pipeline/answer-format.ts): the boxed part, plain mathematics, a unit apart, a choice letter as its option
+  return `${problemText}\n\n${answerForFormalizer(a, problemText)}\nState the theorem so that it asserts exactly this answer (for example \`expression = value\`, or the set of all solutions equals the given set).`;
 }
 
 function sketchOf(solution: LeanAttemptContext["solution"]): string | undefined {
@@ -101,6 +102,7 @@ function sketchOf(solution: LeanAttemptContext["solution"]): string | undefined 
 }
 
 import { evalNatExpr, hugePower } from "../compute/nat-expr";
+import { answerForFormalizer, normalizeAnswer, sameAnswer } from "./answer-format";
 export { evalNatExpr };
 
 /** The argument of `name (...)` starting at `from` (balanced parentheses), or undefined. */
@@ -478,6 +480,11 @@ async function attemptLean(problemText: string, ctx: LeanAttemptContext, mark: {
       feedback = previousAttemptFeedback(prev, prev.formal_statement!);
     }
     for (let k = 0; !formal?.accepted && k < answers.length; k++) {
+      const shaped = answers[k] ? normalizeAnswer(answers[k], problemText) : undefined;
+      if (shaped && shaped.text.replace(/\s+/g, "") !== shaped.raw.replace(/\s+/g, "")) {
+        const more = [shaped.choice ? lt(`选项 ${shaped.choice.letters.join("、")}`, `option ${shaped.choice.letters.join(", ")}`) : "", shaped.unit ? lt(`单位 ${shaped.unit}`, `unit ${shaped.unit}`) : ""].filter(Boolean).join(lt("，", ", "));
+        notes.push(lt(`答案按统一格式写入陈述：${shaped.raw} → ${shaped.text}${more ? `（${more}）` : ""}`, `The answer went into the statement in one format: ${shaped.raw} → ${shaped.text}${more ? ` (${more})` : ""}`));
+      }
       formal = await autoformalize({ problemText: problemWithAnswer(problemText, answers[k]), feedback });
       formal_statement = formal.formal_statement;
       if (formal.accepted) break;
