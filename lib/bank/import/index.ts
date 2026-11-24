@@ -20,6 +20,7 @@ import { clampStr, recordToFields, type ParsedQuestion } from "./fields";
 import { detectImage, IMAGE_EXT, IMAGE_FILE, preparePhoto, scannedPdfPages, type PageImage } from "./images";
 import { maxOcrPages, ocrPages } from "./ocr";
 import { parsePdf, refineWithModel } from "./pdf";
+import { attachPdfFigures } from "./pdf-figures";
 import { applyAnswerKey } from "./answer-key";
 import { decodeText, previewTable, readRows, rowsToQuestions } from "./tabular";
 import { splitText } from "./text";
@@ -199,6 +200,13 @@ export async function parseImport(args: {
         ocr = read.length > 0;
         if (!pdf.scanned) notes.push(lt(`其中 ${pages.length} 页是图片，已用视觉模型识别`, `${pages.length} page${pages.length === 1 ? " is a picture and was" : "s are pictures and were"} read with the vision model`));
       } else questions = pdf.questions;
+      // What is drawn on the text pages (pictures, charts, shapes) goes with the question it stands under.
+      if (pdf.questions.length) {
+        const figs = await attachPdfFigures(owner, bankId, data, questions, { skipPages: [...pdf.picturePages, ...pdf.answerKeyPages] });
+        questions = figs.questions;
+        notes = [...notes, ...figs.notes];
+        ocrAssets = [...ocrAssets, ...figs.assets];
+      }
       if (args.useModel !== false && bank.allow_model && process.env.LLM_API_KEY && questions.length) questions = await refineWithModel(questions);
       if (pdf.answerKey && questions.length) {
         const r = applyAnswerKey(questions, pdf.answerKey);

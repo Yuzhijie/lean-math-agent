@@ -269,7 +269,8 @@ export function pageScan(images: RawImage[]): RawImage | null {
 }
 
 /** @napi-rs/canvas when installed (optional): lets pdf.js render pages that are drawn rather than scanned. */
-async function loadCanvas(): Promise<unknown | null> {
+export async function loadCanvas(): Promise<unknown | null> {
+  if (process.env.BANK_IMAGES_NO_CANVAS === "1") return null;
   try {
     const name = "@napi-rs/canvas";
     return await import(/* webpackIgnore: true */ name);
