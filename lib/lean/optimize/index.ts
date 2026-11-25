@@ -14,6 +14,7 @@ import { splitTopLevelColon } from "../statement-prop";
 import { openRunner, scriptSource } from "../tactic-runner";
 import { proveOptimization } from "./prove";
 import { CLIQUE_MAX_NODES, cliqueScript, cliqueSearch, cliqueTable, maxCoverFamily } from "./clique";
+import { chainScript, chainShape } from "./chains";
 import { colourFamily, familyEvalCommand, familyScript, maxFamily, parseFamily, readFamilyGraph } from "./family";
 import type { ProofSession } from "../proof-state";
 import { ekrScript, ekrShape, groundEvalCommand, readGround } from "./ekr";
@@ -190,9 +191,22 @@ export async function optimizationProof(args: {
       } else if (process.env.OPTIMIZE_DEBUG) console.error(`[optimize] Oddtown: ${o.reason}`);
       run.restore(mark);
     }
-    // "largest family of subsets": a colouring the kernel checks (family.ts), before the generic search
-    const fam = parseFamily(theoremType);
+    // "largest family without three in a chain": two members from each chain of a chain decomposition (chains.ts)
+    const chain = chainShape(theoremType);
     let familyNote = "";
+    if (chain) {
+      const c = chainScript(chain);
+      if (c.tactics) {
+        const source = scriptSource({ theoremName, theoremType, tactics: c.tactics, useMathlib, heartbeats });
+        const verification = await session.verify(sessionId, source, { theoremName, expectedSignature, timeoutMs: Number(process.env.OPTIMIZE_VERIFY_TIMEOUT_MS ?? 300_000) });
+        if (verification.ok) return { proof: { verification, source, tactics: c.tactics }, reason: "" };
+        familyNote = `the chain proof did not verify: ${summarizeFailure(verification, 160)}`;
+        if (process.env.OPTIMIZE_DEBUG) console.error(`[optimize] chain proof did not verify:\n${source}\n${verification.log}`);
+      } else familyNote = `chains: ${c.reason}`;
+    }
+    // "largest family of subsets": a colouring the kernel checks (family.ts), before the generic search
+    // (a statement about three members is not the pairs' route's: it would read `∀ C ∈ F, …` as a condition on two)
+    const fam = chain ? undefined : parseFamily(theoremType);
     // (the Erdős–Ko–Rado route writes its own opening: not for a statement that was rewritten before it was read)
     if (fam && !fam.shown && !fam.pattern) {
       const ekr = await ekrProof(session, fam);

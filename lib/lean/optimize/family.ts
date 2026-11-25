@@ -39,7 +39,7 @@ export interface FamilyStatement {
 }
 
 /** Top-level conjuncts of a proposition. */
-function conjuncts(s: string): string[] {
+export function conjuncts(s: string): string[] {
   const out: string[] = [];
   let t = stripParens(s);
   for (;;) {
@@ -53,7 +53,10 @@ function conjuncts(s: string): string[] {
   }
 }
 
-const NAME = "[A-Za-z_][\\w'₀-₉]*";
+export const NAME = "[A-Za-z_][\\w'₀-₉]*";
+
+/** `IsGreatest ({t | …} : Set ℕ) M` read as `IsGreatest {t | …} M` (the ascription changes nothing). */
+export const bareSet = (body: string): string => body.replace(/^IsGreatest\s*\(\s*(\{[\s\S]+\})\s*:\s*Set ℕ\s*\)\s*(\d+)$/, "IsGreatest $1 $2");
 
 /** The statement's shape, or undefined when it is not a "largest family" statement this prover takes. */
 export function parseFamily(theoremType: string): FamilyStatement | undefined {
@@ -79,7 +82,7 @@ const esc = (v: string) => v.replace(/[.*+?^${}()|[\]\\']/g, "\\$&");
 const word = (v: string) => new RegExp(`(?<![\\w'.₀-₉])${esc(v)}(?![\\w'₀-₉])`, "g");
 
 /** The statement's body with its lets written out and membership binders in their short form; undefined when a let cannot be written out. */
-function plainForm(lets: FamilyStatement["lets"], body: string): string | undefined {
+export function plainForm(lets: FamilyStatement["lets"], body: string): string | undefined {
   let t = body;
   // later lets may use earlier ones: from the last to the first
   for (let k = lets.length - 1; k >= 0; k--) {
@@ -104,7 +107,7 @@ function plainForm(lets: FamilyStatement["lets"], body: string): string | undefi
 }
 
 /** The conditions of a (possibly grouped) conjunction, flat, with the `rintro` pattern that takes them apart. */
-function flatten(items: string[], start: number): { flat: string[]; pattern: string } {
+export function flatten(items: string[], start: number): { flat: string[]; pattern: string } {
   const flat: string[] = [];
   const names: string[] = [];
   for (const it of items) {
@@ -122,7 +125,7 @@ function flatten(items: string[], start: number): { flat: string[]; pattern: str
 }
 
 function readFamily(lets: FamilyStatement["lets"], body: string): FamilyStatement | undefined {
-  const m = new RegExp(`^IsGreatest\\s*\\{\\s*(${NAME})\\s*(?::\\s*ℕ)?\\s*\\|\\s*([\\s\\S]+)\\}\\s*(\\d+)$`).exec(body);
+  const m = new RegExp(`^IsGreatest\\s*\\{\\s*(${NAME})\\s*(?::\\s*ℕ)?\\s*\\|\\s*([\\s\\S]+)\\}\\s*(\\d+)$`).exec(bareSet(body));
   if (!m) return undefined;
   const [, tv, inner, Mtext] = m;
   const ex = splitExists(inner.trim());
